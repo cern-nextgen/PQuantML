@@ -1576,7 +1576,7 @@ def get_layer_keep_ratio(model):
 
 
 def is_training_stage(layer):
-    return False if layer.pruning_layer.is_finetuning or layer.pruning_layer.is_pretraining else True
+    return False if layer.pruning_layer._is_finetuning or layer.pruning_layer._is_pretraining else True
 
 
 def get_model_losses(model, losses):

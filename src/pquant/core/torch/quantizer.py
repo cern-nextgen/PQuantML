@@ -29,8 +29,11 @@ class Quantizer(nn.Module):
         self.is_data = is_data
         self.i_init = i
         self.f_init = f
+        self.i = torch.nn.Parameter(torch.tensor(i), requires_grad=False)
+        self.f = torch.nn.Parameter(torch.tensor(f), requires_grad=False)
+        self.b = torch.nn.Parameter(torch.tensor(i + k + f), requires_grad=False)
         self.quantizer = create_quantizer(self.k, i, f, self.overflow, self.round_mode, self.use_hgq, self.is_data, place)
-        self.is_pretraining = False
+        self.is_pretraining = True
         self.hgq_gamma = hgq_gamma
         if isinstance(granularity, Enum):
             self.granularity = granularity.value
@@ -90,7 +93,9 @@ class Quantizer(nn.Module):
             return x
         else:
             if self.granularity == 'per_tensor':
+                self.initialize_quantization_parameters(self.i_init, self.f_init)
                 _, i, f = self.get_quantization_bits()
+                return self.quantizer(x, k=self.k, i=i, f=f, training=self.training)
             else:
                 i, f = self.compute_dynamic_bits(x)
             self.initialize_quantization_parameters(i, f)

@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import keras
@@ -17,7 +16,17 @@ from keras.layers import (
     SeparableConv2D,
 )
 
+from pquant import (
+    ap_config,
+    autosparse_config,
+    cs_config,
+    dst_config,
+    mdmm_config,
+    pdp_config,
+    wanda_config,
+)
 from pquant.activations import PQActivation
+from pquant.core.hyperparameter_optimization import PQConfig
 from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
@@ -34,15 +43,6 @@ from pquant.layers import (
     pre_finetune_functions,
 )
 
-
-def _to_obj(x):
-    if isinstance(x, dict):
-        return SimpleNamespace(**{k: _to_obj(v) for k, v in x.items()})
-    if isinstance(x, list):
-        return [_to_obj(v) for v in x]
-    return x
-
-
 BATCH_SIZE = 4
 OUT_FEATURES = 32
 IN_FEATURES = 16
@@ -57,165 +57,173 @@ def run_around_tests():
 
 @pytest.fixture
 def config_pdp():
-    cfg = {
-        "pruning_parameters": {
-            "disable_pruning_for_layers": [],
-            "enable_pruning": True,
-            "epsilon": 1.0,
-            "pruning_method": "pdp",
-            "sparsity": 0.75,
-            "temperature": 1e-5,
-            "threshold_decay": 0.0,
-            "structured_pruning": False,
-        },
-        "quantization_parameters": {
-            "default_weight_integer_bits": 0.0,
-            "default_weight_fractional_bits": 7.0,
-            "default_data_integer_bits": 0.0,
-            "default_data_fractional_bits": 7.0,
-            "default_data_keep_negatives": 0.0,
-            "default_weight_keep_negatives": 1.0,
-            "quantize_input": True,
-            "quantize_output": False,
-            "enable_quantization": False,
-            "hgq_gamma": 0.0003,
-            "hgq_beta": 1e-5,
-            "hgq_heterogeneous": True,
-            "layer_specific": {},
-            "use_high_granularity_quantization": False,
-            "use_real_tanh": False,
-            "use_relu_multiplier": True,
-            "use_symmetric_quantization": False,
-            "round_mode": "RND",
-            "overflow_mode_parameters": "SAT",
-            "overflow_mode_data": "SAT",
-        },
-        "training_parameters": {"pruning_first": False},
-        "fitcompress_parameters": {"enable_fitcompress": False},
-    }
-    return _to_obj(cfg)
+    return PQConfig.load_from_config(
+        {
+            "pruning_parameters": {
+                "disable_pruning_for_layers": [],
+                "enable_pruning": True,
+                "epsilon": 1.0,
+                "pruning_method": "pdp",
+                "sparsity": 0.75,
+                "temperature": 1e-5,
+                "threshold_decay": 0.0,
+                "structured_pruning": False,
+            },
+            "quantization_parameters": {
+                "default_weight_integer_bits": 0.0,
+                "default_weight_fractional_bits": 7.0,
+                "default_data_integer_bits": 0.0,
+                "default_data_fractional_bits": 7.0,
+                "default_data_keep_negatives": 0.0,
+                "default_weight_keep_negatives": 1.0,
+                "quantize_input": True,
+                "quantize_output": False,
+                "enable_quantization": False,
+                "hgq_gamma": 0.0003,
+                "hgq_beta": 1e-5,
+                "hgq_heterogeneous": True,
+                "layer_specific": {},
+                "use_high_granularity_quantization": False,
+                "use_real_tanh": False,
+                "use_relu_multiplier": True,
+                "use_symmetric_quantization": False,
+                "round_mode": "RND",
+                "overflow_mode_parameters": "SAT",
+                "overflow_mode_data": "SAT",
+                "granularity": "per_tensor",
+            },
+            "training_parameters": {"pruning_first": False},
+            "fitcompress_parameters": {"enable_fitcompress": False},
+        }
+    )
 
 
 @pytest.fixture
 def config_ap():
-    cfg = {
-        "pruning_parameters": {
-            "disable_pruning_for_layers": [],
-            "enable_pruning": True,
-            "pruning_method": "activation_pruning",
-            "threshold": 0.3,
-            "t_start_collecting_batch": 0,
-            "threshold_decay": 0.0,
-            "t_delta": 1,
-        },
-        "quantization_parameters": {
-            "default_weight_integer_bits": 0.0,
-            "default_weight_fractional_bits": 7.0,
-            "default_data_integer_bits": 0.0,
-            "default_data_fractional_bits": 7.0,
-            "default_data_keep_negatives": 0.0,
-            "default_weight_keep_negatives": 1.0,
-            "quantize_input": True,
-            "quantize_output": False,
-            "enable_quantization": False,
-            "hgq_gamma": 0.0003,
-            "hgq_beta": 1e-5,
-            "hgq_heterogeneous": True,
-            "layer_specific": {},
-            "use_high_granularity_quantization": False,
-            "use_real_tanh": False,
-            "use_relu_multiplier": True,
-            "use_symmetric_quantization": False,
-            "round_mode": "RND",
-            "overflow_mode_parameters": "SAT",
-            "overflow_mode_data": "SAT",
-        },
-        "training_parameters": {"pruning_first": False},
-        "fitcompress_parameters": {"enable_fitcompress": False},
-    }
-    return _to_obj(cfg)
+    return PQConfig.load_from_config(
+        {
+            "pruning_parameters": {
+                "disable_pruning_for_layers": [],
+                "enable_pruning": True,
+                "pruning_method": "activation_pruning",
+                "threshold": 0.3,
+                "t_start_collecting_batch": 0,
+                "threshold_decay": 0.0,
+                "t_delta": 1,
+            },
+            "quantization_parameters": {
+                "default_weight_integer_bits": 0.0,
+                "default_weight_fractional_bits": 7.0,
+                "default_data_integer_bits": 0.0,
+                "default_data_fractional_bits": 7.0,
+                "default_data_keep_negatives": 0.0,
+                "default_weight_keep_negatives": 1.0,
+                "quantize_input": True,
+                "quantize_output": False,
+                "enable_quantization": False,
+                "hgq_gamma": 0.0003,
+                "hgq_beta": 1e-5,
+                "hgq_heterogeneous": True,
+                "layer_specific": {},
+                "use_high_granularity_quantization": False,
+                "use_real_tanh": False,
+                "use_relu_multiplier": True,
+                "use_symmetric_quantization": False,
+                "round_mode": "RND",
+                "overflow_mode_parameters": "SAT",
+                "overflow_mode_data": "SAT",
+            },
+            "training_parameters": {"pruning_first": False},
+            "fitcompress_parameters": {"enable_fitcompress": False},
+        }
+    )
 
 
 @pytest.fixture
 def config_wanda():
-    cfg = {
-        "pruning_parameters": {
-            "calculate_pruning_budget": False,
-            "disable_pruning_for_layers": [],
-            "enable_pruning": True,
-            "pruning_method": "wanda",
-            "sparsity": 0.75,
-            "t_start_collecting_batch": 0,
-            "threshold_decay": 0.0,
-            "t_delta": 1,
-            "N": None,
-            "M": None,
-        },
-        "quantization_parameters": {
-            "default_weight_integer_bits": 0.0,
-            "default_weight_fractional_bits": 7.0,
-            "default_data_integer_bits": 0.0,
-            "default_data_fractional_bits": 7.0,
-            "default_data_keep_negatives": 0.0,
-            "default_weight_keep_negatives": 1.0,
-            "quantize_input": True,
-            "quantize_output": False,
-            "enable_quantization": False,
-            "hgq_gamma": 0.0003,
-            "hgq_beta": 1e-5,
-            "hgq_heterogeneous": True,
-            "layer_specific": {},
-            "use_high_granularity_quantization": False,
-            "use_real_tanh": False,
-            "use_relu_multiplier": True,
-            "use_symmetric_quantization": False,
-            "round_mode": "RND",
-            "overflow_mode_parameters": "SAT",
-            "overflow_mode_data": "SAT",
-        },
-        "training_parameters": {"pruning_first": False},
-        "fitcompress_parameters": {"enable_fitcompress": False},
-    }
-    return _to_obj(cfg)
+    return PQConfig.load_from_config(
+        {
+            "pruning_parameters": {
+                "calculate_pruning_budget": False,
+                "disable_pruning_for_layers": [],
+                "enable_pruning": True,
+                "pruning_method": "wanda",
+                "sparsity": 0.75,
+                "t_start_collecting_batch": 0,
+                "threshold_decay": 0.0,
+                "t_delta": 1,
+                "N": None,
+                "M": None,
+            },
+            "quantization_parameters": {
+                "default_weight_integer_bits": 0.0,
+                "default_weight_fractional_bits": 7.0,
+                "default_data_integer_bits": 0.0,
+                "default_data_fractional_bits": 7.0,
+                "default_data_keep_negatives": 0.0,
+                "default_weight_keep_negatives": 1.0,
+                "quantize_input": True,
+                "quantize_output": False,
+                "enable_quantization": False,
+                "hgq_gamma": 0.0003,
+                "hgq_beta": 1e-5,
+                "hgq_heterogeneous": True,
+                "layer_specific": {},
+                "use_high_granularity_quantization": False,
+                "use_real_tanh": False,
+                "use_relu_multiplier": True,
+                "use_symmetric_quantization": False,
+                "round_mode": "RND",
+                "overflow_mode_parameters": "SAT",
+                "overflow_mode_data": "SAT",
+            },
+            "training_parameters": {"pruning_first": False},
+            "fitcompress_parameters": {"enable_fitcompress": False},
+        }
+    )
 
 
 @pytest.fixture
 def config_cs():
-    cfg = {
-        "pruning_parameters": {
-            "disable_pruning_for_layers": [],
-            "enable_pruning": True,
-            "final_temp": 200,
-            "pruning_method": "cs",
-            "threshold_decay": 0.0,
-            "threshold_init": 0.1,
-        },
-        "quantization_parameters": {
-            "default_weight_integer_bits": 0.0,
-            "default_weight_fractional_bits": 7.0,
-            "default_data_integer_bits": 0.0,
-            "default_data_fractional_bits": 7.0,
-            "default_data_keep_negatives": 0.0,
-            "default_weight_keep_negatives": 1.0,
-            "quantize_input": True,
-            "quantize_output": False,
-            "enable_quantization": False,
-            "hgq_gamma": 0.0003,
-            "hgq_beta": 1e-5,
-            "hgq_heterogeneous": True,
-            "layer_specific": {},
-            "use_high_granularity_quantization": False,
-            "use_real_tanh": False,
-            "use_relu_multiplier": True,
-            "use_symmetric_quantization": False,
-            "round_mode": "RND",
-            "overflow_mode_parameters": "SAT",
-            "overflow_mode_data": "SAT",
-        },
-        "training_parameters": {"pruning_first": False},
-        "fitcompress_parameters": {"enable_fitcompress": False},
-    }
-    return _to_obj(cfg)
+    return PQConfig.load_from_config(
+        {
+            "pruning_parameters": {
+                "disable_pruning_for_layers": [],
+                "enable_pruning": True,
+                "final_temp": 200,
+                "pruning_method": "cs",
+                "threshold_decay": 0.0,
+                "threshold_init": 0.1,
+            },
+            "quantization_parameters": {
+                "default_weight_integer_bits": 0.0,
+                "default_weight_fractional_bits": 7.0,
+                "default_data_integer_bits": 0.0,
+                "default_data_fractional_bits": 7.0,
+                "default_data_keep_negatives": 0.0,
+                "default_weight_keep_negatives": 1.0,
+                "quantize_input": True,
+                "quantize_output": False,
+                "enable_quantization": False,
+                "hgq_gamma": 0.0003,
+                "hgq_beta": 1e-5,
+                "hgq_heterogeneous": True,
+                "layer_specific": {},
+                "use_high_granularity_quantization": False,
+                "use_real_tanh": False,
+                "use_relu_multiplier": True,
+                "use_symmetric_quantization": False,
+                "round_mode": "RND",
+                "overflow_mode_parameters": "SAT",
+                "overflow_mode_data": "SAT",
+            },
+            "training_parameters": {"pruning_first": False},
+            "fitcompress_parameters": {"enable_fitcompress": False},
+        }
+    )
+
+
+np.random.seed(42)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -376,19 +384,19 @@ def test_separable_conv2d_trigger_post_pretraining(config_pdp, conv2d_input):
     model = keras.Model(inputs=inputs, outputs=act2, name="test_conv2d")
 
     model = add_compression_layers(model, config_pdp, conv2d_input.shape)
-    assert model.layers[1].depthwise_conv.pruning_layer.is_pretraining is True
-    assert model.layers[1].pointwise_conv.pruning_layer.is_pretraining is True
-    assert model.layers[2].is_pretraining is True
-    assert model.layers[4].pruning_layer.is_pretraining is True
-    assert model.layers[5].is_pretraining is True
+    assert model.layers[1].depthwise_conv.pruning_layer.is_pretraining == True  # noqa: E712
+    assert model.layers[1].pointwise_conv.pruning_layer.is_pretraining == True  # noqa: E712
+    assert model.layers[2].is_pretraining == True  # noqa: E712
+    assert model.layers[4].pruning_layer.is_pretraining == True  # noqa: E712
+    assert model.layers[5].is_pretraining == True  # noqa: E712
 
     post_pretrain_functions(model, config_pdp)
 
-    assert model.layers[1].depthwise_conv.pruning_layer.is_pretraining is False
-    assert model.layers[1].pointwise_conv.pruning_layer.is_pretraining is False
-    assert model.layers[2].is_pretraining is False
-    assert model.layers[4].pruning_layer.is_pretraining is False
-    assert model.layers[5].is_pretraining is False
+    assert model.layers[1].depthwise_conv.pruning_layer.is_pretraining == False  # noqa: E712
+    assert model.layers[1].pointwise_conv.pruning_layer.is_pretraining == False  # noqa: E712
+    assert model.layers[2].is_pretraining == False  # noqa: E712
+    assert model.layers[4].pruning_layer.is_pretraining == False  # noqa: E712
+    assert model.layers[5].is_pretraining == False  # noqa: E712
 
 
 def test_conv1d_call(config_pdp, conv1d_input):
@@ -1363,17 +1371,17 @@ def test_trigger_post_pretraining(config_pdp, conv2d_input):
 
     model = add_compression_layers(model, config_pdp, conv2d_input.shape)
 
-    assert model.layers[1].pruning_layer.is_pretraining is True
-    assert model.layers[2].is_pretraining is True
-    assert model.layers[3].pruning_layer.is_pretraining is True
-    assert model.layers[4].is_pretraining is True
+    assert model.layers[1].pruning_layer.is_pretraining == True  # noqa: E712
+    assert model.layers[2].is_pretraining == True  # noqa: E712
+    assert model.layers[3].pruning_layer.is_pretraining == True  # noqa: E712
+    assert model.layers[4].is_pretraining == True  # noqa: E712
 
     post_pretrain_functions(model, config_pdp)
 
-    assert model.layers[1].pruning_layer.is_pretraining is False
-    assert model.layers[2].is_pretraining is False
-    assert model.layers[3].pruning_layer.is_pretraining is False
-    assert model.layers[4].is_pretraining is False
+    assert model.layers[1].pruning_layer.is_pretraining == False  # noqa: E712
+    assert model.layers[2].is_pretraining == False  # noqa: E712
+    assert model.layers[3].pruning_layer.is_pretraining == False  # noqa: E712
+    assert model.layers[4].is_pretraining == False  # noqa: E712
 
 
 def test_hgq_weight_shape(config_pdp, dense_input):
@@ -1709,6 +1717,15 @@ class DummyLayer(keras.layers.Layer):
         self.layer_called += 1
         return x
 
+    def post_pre_train_function(self):
+        pass
+
+    def get_total_bits(self, shape):
+        return keras.ops.ones(shape)
+
+    def hgq_loss(self):
+        return 0.0
+
     def extra_repr(self):
         return f"Layer called = {self.layer_called} times."
 
@@ -1901,3 +1918,124 @@ def test_layer_replacement_quant_called(config_pdp, conv2d_input):
         assert model.layers[-1].output_quantizer.layer_called == 1
         model(conv2d_input, training=False)
         assert model.layers[-1].output_quantizer.layer_called == 2
+
+
+def build_model(config):
+    inp = keras.layers.Input(shape=((16,)))
+    x = PQDense(
+        config,
+        64,
+        in_quant_bits=(
+            1.0,
+            3.0,
+            3.0,
+        ),
+    )(inp)
+    x = keras.layers.ReLU()(x)
+    x = PQDense(config, 32)(x)
+    x = keras.layers.ReLU()(x)
+    x = PQDense(config, 32)(x)
+    x = keras.layers.ReLU()(x)
+    out = PQDense(config, 5, out_quant_bits=(1.0, 3.0, 3.0), quantize_output=True)(x)
+    return keras.Model(inputs=inp, outputs=out)
+
+
+def test_ebops_dense_varied(config_pdp, dense_input):
+    config = config_pdp
+    config.pruning_parameters.enable_pruning = False
+    config.quantization_parameters.use_high_granularity_quantization = True
+    config.quantization_parameters.hgq_gamma = 1.0
+    config.quantization_parameters.enable_quantization = True
+    config.quantization_parameters.overflow_mode_data = "WRAP"
+    config.quantization_parameters.overflow_mode_parameters = "SAT_SYM"
+    model = build_model(config)
+    model(dense_input, training=True)
+    post_pretrain_functions(model, config)
+
+
+@pytest.mark.parametrize(
+    "config_fn",
+    [pdp_config, ap_config, autosparse_config, cs_config, dst_config, mdmm_config, wanda_config],
+    ids=["pdp", "ap", "autosparse", "cs", "dst", "mdmm", "wanda"],
+)
+def test_model_serialization(tmp_path, config_fn):
+    config = config_fn()
+    config.quantization_parameters.enable_quantization = True
+    channels_first = keras.backend.image_data_format() == "channels_first"
+    if channels_first:
+        input_shape = (IN_FEATURES, 32, 32)
+        conv1d_shape = (OUT_FEATURES, 16 * 16)
+        dummy = np.zeros((1, IN_FEATURES, 32, 32), dtype=np.float32)
+        bn_axis = 1
+    else:
+        input_shape = (32, 32, IN_FEATURES)
+        conv1d_shape = (16 * 16, OUT_FEATURES)
+        dummy = np.zeros((1, 32, 32, IN_FEATURES), dtype=np.float32)
+        bn_axis = -1
+
+    inputs = keras.Input(shape=input_shape)
+    x = PQConv2d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
+    x = PQBatchNormalization(config, axis=bn_axis)(x)
+    x = PQActivation(config, activation="relu", quantize_input=True, quantize_output=True)(x)
+    x = PQAvgPool2d(config, pool_size=2, strides=2, padding="same")(x)
+    x = keras.layers.Reshape(conv1d_shape)(x)
+    x = PQConv1d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(x)
+    x = PQActivation(config, activation="relu", quantize_input=True, quantize_output=True)(x)
+    x = PQAvgPool1d(config, pool_size=2, strides=2, padding="same")(x)
+    x = keras.layers.Flatten()(x)
+    x = PQDense(config, units=OUT_FEATURES)(x)
+    x = PQActivation(config, activation="relu", quantize_input=True, quantize_output=True)(x)
+    model = keras.Model(inputs, x)
+
+    # Call the model once to trigger build of all sublayers (pruning masks, etc.)
+    model(dummy)
+
+    # Randomize weights; skip boolean flags which must stay at their 0/1 values
+    rng = np.random.default_rng(42)
+    for w in model.weights:
+        if w.name.endswith(("is_pretraining", "is_finetuning")):
+            continue
+        w.assign(rng.standard_normal(w.shape).astype(w.dtype))
+
+    pq_types = (PQConv2d, PQConv1d, PQDense)
+
+    def assert_pq_state_survives_roundtrip(m, label):
+        """Save m, reload it, and verify all state round-trips correctly."""
+        save_path = tmp_path / f"{label}.keras"
+        m.save(save_path)
+        reloaded = keras.models.load_model(save_path)
+
+        orig_pq = [layer for layer in m.layers if isinstance(layer, pq_types)]
+        loaded_pq = [layer for layer in reloaded.layers if isinstance(layer, pq_types)]
+        assert len(loaded_pq) == len(orig_pq)
+
+        for orig_l, loaded_l in zip(orig_pq, loaded_pq):
+            for attr in ("final_compression_done", "is_pretraining", "is_finetuning"):
+                np.testing.assert_equal(
+                    getattr(loaded_l, attr),
+                    getattr(orig_l, attr),
+                    err_msg=f"[{label}] {orig_l.name}.{attr} mismatch",
+                )
+
+        assert len(m.weights) == len(reloaded.weights)
+        for orig_w, loaded_w in zip(m.weights, reloaded.weights):
+            np.testing.assert_array_equal(
+                np.array(orig_w),
+                np.array(loaded_w),
+                err_msg=f"[{label}] Weight mismatch: {orig_w.name}",
+            )
+
+    # Stage 1: initial state (is_pretraining=True, is_finetuning=False)
+    assert_pq_state_survives_roundtrip(model, "initial")
+
+    # Stage 2: after post_pretrain_functions (is_pretraining=False, is_finetuning=False)
+    post_pretrain_functions(model, config)
+    assert_pq_state_survives_roundtrip(model, "post_pretrain")
+
+    # Stage 3: after pre_finetune_functions (is_pretraining=False, is_finetuning=True)
+    pre_finetune_functions(model)
+    assert_pq_state_survives_roundtrip(model, "pre_finetune")
+
+    # Stage 4: after apply_final_compression (final_compression_done=True on all layers)
+    apply_final_compression(model)
+    assert_pq_state_survives_roundtrip(model, "final_compression")

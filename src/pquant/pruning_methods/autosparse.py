@@ -90,14 +90,14 @@ class AutoSparse(keras.layers.Layer):
         )
         self.is_pretraining = self.add_weight(
             shape=(),
-            initializer=keras.initializers.Constant(self._is_pretraining),
+            initializer=lambda shape, dtype: ops.cast(ops.ones(shape) if self._is_pretraining else ops.zeros(shape), dtype),
             name="is_pretraining",
             trainable=False,
             dtype="bool",
         )
         self.is_finetuning = self.add_weight(
             shape=(),
-            initializer=keras.initializers.Constant(self._is_finetuning),
+            initializer=lambda shape, dtype: ops.cast(ops.ones(shape) if self._is_finetuning else ops.zeros(shape), dtype),
             name="is_finetuning",
             trainable=False,
             dtype="bool",

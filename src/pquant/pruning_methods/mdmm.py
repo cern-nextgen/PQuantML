@@ -60,7 +60,7 @@ class MDMM(keras.layers.Layer):
             "scale": self.config.pruning_parameters.scale,
             "damping": self.config.pruning_parameters.damping,
             "use_grad": self.config.pruning_parameters.use_grad,
-            "lr": self.config.training_parameters.lr,
+            "lr": self.config.pruning_parameters.constraint_lr,
         }
 
         constraint_type_cls = CONSTRAINT_REGISTRY.get(constraint_type)
@@ -72,14 +72,14 @@ class MDMM(keras.layers.Layer):
         self.mask = self.add_weight(name="mask", shape=input_shape, initializer="ones", trainable=False)
         self.is_pretraining = self.add_weight(
             shape=(),
-            initializer=keras.initializers.Constant(self._is_pretraining),
+            initializer=lambda shape, dtype: ops.cast(ops.ones(shape) if self._is_pretraining else ops.zeros(shape), dtype),
             name="is_pretraining",
             trainable=False,
             dtype="bool",
         )
         self.is_finetuning = self.add_weight(
             shape=(),
-            initializer=keras.initializers.Constant(self._is_finetuning),
+            initializer=lambda shape, dtype: ops.cast(ops.ones(shape) if self._is_finetuning else ops.zeros(shape), dtype),
             name="is_finetuning",
             trainable=False,
             dtype="bool",

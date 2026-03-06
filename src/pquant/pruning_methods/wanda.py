@@ -22,8 +22,8 @@ class Wanda(keras.layers.Layer):
 
     def build(self, input_shape):
         # input_shape is the (transposed) weight shape: (out, in) or (out, in, kH, kW)
-        # input_shape[1] = number of input channels/features
-        n_in = input_shape[1]
+        # For depthwise_conv, weight shape is (in_ch, depth_mult, kH, kW) so n_in = input_shape[0]
+        n_in = input_shape[0] if self.layer_type == "depthwise_conv" else input_shape[1]
         self.mask = self.add_weight(shape=input_shape, initializer="ones", trainable=False)
         # Accumulate per-input-channel sum of squared inputs; shape (n_in,) known at build time.
         # Replaces storing full (batch, n_in, ...) inputs whose spatial/batch dims are unknown.
@@ -32,20 +32,20 @@ class Wanda(keras.layers.Layer):
         self.t = self.add_weight(shape=(), initializer="zeros", trainable=False, dtype="int32")
         self.done = self.add_weight(
             shape=(),
-            initializer=keras.initializers.Constant(False),
+            initializer=lambda shape, dtype: ops.cast(ops.zeros(shape), dtype),
             trainable=False,
             dtype="bool",
         )
         self.is_pretraining = self.add_weight(
             shape=(),
-            initializer=keras.initializers.Constant(self._is_pretraining),
+            initializer=lambda shape, dtype: ops.cast(ops.ones(shape) if self._is_pretraining else ops.zeros(shape), dtype),
             name="is_pretraining",
             trainable=False,
             dtype="bool",
         )
         self.is_finetuning = self.add_weight(
             shape=(),
-            initializer=keras.initializers.Constant(self._is_finetuning),
+            initializer=lambda shape, dtype: ops.cast(ops.ones(shape) if self._is_finetuning else ops.zeros(shape), dtype),
             name="is_finetuning",
             trainable=False,
             dtype="bool",
@@ -105,6 +105,8 @@ class Wanda(keras.layers.Layer):
     def _compute_prune_mask(self, norm, weight):
         if self.layer_type == "linear":
             return self._handle_linear(norm, weight)
+        if self.layer_type == "depthwise_conv":
+            return self._handle_depthwise_conv(norm, weight)
         return self._handle_conv(norm, weight)
 
     def _handle_linear(self, norm, weight):
@@ -132,6 +134,16 @@ class Wanda(keras.layers.Layer):
             weight_reshaped = ops.reshape(weight, (-1, self.M))
             mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.N / self.M)
             return ops.reshape(mask, weight.shape)
+        metric_reshaped = ops.reshape(metric, (metric.shape[0], -1))
+        weight_reshaped = ops.reshape(weight, (weight.shape[0], -1))
+        mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.sparsity)
+        return ops.reshape(mask, weight.shape)
+
+    def _handle_depthwise_conv(self, norm, weight):
+        # norm.shape = (in_channels,); weight.shape = (in_channels, depth_mult, kH, kW)
+        # Prune per-input-channel: norm[ic] scales all weights for that channel
+        norm_reshaped = ops.reshape(norm, list(norm.shape) + [1, 1, 1])
+        metric = ops.abs(weight) * norm_reshaped
         metric_reshaped = ops.reshape(metric, (metric.shape[0], -1))
         weight_reshaped = ops.reshape(weight, (weight.shape[0], -1))
         mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.sparsity)

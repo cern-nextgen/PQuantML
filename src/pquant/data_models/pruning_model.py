@@ -88,3 +88,4 @@ class MDMMPruningModel(BasePruningModel):
     use_grad: bool = Field(default=False)
     l0_mode: Literal["coarse", "smooth"] = Field(default="coarse")
     scale_mode: Literal["mean", "sum"] = Field(default="mean")
+    constraint_lr: float = Field(default=1.0e-3)

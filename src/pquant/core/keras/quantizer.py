@@ -6,7 +6,7 @@ from keras import ops
 from pquant.core.quantizer_functions import create_quantizer
 
 
-@keras.saving.register_keras_serializable(package="PQuant")
+@keras.saving.register_keras_serializable(package="PQuantML")
 class Quantizer(keras.layers.Layer):
     # HGQ quantizer wrapper
     def __init__(
@@ -35,7 +35,7 @@ class Quantizer(keras.layers.Layer):
         self.quantizer = create_quantizer(
             self.k_init, self.i_init, self.f_init, self.overflow, self.round_mode, self.use_hgq, self.is_data, place
         )
-        self.is_pretraining = False
+        self.is_pretraining = True
         self.hgq_gamma = hgq_gamma
         if isinstance(granularity, Enum):
             self.granularity = granularity.value
@@ -63,15 +63,37 @@ class Quantizer(keras.layers.Layer):
         return int_bits, frac_bits
 
     def build(self, input_shape):
-        if self.granularity == "per_tensor":
+        if self.use_hgq:
+            shape = tuple(input_shape) if not self.is_data else (1,) + tuple(input_shape[1:])
+            self.k = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.k_init), trainable=False)
+            self.i = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.i_init), trainable=False)
+            self.f = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.f_init), trainable=False)
+            self.b = self.add_weight(
+                shape=shape,
+                initializer=keras.initializers.Constant(self.k_init + self.i_init + self.f_init),
+                trainable=False,
+            )
+            if not self.quantizer.built:
+                self.quantizer.build(shape)
+            self.set_quantization_bits(self.i_init, self.f_init)
+        elif self.granularity == "per_tensor":
             self.k = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.k_init), trainable=False)
             self.i = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.i_init), trainable=False)
             self.f = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.f_init), trainable=False)
+            self.b = self.add_weight(
+                shape=(), initializer=keras.initializers.Constant(self.k_init + self.f_init + self.f_init), trainable=False
+            )
         else:
             i, _ = self.compute_dynamic_bits(keras.ops.ones(input_shape))
             self.k = self.add_weight(shape=i.shape, initializer=keras.initializers.Constant(self.k_init), trainable=False)
             self.i = self.add_weight(shape=i.shape, initializer=keras.initializers.Constant(self.i_init), trainable=False)
             self.f = self.add_weight(shape=i.shape, initializer=keras.initializers.Constant(self.f_init), trainable=False)
+            self.b = self.add_weight(
+                shape=i.shape,
+                initializer=keras.initializers.Constant(self.k_init + self.f_init + self.f_init),
+                trainable=False,
+            )
+
         super().build(input_shape)
 
     def get_total_bits(self, shape):
@@ -84,8 +106,7 @@ class Quantizer(keras.layers.Layer):
     def get_quantization_bits(self):
         if self.use_hgq:
             return self.quantizer.quantizer.k, self.quantizer.quantizer.i, self.quantizer.quantizer.f
-        else:
-            return self.k, self.i, self.f
+        return self.k, self.i, self.f
 
     def set_quantization_bits(self, i, f):
         if self.use_hgq:
@@ -94,8 +115,17 @@ class Quantizer(keras.layers.Layer):
         self.i = i
         self.f = f
 
-    def post_pretrain(self):
-        self.is_pretraining = True
+    def apply_final_compression(self):
+        if self.use_hgq and not self.quantizer.built or not self.built:
+            return
+        k, i, f = self.get_quantization_bits()
+        self.i.assign(i)
+        self.f.assign(f)
+        self.b.assign(k + i + f)
+        self.final_compression_done = True
+
+    def post_pre_train_function(self):
+        self.is_pretraining = False
 
     def call(self, x, training=None):
         if self.use_hgq:
@@ -113,10 +143,7 @@ class Quantizer(keras.layers.Layer):
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:
             return 0.0
-        loss = 0
-        for layer_loss in self.quantizer.quantizer.losses:
-            loss += layer_loss
-        return loss
+        return sum(self.quantizer.losses)
 
     @classmethod
     def from_config(cls, config):

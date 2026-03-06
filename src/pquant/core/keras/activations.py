@@ -23,7 +23,7 @@ def hard_tanh(x):
 activation_registry = {"relu": relu, "tanh": tanh, "hard_tanh": hard_tanh}
 
 
-@keras.saving.register_keras_serializable(package="PQuant")
+@keras.saving.register_keras_serializable(package="PQuantML")
 class PQActivation(keras.layers.Layer):
     def __init__(
         self,
@@ -121,6 +121,10 @@ class PQActivation(keras.layers.Layer):
 
     def post_pre_train_function(self):
         self.is_pretraining = False
+        if self.quantize_input:
+            self.input_quantizer.post_pre_train_function()
+        if self.quantize_output:
+            self.output_quantizer.post_pre_train_function()
 
     def ebops(self):
         if self.quantize_input and self.quantize_output:
