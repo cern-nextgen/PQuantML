@@ -13,9 +13,9 @@ class ContinuousSparsification(keras.layers.Layer):
             config = PQConfig.load_from_config(config)
         self.config = config
         self.final_temp = config.pruning_parameters.final_temp
-        self.is_finetuning = False
+        self._is_finetuning = False
         self.layer_type = layer_type
-        self.is_pretraining = True
+        self._is_pretraining = True
 
     def build(self, input_shape):
         self.s_init = ops.convert_to_tensor(self.config.pruning_parameters.threshold_init * ops.ones(input_shape))
@@ -23,37 +23,52 @@ class ContinuousSparsification(keras.layers.Layer):
         self.scaling = 1.0 / ops.sigmoid(self.s_init)
         self.beta = self.add_weight(name="beta", shape=(), initializer=Constant(1.0), trainable=False)
         self.mask = self.add_weight(name="mask", shape=input_shape, initializer=Constant(1.0), trainable=False)
+        self.is_pretraining = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_pretraining),
+            name="is_pretraining",
+            trainable=False,
+            dtype="bool",
+        )
+        self.is_finetuning = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_finetuning),
+            name="is_finetuning",
+            trainable=False,
+            dtype="bool",
+        )
         super().build(input_shape)
 
     def call(self, weight):
-        if self.is_pretraining:
-            return weight
-        mask = self.get_mask()
-        self.mask.assign(mask)
-        return mask * weight
+        stored_mask = ops.convert_to_tensor(self.mask)
+        new_mask = self.get_mask()
+        use_current_mask = ops.logical_or(self.is_pretraining, self.is_finetuning)
+        updated_mask = ops.where(use_current_mask, stored_mask, new_mask)
+        self.mask.assign(updated_mask)
+        return updated_mask * weight
 
     def pre_finetune_function(self):
-        self.is_finetuning = True
+        self._is_finetuning = True
+        if hasattr(self, "is_finetuning"):
+            self.is_finetuning.assign(True)
+        if hasattr(self, "mask"):
+            self.mask.assign(self.get_hard_mask())
 
     def get_mask(self):
-        if self.is_finetuning:
-            mask = self.get_hard_mask()
-            return mask
-        else:
-            mask = ops.sigmoid(self.beta * self.s)
-            mask = mask * self.scaling
-            return mask
+        return ops.sigmoid(self.beta * self.s) * self.scaling
 
     def post_pre_train_function(self):
-        self.is_pretraining = False
+        self._is_pretraining = False
+        if hasattr(self, "is_pretraining"):
+            self.is_pretraining.assign(False)
 
-    def pre_epoch_function(self, epoch, total_epochs):
+    def pre_epoch_function(self, epoch, total_epochs):  # noqa: ARG002
         pass
 
-    def post_epoch_function(self, epoch, total_epochs):
+    def post_epoch_function(self, epoch, total_epochs):  # noqa: ARG002
         self.beta.assign(self.beta * self.final_temp ** (1 / (total_epochs - 1)))
 
-    def get_hard_mask(self, weight=None):
+    def get_hard_mask(self, weight=None):  # noqa: ARG002
         if self.config.pruning_parameters.enable_pruning:
             return ops.cast((self.s > 0), self.s.dtype)
         return ops.convert_to_tensor(1.0)
@@ -73,7 +88,6 @@ class ContinuousSparsification(keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config()
-
         config.update(
             {
                 "config": self.config.get_dict(),

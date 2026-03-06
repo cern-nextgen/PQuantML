@@ -38,14 +38,28 @@ class DST(keras.layers.Layer):
 
             config = PQConfig.load_from_config(config)
         self.config = config
-        self.is_pretraining = True
         self.layer_type = layer_type
-        self.is_finetuning = False
+        self._is_pretraining = True
+        self._is_finetuning = False
 
     def build(self, input_shape):
         self.threshold_size = get_threshold_size(self.config, input_shape)
         self.threshold = self.add_weight(shape=self.threshold_size, initializer="zeros", trainable=True)
         self.mask = self.add_weight(shape=input_shape, initializer="ones", trainable=False)
+        self.is_pretraining = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_pretraining),
+            name="is_pretraining",
+            trainable=False,
+            dtype="bool",
+        )
+        self.is_finetuning = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_finetuning),
+            name="is_finetuning",
+            trainable=False,
+            dtype="bool",
+        )
 
     def call(self, weight):
         """
@@ -54,19 +68,27 @@ class DST(keras.layers.Layer):
             0.4           if 0.4 < |W| <= 1
             0             if |W| > 1
         """
-        if self.is_pretraining:
-            return weight
-        if self.is_finetuning:
-            return weight * self.mask
-        mask = self.get_mask(weight)
-        ratio = 1.0 - ops.sum(mask) / ops.cast(ops.size(mask), mask.dtype)
-        flag = ratio >= self.config.pruning_parameters.max_pruning_pct
-        self.threshold.assign(ops.where(flag, ops.ones(self.threshold.shape), self.threshold))
-        mask = self.get_mask(weight)
-        self.mask.assign(mask)
-        masked_weight = weight * mask
+        use_current_mask = ops.logical_or(self.is_pretraining, self.is_finetuning)
+
+        def use_existing():
+            return weight * ops.convert_to_tensor(self.mask)
+
+        def compute_new():
+            mask = self.get_mask(weight)
+            ratio = 1.0 - ops.sum(mask) / ops.cast(ops.size(mask), mask.dtype)
+            flag = ratio >= self.config.pruning_parameters.max_pruning_pct
+
+            def reset_and_recalculate():
+                self.threshold.assign(ops.zeros(self.threshold.shape))
+                return self.get_mask(weight)
+
+            mask = ops.cond(flag, reset_and_recalculate, lambda: mask)
+            self.mask.assign(mask)
+            return weight * mask
+
+        result = ops.cond(use_current_mask, use_existing, compute_new)
         self.add_loss(self.calculate_additional_loss())
-        return masked_weight
+        return result
 
     def get_hard_mask(self, weight=None):
         return self.mask
@@ -86,19 +108,22 @@ class DST(keras.layers.Layer):
         return ops.sum(self.get_mask(weight)) / ops.size(weight)
 
     def calculate_additional_loss(self):
-        if self.is_finetuning:
-            return 0.0
-        loss = self.config.pruning_parameters.alpha * ops.sum(ops.exp(-self.threshold))
-        return loss
+        if self._is_pretraining or self._is_finetuning:
+            return ops.cast(0.0, self.threshold.dtype)
+        return self.config.pruning_parameters.alpha * ops.sum(ops.exp(-self.threshold))
 
     def pre_finetune_function(self):
-        self.is_finetuning = True
+        self._is_finetuning = True
+        if hasattr(self, "is_finetuning"):
+            self.is_finetuning.assign(True)
 
     def post_epoch_function(self, epoch, total_epochs):
         pass
 
     def post_pre_train_function(self):
-        self.is_pretraining = False
+        self._is_pretraining = False
+        if hasattr(self, "is_pretraining"):
+            self.is_pretraining.assign(False)
 
     def post_round_function(self):
         pass

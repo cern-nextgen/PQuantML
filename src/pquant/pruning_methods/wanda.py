@@ -12,22 +12,130 @@ class Wanda(keras.layers.Layer):
             config = PQConfig.load_from_config(config)
         self.config = config
         self.act_type = "relu"
-        self.t = 0
         self.layer_type = layer_type
-        self.batches_collected = 0
-        self.inputs = None
-        self.total = 0.0
-        self.done = False
+        self._is_pretraining = True
+        self._is_finetuning = False
         self.sparsity = self.config.pruning_parameters.sparsity
-        self.is_pretraining = True
-        self.is_finetuning = False
         self.N = self.config.pruning_parameters.N
         self.M = self.config.pruning_parameters.M
         self.t_start_collecting_batch = self.config.pruning_parameters.t_start_collecting_batch
 
     def build(self, input_shape):
-        self.mask = ops.ones(input_shape)
+        # input_shape is the (transposed) weight shape: (out, in) or (out, in, kH, kW)
+        # input_shape[1] = number of input channels/features
+        n_in = input_shape[1]
+        self.mask = self.add_weight(shape=input_shape, initializer="ones", trainable=False)
+        # Accumulate per-input-channel sum of squared inputs; shape (n_in,) known at build time.
+        # Replaces storing full (batch, n_in, ...) inputs whose spatial/batch dims are unknown.
+        self.inputs_sq_sum = self.add_weight(shape=(n_in,), initializer="zeros", trainable=False)
+        self.batches_collected = self.add_weight(shape=(), initializer="zeros", trainable=False, dtype="int32")
+        self.t = self.add_weight(shape=(), initializer="zeros", trainable=False, dtype="int32")
+        self.done = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(False),
+            trainable=False,
+            dtype="bool",
+        )
+        self.is_pretraining = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_pretraining),
+            name="is_pretraining",
+            trainable=False,
+            dtype="bool",
+        )
+        self.is_finetuning = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_finetuning),
+            name="is_finetuning",
+            trainable=False,
+            dtype="bool",
+        )
         super().build(input_shape)
+
+    def collect_input(self, x, weight, training):
+        """
+        Accumulates per-input-channel sum-of-squares of layer inputs. After t_delta batches,
+        computes mask = Wanda metric (|W| * L2_norm) once and sets done=True. One-shot pruning.
+        """
+        if not training:
+            return
+
+        t_delta = self.config.pruning_parameters.t_delta
+
+        # Only collect in training stage if pruning hasn't been done already, and if above starting epoch
+        should_collect = ops.logical_not(
+            ops.logical_or(
+                ops.logical_or(self.is_pretraining, self.is_finetuning),
+                ops.logical_or(self.done, self.t < self.t_start_collecting_batch),
+            )
+        )
+
+        # Per-batch per-channel sum of squared activations (shape: n_in,)
+        if self.layer_type == "linear":
+            per_batch_sq = ops.sum(ops.square(x), axis=0)  # (n_in,)
+        else:
+            # x is channels-first (batch, in_channels, ...); sum over batch + spatial
+            axes = (0,) + tuple(range(2, len(x.shape)))
+            per_batch_sq = ops.sum(ops.square(x), axis=axes)  # (in_channels,)
+
+        # Snapshot current state
+        sq_sum_cur = ops.convert_to_tensor(self.inputs_sq_sum)
+        batches_cur = ops.convert_to_tensor(self.batches_collected)
+
+        new_sq_sum = sq_sum_cur + ops.where(should_collect, per_batch_sq, ops.zeros_like(per_batch_sq))
+        new_batches = batches_cur + ops.cast(should_collect, "int32")  # Adding 0 if not collecting
+
+        # Prune once when t_delta batches have been collected
+        should_prune = ops.equal(new_batches, ops.cast(t_delta, "int32"))
+
+        mask_cur = ops.convert_to_tensor(self.mask)
+
+        def do_prune():
+            norm = ops.sqrt(new_sq_sum)
+            return self._compute_prune_mask(norm, weight)
+
+        new_mask = ops.cond(should_prune, do_prune, lambda: mask_cur)
+        self.mask.assign(new_mask)
+        self.done.assign(ops.logical_or(self.done, should_prune))
+
+        # Reset accumulators after pruning
+        self.inputs_sq_sum.assign(ops.where(should_prune, ops.zeros_like(new_sq_sum), new_sq_sum))
+        self.batches_collected.assign(ops.where(should_prune, ops.zeros_like(new_batches), new_batches))
+
+    def _compute_prune_mask(self, norm, weight):
+        if self.layer_type == "linear":
+            return self._handle_linear(norm, weight)
+        return self._handle_conv(norm, weight)
+
+    def _handle_linear(self, norm, weight):
+        # norm.shape = (in_features,); weight.shape = (out_features, in_features)
+        metric = ops.abs(weight) * norm
+        if self.N is not None and self.M is not None:
+            metric_reshaped = ops.reshape(metric, (-1, self.M))
+            weight_reshaped = ops.reshape(weight, (-1, self.M))
+            mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.N / self.M)
+            return ops.reshape(mask, weight.shape)
+        metric_reshaped = ops.reshape(metric, (1, -1))
+        weight_reshaped = ops.reshape(weight, (1, -1))
+        mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.sparsity)
+        return ops.reshape(mask, weight.shape)
+
+    def _handle_conv(self, norm, weight):
+        # norm.shape = (in_channels,); weight.shape = (out_channels, in_channels, ...)
+        if len(weight.shape) == 3:
+            norm_reshaped = ops.reshape(norm, [1] + list(norm.shape) + [1])
+        else:
+            norm_reshaped = ops.reshape(norm, [1] + list(norm.shape) + [1, 1])
+        metric = ops.abs(weight) * norm_reshaped
+        if self.N is not None and self.M is not None:
+            metric_reshaped = ops.reshape(metric, (-1, self.M))
+            weight_reshaped = ops.reshape(weight, (-1, self.M))
+            mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.N / self.M)
+            return ops.reshape(mask, weight.shape)
+        metric_reshaped = ops.reshape(metric, (metric.shape[0], -1))
+        weight_reshaped = ops.reshape(weight, (weight.shape[0], -1))
+        mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.sparsity)
+        return ops.reshape(mask, weight.shape)
 
     def get_mask(self, weight, metric, sparsity):
         d0, d1 = metric.shape
@@ -37,95 +145,29 @@ class Wanda(keras.layers.Layer):
             ops.scatter(keep_idxs[:, None], ops.take(ops.ravel(weight), keep_idxs), ops.array((ops.size(weight),))),
             weight.shape,
         )
-        mask = ops.cast(kept_values != 0, weight.dtype)
-        return mask
+        return ops.cast(kept_values != 0, weight.dtype)
 
-    def handle_linear(self, x, weight):
-        norm = ops.norm(x, ord=2, axis=0)
-        metric = ops.abs(weight) * norm
-        if self.N is not None and self.M is not None:
-            # N:M pruning
-            metric_reshaped = ops.reshape(metric, (-1, self.M))
-            weight_reshaped = ops.reshape(weight, (-1, self.M))
-            mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.N / self.M)
-            self.mask = ops.reshape(mask, weight.shape)
-        else:
-            # Unstructured pruning
-            metric_reshaped = ops.reshape(metric, (1, -1))
-            weight_reshaped = ops.reshape(weight, (1, -1))
-            mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.sparsity)
-            self.mask = ops.reshape(mask, weight.shape)
+    def call(self, weight):
+        return ops.convert_to_tensor(self.mask) * weight
 
-    def handle_conv(self, x, weight):
-        inputs_avg = ops.mean(ops.reshape(x, (x.shape[0], x.shape[1], -1)), axis=0)
-        norm = ops.norm(inputs_avg, ord=2, axis=-1)
-        if len(weight.shape) == 3:
-            norm = ops.reshape(norm, [1] + list(norm.shape) + [1])
-        else:
-            norm = ops.reshape(norm, [1] + list(norm.shape) + [1, 1])
-        metric = ops.abs(weight) * norm
-        if self.N is not None and self.M is not None:
-            # N:M pruning
-            metric_reshaped = ops.reshape(metric, (-1, self.M))
-            weight_reshaped = ops.reshape(weight, (-1, self.M))
-            mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.N / self.M)
-            self.mask = ops.reshape(mask, weight.shape)
-        else:
-            # Unstructured pruning
-            metric_reshaped = ops.reshape(metric, (metric.shape[0], -1))
-            weight_reshaped = ops.reshape(weight, (weight.shape[0], -1))
-            mask = self.get_mask(weight_reshaped, metric_reshaped, sparsity=self.sparsity)
-            self.mask = ops.reshape(mask, weight.shape)
-
-    def collect_input(self, x, weight, training):
-        if self.done or not training:
-            return
-        """
-            Accumulates layer inputs starting at step t_start_collecting for t_delta steps, then averages it.
-            Calculates a metric based on weight absolute values and norm of inputs.
-            For linear layers, calculate norm over batch dimension.
-            For conv layers, take average over batch dimension and calculate norm over flattened kernel_size dimension.
-            If N and M are defined, do N:M pruning.
-            """
-        ok_batch = True
-        if self.inputs is not None:
-            batch_size = self.inputs.shape[0]
-            ok_batch = x.shape[0] == batch_size
-        if not training or not ok_batch:
-            # Don't collect during validation
-            return
-        if self.t < self.t_start_collecting_batch:
-            return
-        self.batches_collected += 1
-        self.total += 1
-
-        self.inputs = x if self.inputs is None else self.inputs + x
-        if self.batches_collected % (self.config.pruning_parameters.t_delta) == 0:
-            inputs_avg = self.inputs / self.total
-            self.prune(inputs_avg, weight)
-            self.done = True
-            self.inputs = None
-
-    def prune(self, x, weight):
-        if self.layer_type == "linear":
-            self.handle_linear(x, weight)
-        else:
-            self.handle_conv(x, weight)
-
-    def call(self, weight):  # Mask is only updated every t_delta step, using collect_output
-        return self.mask * weight
+    def get_hard_mask(self, weight=None):  # noqa: ARG002
+        return ops.convert_to_tensor(self.mask)
 
     def post_pre_train_function(self):
-        self.is_pretraining = False
+        self._is_pretraining = False
+        if hasattr(self, "is_pretraining"):
+            self.is_pretraining.assign(False)
 
-    def pre_epoch_function(self, epoch, total_epochs):
+    def pre_epoch_function(self, epoch, total_epochs, **kwargs):  # noqa: ARG002
         pass
 
     def post_round_function(self):
         pass
 
     def pre_finetune_function(self):
-        self.is_finetuning = True
+        self._is_finetuning = True
+        if hasattr(self, "is_finetuning"):
+            self.is_finetuning.assign(True)
 
     def calculate_additional_loss(self):
         return 0
@@ -133,17 +175,12 @@ class Wanda(keras.layers.Layer):
     def get_layer_sparsity(self, weight):
         pass
 
-    def get_hard_mask(self, weight=None):
-        return self.mask
-
-    def post_epoch_function(self, epoch, total_epochs):
-        if self.is_pretraining is False:
-            self.t += 1
-        pass
+    def post_epoch_function(self, epoch, total_epochs, **kwargs):  # noqa: ARG002
+        if not self._is_pretraining:
+            self.t.assign_add(1)
 
     def get_config(self):
         config = super().get_config()
-
         config.update(
             {
                 "config": self.config.get_dict(),

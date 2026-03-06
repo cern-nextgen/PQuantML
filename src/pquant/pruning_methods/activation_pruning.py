@@ -12,13 +12,9 @@ class ActivationPruning(keras.layers.Layer):
         super().__init__(*args, **kwargs)
         self.config = config
         self.act_type = "relu"
-        self.t = 0
-        self.batches_collected = 0
         self.layer_type = layer_type
-        self.activations = None
-        self.total = 0.0
-        self.is_pretraining = True
-        self.is_finetuning = False
+        self._is_pretraining = True
+        self._is_finetuning = False
         self.threshold = ops.convert_to_tensor(config.pruning_parameters.threshold)
         self.t_start_collecting_batch = self.config.pruning_parameters.t_start_collecting_batch
 
@@ -29,69 +25,107 @@ class ActivationPruning(keras.layers.Layer):
                 self.shape = (input_shape[0], 1, 1)
             else:
                 self.shape = (input_shape[0], 1, 1, 1)
+        n_channels = input_shape[0]
         self.mask = self.add_weight(shape=self.shape, initializer="ones", trainable=False)
-        self.mask_placeholder = ops.ones(self.shape)
+        self.mask_placeholder = self.add_weight(shape=self.shape, initializer="ones", trainable=False)
+        self.activations = self.add_weight(shape=(n_channels,), initializer="zeros", trainable=False)
+        self.batches_collected = self.add_weight(shape=(), initializer="zeros", trainable=False, dtype="int32")
+        self.t = self.add_weight(shape=(), initializer="zeros", trainable=False, dtype="int32")
+        self.is_pretraining = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_pretraining),
+            name="is_pretraining",
+            trainable=False,
+            dtype="bool",
+        )
+        self.is_finetuning = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_finetuning),
+            name="is_finetuning",
+            trainable=False,
+            dtype="bool",
+        )
+        super().build(input_shape)
 
     def collect_output(self, output, training):
         """
-        Accumulates values for how often the outputs of the neurons and channels of
-        linear/convolution layer are over 0. Every t_delta steps, uses these values to update
-        the mask to prune those channels and neurons that are active less than a given threshold
+        Accumulates per-channel activity fractions. Every t_delta batches, updates
+        mask_placeholder. The actual mask used in call() is updated from mask_placeholder
+        in post_epoch_function (outside the compiled graph, no step-to-step dependency).
         """
-        if not training or self.is_pretraining or self.is_finetuning:
-            # Don't collect during validation
+        if not training:
             return
-        if self.activations is None:
-            # Initialize activations dynamically
-            self.activations = ops.zeros(shape=output.shape[1:], dtype=output.dtype)
-        if self.t < self.t_start_collecting_batch:
-            return
-        self.batches_collected += 1
-        self.total += output.shape[0]
-        gt_zero = ops.cast((output > 0), output.dtype)
-        gt_zero = ops.sum(gt_zero, axis=0)  # Sum over batch, take average during mask update
-        self.activations += gt_zero
-        if self.batches_collected % self.config.pruning_parameters.t_delta == 0:
-            pct_active = self.activations / self.total
-            self.t = 0
-            self.total = 0
-            self.batches_collected = 0
-            if self.layer_type == "linear":
-                self.mask_placeholder = ops.expand_dims(ops.cast((pct_active > self.threshold), pct_active.dtype), 1)
-            else:
-                pct_active = ops.reshape(pct_active, (pct_active.shape[0], -1))
-                pct_active_avg = ops.mean(pct_active, axis=-1)
-                pct_active_above_threshold = ops.cast((pct_active_avg > self.threshold), pct_active_avg.dtype)
-                if len(output.shape) == 3:
-                    self.mask_placeholder = ops.reshape(
-                        pct_active_above_threshold, list(pct_active_above_threshold.shape) + [1, 1]
-                    )
-                else:
-                    self.mask_placeholder = ops.reshape(
-                        pct_active_above_threshold, list(pct_active_above_threshold.shape) + [1, 1, 1]
-                    )
-            self.activations *= 0.0
 
-    def call(self, weight):  # Mask is only updated every t_delta step, using collect_output
-        if self.is_pretraining:
-            return weight
+        t_delta = self.config.pruning_parameters.t_delta
+        # Collect only when training and if above the starting point of collecting
+        should_collect = ops.logical_not(
+            ops.logical_or(
+                ops.logical_or(self.is_pretraining, self.is_finetuning),
+                self.t < self.t_start_collecting_batch,
+            )
+        )
+
+        # Per-channel mean activity fraction
+        gt_zero = ops.cast(output > 0, output.dtype)
+        if self.layer_type == "linear":
+            per_channel = ops.mean(gt_zero, axis=0)
         else:
-            return self.mask * weight
+            # output is channels-first (batch, channels, ...); average over batch + spatial
+            axes = (0,) + tuple(range(2, len(output.shape)))
+            per_channel = ops.mean(gt_zero, axis=axes)
 
-    def get_hard_mask(self, weight=None):
-        return self.mask
+        # Snapshot current state
+        activations_cur = ops.convert_to_tensor(self.activations)
+        batches_cur = ops.convert_to_tensor(self.batches_collected)
+        mask_ph_cur = ops.convert_to_tensor(self.mask_placeholder)
+
+        # Accumulate (gated by should_collect)
+        new_activations = activations_cur + ops.where(should_collect, per_channel, ops.zeros_like(per_channel))
+        new_batches = batches_cur + ops.cast(should_collect, "int32")
+
+        # Update mask_placeholder every t_delta batches
+        should_update = ops.logical_and(
+            should_collect,
+            ops.equal(new_batches % t_delta, 0),
+        )
+
+        safe_batches = ops.cast(ops.maximum(new_batches, 1), new_activations.dtype)
+        pct_active = new_activations / safe_batches
+        new_mask_ph = self._compute_mask(pct_active)
+
+        self.mask_placeholder.assign(ops.where(should_update, new_mask_ph, mask_ph_cur))
+
+        # Reset accumulators after mask update, else keep accumulated values
+        self.activations.assign(ops.where(should_update, ops.zeros_like(new_activations), new_activations))
+        self.batches_collected.assign(ops.where(should_update, ops.zeros_like(new_batches), new_batches))
+        self.t.assign(ops.where(should_update, ops.zeros_like(self.t), self.t))
+
+    def _compute_mask(self, pct_active):
+        binary = ops.cast(pct_active > self.threshold, pct_active.dtype)
+        return ops.reshape(binary, self.shape)
+
+    def call(self, weight):
+        stored_mask = ops.convert_to_tensor(self.mask)
+        return ops.where(self.is_pretraining, weight, stored_mask * weight)
+
+    def get_hard_mask(self, weight=None):  # noqa: ARG002
+        return ops.convert_to_tensor(self.mask)
 
     def post_pre_train_function(self):
-        self.is_pretraining = False
+        self._is_pretraining = False
+        if hasattr(self, "is_pretraining"):
+            self.is_pretraining.assign(False)
 
-    def pre_epoch_function(self, epoch, total_epochs):
+    def pre_epoch_function(self, epoch, total_epochs, **kwargs):  # noqa: ARG002
         pass
 
     def post_round_function(self):
         pass
 
     def pre_finetune_function(self):
-        self.is_finetuning = True
+        self._is_finetuning = True
+        if hasattr(self, "is_finetuning"):
+            self.is_finetuning.assign(True)
 
     def calculate_additional_loss(self):
         return 0
@@ -99,14 +133,12 @@ class ActivationPruning(keras.layers.Layer):
     def get_layer_sparsity(self, weight):
         pass
 
-    def post_epoch_function(self, epoch, total_epochs):
-        if self.is_pretraining is False:
-            self.t += 1
-        self.mask.assign(self.mask_placeholder)
-        pass
+    def post_epoch_function(self, epoch, total_epochs, **kwargs):  # noqa: ARG002
+        if not self._is_pretraining:
+            self.t.assign_add(1)
+        self.mask.assign(ops.convert_to_tensor(self.mask_placeholder))
 
     def get_config(self):
         config = super().get_config()
-
         config.update({"config": self.config.get_dict(), "layer_type": self.layer_type})
         return config

@@ -26,10 +26,8 @@ class MDMM(keras.layers.Layer):
         self.config = config
         self.layer_type = layer_type
         self.constraint_layer = None
-        self.penalty_loss = None
-        self.built = False
-        self.is_finetuning = False
-        self.is_pretraining = True
+        self._is_finetuning = False
+        self._is_pretraining = True
 
     def build(self, input_shape):
         pruning_parameters = self.config.pruning_parameters
@@ -71,49 +69,57 @@ class MDMM(keras.layers.Layer):
         else:
             raise ValueError(f"Unknown constraint_type: {constraint_type}")
 
-        self.mask = ops.ones(input_shape)
+        self.mask = self.add_weight(name="mask", shape=input_shape, initializer="ones", trainable=False)
+        self.is_pretraining = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_pretraining),
+            name="is_pretraining",
+            trainable=False,
+            dtype="bool",
+        )
+        self.is_finetuning = self.add_weight(
+            shape=(),
+            initializer=keras.initializers.Constant(self._is_finetuning),
+            name="is_finetuning",
+            trainable=False,
+            dtype="bool",
+        )
         self.constraint_layer.build(input_shape)
         super().build(input_shape)
-        self.built = True
 
     def call(self, weight):
-        if not self.built:
-            self.build(weight.shape)
-
-        if self.is_finetuning:
-            self.penalty_loss = 0.0
-            weight = weight * self.get_hard_mask(weight)
-        else:
-            self.penalty_loss = self.constraint_layer(weight)
         epsilon = self.config.pruning_parameters.epsilon
-        self.hard_mask = ops.cast(ops.abs(weight) > epsilon, weight.dtype)
-        return weight
+        hard_mask = ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+        self.mask.assign(hard_mask)
+
+        penalty = ops.sum(self.constraint_layer(weight))
+        not_active = ops.logical_or(self.is_pretraining, self.is_finetuning)
+        self.add_loss(ops.where(not_active, ops.zeros_like(penalty), penalty))
+
+        return ops.where(self.is_finetuning, weight * hard_mask, weight)
 
     def get_hard_mask(self, weight=None):
         if weight is None:
-            return self.hard_mask
+            return ops.convert_to_tensor(self.mask)
         epsilon = self.config.pruning_parameters.epsilon
         return ops.cast(ops.abs(weight) > epsilon, weight.dtype)
 
     def get_layer_sparsity(self, weight):
-        return ops.sum(self.get_hard_mask(weight)) / ops.size(weight)  # Should this be subtracted from 1.0?
+        return ops.sum(self.get_hard_mask(weight)) / ops.size(weight)
 
     def calculate_additional_loss(self):
-        if self.penalty_loss is None:
-            raise ValueError("Penalty loss has not been calculated. Call the layer with weights first.")
-        else:
-            penalty_loss = ops.sum(self.penalty_loss)
-
-        return penalty_loss
+        # Loss is added via self.add_loss() in call() for model.fit.
+        # For custom training loops, accumulate model.losses from the last forward pass instead.
+        return 0.0
 
     def pre_epoch_function(self, epoch, total_epochs):
         pass
 
     def pre_finetune_function(self):
-        # Freeze the weights
-        # Set lmbda(s) to zero
-        self.is_finetuning = True
-        if hasattr(self.constraint_layer, 'module'):
+        self._is_finetuning = True
+        if hasattr(self, "is_finetuning"):
+            self.is_finetuning.assign(True)
+        if hasattr(self.constraint_layer, "module"):
             self.constraint_layer.module.turn_off()
         else:
             self.constraint_layer.turn_off()
@@ -122,14 +128,15 @@ class MDMM(keras.layers.Layer):
         pass
 
     def post_pre_train_function(self):
-        self.is_pretraining = False
+        self._is_pretraining = False
+        if hasattr(self, "is_pretraining"):
+            self.is_pretraining.assign(False)
 
     def post_round_function(self):
         pass
 
     def get_config(self):
         config = super().get_config()
-
         config.update(
             {
                 "config": self.config.get_dict(),
