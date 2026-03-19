@@ -226,10 +226,10 @@ class PQWeightBiasBase(keras.layers.Layer):
             self.is_finetuning.assign(1.0)
 
     def save_weights(self):
-        self.init_weight = self.weight.value
+        self.init_weight = ops.copy(self._kernel)
 
     def rewind_weights(self):
-        self.weight.assign(self.init_weight)
+        self._kernel.assign(self.init_weight)
 
     def ebops(self):
         return 0.0
@@ -263,14 +263,14 @@ class PQWeightBiasBase(keras.layers.Layer):
     def pre_forward(self, x, training):
         if self.quantize_input and self.enable_quantization:
             x = self.input_quantizer(x, training=training)
-        if self.pruning_method == "wanda":
+        if self.pruning_method == "wanda" and self.enable_pruning:
             self.collect_input(x, self._kernel, training)
         return x
 
     def post_forward(self, x, training):
         if self.quantize_output and self.enable_quantization:
             x = self.output_quantizer(x, training=training)
-        if self.pruning_method == "activation_pruning":
+        if self.pruning_method == "activation_pruning" and self.enable_pruning:
             self.collect_output(x, training)
         return x
 
@@ -1716,6 +1716,7 @@ def call_post_round_functions(model, rewind, rounds, r):
 def apply_final_compression(model):
     for layer in model.layers:
         if isinstance(layer, (PQWeightBiasBase, PQSeparableConv2d, PQBatchNormalization, PQDepthwiseConv2d)):
+            layer.apply_final_compression()
             if hasattr(layer, "input_quantizer"):
                 layer.input_quantizer.apply_final_compression()
             if hasattr(layer, "output_quantizer"):
@@ -1740,13 +1741,15 @@ def post_epoch_functions(model, epoch, total_epochs, **kwargs):
                 PQDense,
             ),
         ):
-            layer.pruning_layer.post_epoch_function(epoch, total_epochs, **kwargs)
-            _update_pruning_mask(layer)
+            if layer.enable_pruning:
+                layer.pruning_layer.post_epoch_function(epoch, total_epochs, **kwargs)
+                _update_pruning_mask(layer)
         elif isinstance(layer, PQSeparableConv2d):
-            layer.depthwise_conv.pruning_layer.post_epoch_function(epoch, total_epochs, **kwargs)
-            _update_pruning_mask(layer.depthwise_conv)
-            layer.pointwise_conv.pruning_layer.post_epoch_function(epoch, total_epochs, **kwargs)
-            _update_pruning_mask(layer.pointwise_conv)
+            if layer.enable_pruning:
+                layer.depthwise_conv.pruning_layer.post_epoch_function(epoch, total_epochs, **kwargs)
+                _update_pruning_mask(layer.depthwise_conv)
+                layer.pointwise_conv.pruning_layer.post_epoch_function(epoch, total_epochs, **kwargs)
+                _update_pruning_mask(layer.pointwise_conv)
 
 
 def pre_epoch_functions(model, epoch, total_epochs):
@@ -1760,10 +1763,12 @@ def pre_epoch_functions(model, epoch, total_epochs):
                 PQDense,
             ),
         ):
-            layer.pruning_layer.pre_epoch_function(epoch, total_epochs)
+            if layer.enable_pruning:
+                layer.pruning_layer.pre_epoch_function(epoch, total_epochs)
         elif isinstance(layer, PQSeparableConv2d):
-            layer.depthwise_conv.pruning_layer.pre_epoch_function(epoch, total_epochs)
-            layer.pointwise_conv.pruning_layer.pre_epoch_function(epoch, total_epochs)
+            if layer.enable_pruning:
+                layer.depthwise_conv.pruning_layer.pre_epoch_function(epoch, total_epochs)
+                layer.pointwise_conv.pruning_layer.pre_epoch_function(epoch, total_epochs)
 
 
 def post_round_functions(model):

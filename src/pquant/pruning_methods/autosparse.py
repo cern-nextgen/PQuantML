@@ -63,6 +63,7 @@ class AutoSparse(keras.layers.Layer):
         self.g = ops.sigmoid
         self.config = config
         self.layer_type = layer_type
+        self._alpha_init = float(config.pruning_parameters.alpha)
         global BACKWARD_SPARSITY
         BACKWARD_SPARSITY = config.pruning_parameters.backward_sparsity
         self._is_pretraining = True
@@ -85,7 +86,7 @@ class AutoSparse(keras.layers.Layer):
         self.alpha = self.add_weight(
             name="alpha",
             shape=(),
-            initializer=Constant(float(self.config.pruning_parameters.alpha)),
+            initializer=Constant(self._alpha_init),
             trainable=False,
         )
         self.is_pretraining = self.add_weight(
@@ -105,26 +106,28 @@ class AutoSparse(keras.layers.Layer):
         super().build(input_shape)
 
     def call(self, weight):
-        """
-        ReLu(X) * W, where X = |W| - sigmoid(threshold), with gradient:
-            1 if W > 0 else alpha. Alpha is decayed after each epoch.
-        """
-        stored_mask = ops.convert_to_tensor(self.mask)
+        weight_reshaped = ops.reshape(weight, (weight.shape[0], -1))
+        w_t = ops.abs(weight_reshaped) - self.g(self.threshold)
 
-        new_mask = self.get_mask(weight)
-        use_current_mask = ops.logical_or(self.is_pretraining, self.is_finetuning)
-        updated_mask = ops.where(use_current_mask, stored_mask, new_mask)
-        self.mask.assign(updated_mask)
+        new_binary_mask = ops.cast(ops.reshape(w_t > 0, weight.shape), weight.dtype)
+        is_training = ops.logical_not(ops.logical_or(self.is_pretraining, self.is_finetuning))
+        self.mask.assign(ops.where(is_training, new_binary_mask, ops.convert_to_tensor(self.mask)))
 
-        return ops.where(self.is_pretraining, weight, updated_mask * weight)
+        sparse_weight = ops.sign(weight_reshaped) * ops.reshape(autosparse_prune(w_t, self.alpha), weight.shape)
 
-    def get_hard_mask(self, weight=None):
-        return ops.cast(self.mask > 0, self.mask.dtype)
+        return ops.where(
+            self.is_pretraining,
+            weight,
+            ops.where(self.is_finetuning, ops.convert_to_tensor(self.mask) * weight, sparse_weight),
+        )
+
+    def get_hard_mask(self, weight=None):  # noqa: ARG002
+        return ops.convert_to_tensor(self.mask)
 
     def get_mask(self, weight):
         weight_reshaped = ops.reshape(weight, (weight.shape[0], -1))
         w_t = ops.abs(weight_reshaped) - self.g(self.threshold)
-        return ops.reshape(autosparse_prune(w_t, self.alpha), weight.shape)
+        return ops.cast(ops.reshape(w_t > 0, weight.shape), weight.dtype)
 
     def get_layer_sparsity(self, weight):
         masked_weight = self.get_mask(weight)
@@ -152,7 +155,7 @@ class AutoSparse(keras.layers.Layer):
 
     def post_epoch_function(self, epoch, total_epochs):
         decay = cosine_sigmoid_decay(epoch, total_epochs)
-        self.alpha.assign(self.alpha * decay)
+        self.alpha.assign(self._alpha_init * decay)
         if epoch == self.config.pruning_parameters.alpha_reset_epoch:
             self.alpha.assign(ops.zeros_like(self.alpha))
 
