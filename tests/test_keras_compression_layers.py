@@ -2039,3 +2039,52 @@ def test_model_serialization(tmp_path, config_fn):
     # Stage 4: after apply_final_compression (final_compression_done=True on all layers)
     apply_final_compression(model)
     assert_pq_state_survives_roundtrip(model, "final_compression")
+
+
+@pytest.mark.parametrize(
+    "config_fn",
+    [pdp_config, ap_config, autosparse_config, cs_config, dst_config, mdmm_config, wanda_config],
+    ids=["pdp", "ap", "autosparse", "cs", "dst", "mdmm", "wanda"],
+)
+def test_model_fit(config_fn):
+    from pquant.core.keras.train import PQuantCallback
+
+    config = config_fn()
+    config.quantization_parameters.enable_quantization = True
+    config.training_parameters.pretraining_epochs = 1
+    config.training_parameters.epochs = 1
+    config.training_parameters.fine_tuning_epochs = 1
+    config.training_parameters.rounds = 1
+    config.training_parameters.save_weights_epoch = 0
+
+    channels_first = keras.backend.image_data_format() == "channels_first"
+    if channels_first:
+        input_shape = (IN_FEATURES, 32, 32)
+        conv1d_shape = (OUT_FEATURES, 16 * 16)
+        dummy_x = np.zeros((BATCH_SIZE, IN_FEATURES, 32, 32), dtype=np.float32)
+        bn_axis = 1
+    else:
+        input_shape = (32, 32, IN_FEATURES)
+        conv1d_shape = (16 * 16, OUT_FEATURES)
+        dummy_x = np.zeros((BATCH_SIZE, 32, 32, IN_FEATURES), dtype=np.float32)
+        bn_axis = -1
+
+    inputs = keras.Input(shape=input_shape)
+    x = PQConv2d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
+    x = PQBatchNormalization(config, axis=bn_axis)(x)
+    x = PQActivation(config, activation="relu", quantize_input=True, quantize_output=True)(x)
+    x = PQAvgPool2d(config, pool_size=2, strides=2, padding="same")(x)
+    x = keras.layers.Reshape(conv1d_shape)(x)
+    x = PQConv1d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(x)
+    x = PQActivation(config, activation="relu", quantize_input=True, quantize_output=True)(x)
+    x = PQAvgPool1d(config, pool_size=2, strides=2, padding="same")(x)
+    x = keras.layers.Flatten()(x)
+    x = PQDense(config, units=OUT_FEATURES)(x)
+    x = PQActivation(config, activation="relu", quantize_input=True, quantize_output=True)(x)
+    model = keras.Model(inputs, x)
+
+    dummy_y = np.zeros((BATCH_SIZE, model.output_shape[-1]), dtype=np.float32)
+
+    model.compile(optimizer="adam", loss="mse", jit_compile=False)
+    callback = PQuantCallback(config, log_ebops=False, log_keep_ratio=False)
+    model.fit(dummy_x, dummy_y, epochs=callback.total_epochs, callbacks=[callback], verbose=0)
