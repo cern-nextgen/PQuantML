@@ -113,7 +113,7 @@ class AutoSparse(keras.layers.Layer):
         is_training = ops.logical_not(ops.logical_or(self.is_pretraining, self.is_finetuning))
         self.mask.assign(ops.where(is_training, new_binary_mask, ops.convert_to_tensor(self.mask)))
 
-        sparse_weight = ops.sign(weight_reshaped) * ops.reshape(autosparse_prune(w_t, self.alpha), weight.shape)
+        sparse_weight = ops.sign(weight) * ops.reshape(autosparse_prune(w_t, self.alpha), weight.shape)
 
         return ops.where(
             self.is_pretraining,
@@ -156,7 +156,7 @@ class AutoSparse(keras.layers.Layer):
     def post_epoch_function(self, epoch, total_epochs):
         decay = cosine_sigmoid_decay(epoch, total_epochs)
         self.alpha.assign(self._alpha_init * decay)
-        if epoch == self.config.pruning_parameters.alpha_reset_epoch:
+        if epoch >= self.config.pruning_parameters.alpha_reset_epoch:
             self.alpha.assign(ops.zeros_like(self.alpha))
 
     def get_config(self):
