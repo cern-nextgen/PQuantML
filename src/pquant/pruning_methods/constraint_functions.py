@@ -50,7 +50,7 @@ class Constraint(keras.layers.Layer):
                 trainable=False,
             )
 
-    def call(self, weight):
+    def call(self, weight, training=None):
         """Calculates the penalty from a given infeasibility measure."""
         raw_infeasibility = self.get_infeasibility(weight)
         infeasibility = self.pipe_infeasibility(raw_infeasibility)
@@ -61,8 +61,9 @@ class Constraint(keras.layers.Layer):
         else:
             lmbda_step = self.lr_ * self.scale * self.prev_infs
             ascent_lmbda = self.lmbda + lmbda_step
-            self.lmbda.assign_add(lmbda_step)
-            self.prev_infs.assign(infeasibility)
+            if training:
+                self.lmbda.assign_add(lmbda_step)
+                self.prev_infs.assign(infeasibility)
 
         l_term = ascent_lmbda * infeasibility
         damp_term = self.damping * ops.square(infeasibility) / 2

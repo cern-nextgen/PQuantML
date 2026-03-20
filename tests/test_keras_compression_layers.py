@@ -2046,6 +2046,52 @@ def test_model_serialization(tmp_path, config_fn):
     [pdp_config, ap_config, autosparse_config, cs_config, dst_config, mdmm_config, wanda_config],
     ids=["pdp", "ap", "autosparse", "cs", "dst", "mdmm", "wanda"],
 )
+def test_checkpoint_save_load(tmp_path, config_fn):
+    """Verify that save_weights/load_weights preserves non-trainable pruning state (e.g. mask)."""
+    config = config_fn()
+    config.quantization_parameters.enable_quantization = True
+    channels_first = keras.backend.image_data_format() == "channels_first"
+    if channels_first:
+        input_shape = (IN_FEATURES, 32, 32)
+        dummy = np.zeros((1, IN_FEATURES, 32, 32), dtype=np.float32)
+    else:
+        input_shape = (32, 32, IN_FEATURES)
+        dummy = np.zeros((1, 32, 32, IN_FEATURES), dtype=np.float32)
+
+    inputs = keras.Input(shape=input_shape)
+    x = PQConv2d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
+    x = keras.layers.Flatten()(x)
+    x = PQDense(config, units=OUT_FEATURES)(x)
+    model = keras.Model(inputs, x)
+    model(dummy)
+
+    # Randomize all weights including non-trainable pruning state (mask, etc.)
+    rng = np.random.default_rng(0)
+    for w in model.weights:
+        if w.name.endswith(("is_pretraining", "is_finetuning")):
+            continue
+        w.assign(rng.standard_normal(w.shape).astype(w.dtype))
+
+    original_weights = [np.array(w) for w in model.weights]
+
+    path = str(tmp_path / "ckpt.weights.h5")
+    model.save_weights(path)
+
+    # Overwrite all weights with zeros
+    for w in model.weights:
+        w.assign(np.zeros(w.shape, dtype=w.dtype))
+
+    model.load_weights(path)
+
+    for orig, w in zip(original_weights, model.weights):
+        np.testing.assert_array_equal(orig, np.array(w), err_msg=f"Checkpoint weight mismatch: {w.name}")
+
+
+@pytest.mark.parametrize(
+    "config_fn",
+    [pdp_config, ap_config, autosparse_config, cs_config, dst_config, mdmm_config, wanda_config],
+    ids=["pdp", "ap", "autosparse", "cs", "dst", "mdmm", "wanda"],
+)
 def test_model_fit(config_fn):
     from pquant.core.keras.train import PQuantCallback
 

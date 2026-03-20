@@ -90,10 +90,10 @@ class MDMM(keras.layers.Layer):
     def call(self, weight):
         epsilon = self.config.pruning_parameters.epsilon
         hard_mask = ops.cast(ops.abs(weight) > epsilon, weight.dtype)
-        self.mask.assign(hard_mask)
+        not_active = ops.logical_or(self.is_pretraining, self.is_finetuning)
+        self.mask.assign(ops.where(not_active, ops.convert_to_tensor(self.mask), hard_mask))
 
         penalty = ops.sum(self.constraint_layer(weight))
-        not_active = ops.logical_or(self.is_pretraining, self.is_finetuning)
         self.add_loss(ops.where(not_active, ops.zeros_like(penalty), penalty))
 
         return ops.where(self.is_finetuning, weight * hard_mask, weight)
