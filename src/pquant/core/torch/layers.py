@@ -1127,19 +1127,19 @@ def add_layer_specific_quantization_to_model(name, layer, config):
         if name in config.quantization_parameters.layer_specific:
             layer_config = config.quantization_parameters.layer_specific[name]
             if "weight" in layer_config:
-                weight_k_bits = layer_config["weight"]["keep_negatives"]
-                weight_int_bits = layer_config["weight"]["integer_bits"]
-                weight_fractional_bits = layer_config["weight"]["fractional_bits"]
-                layer.k_weight = torch.tensor(weight_k_bits)
-                layer.i_weight = torch.tensor(weight_int_bits)
-                layer.f_weight = torch.tensor(weight_fractional_bits)
+                if "keep_negatives" in layer_config["weight"]:
+                    layer.k_weight = torch.tensor(layer_config["weight"]["keep_negatives"])
+                if "integer_bits" in layer_config["weight"]:
+                    layer.i_weight = torch.tensor(layer_config["weight"]["integer_bits"])
+                if "fractional_bits" in layer_config["weight"]:
+                    layer.f_weight = torch.tensor(layer_config["weight"]["fractional_bits"])
             if "bias" in layer_config:
-                bias_k_bits = layer_config["bias"]["keep_negatives"]
-                bias_int_bits = layer_config["bias"]["integer_bits"]
-                bias_fractional_bits = layer_config["bias"]["fractional_bits"]
-                layer.k_bias = torch.tensor(bias_k_bits)
-                layer.i_bias = torch.tensor(bias_int_bits)
-                layer.f_bias = torch.tensor(bias_fractional_bits)
+                if "keep_negatives" in layer_config["bias"]:
+                    layer.k_bias = torch.tensor(layer_config["bias"]["keep_negatives"])
+                if "integer_bits" in layer_config["bias"]:
+                    layer.i_bias = torch.tensor(layer_config["bias"]["integer_bits"])
+                if "fractional_bits" in layer_config["bias"]:
+                    layer.f_bias = torch.tensor(layer_config["bias"]["fractional_bits"])
             if "input" in layer_config:
                 if "keep_negatives" in layer_config["input"]:
                     input_keep_negatives = torch.tensor(layer_config["input"]["keep_negatives"])

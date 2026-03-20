@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import keras
 import numpy as np
 import pytest
@@ -18,6 +16,7 @@ from torch.nn import (
 
 from pquant import post_training_prune
 from pquant.activations import PQActivation
+from pquant.core.hyperparameter_optimization import PQConfig
 from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
@@ -33,15 +32,6 @@ from pquant.layers import (
     post_pretrain_functions,
     pre_finetune_functions,
 )
-
-
-def _to_obj(x):
-    if isinstance(x, dict):
-        return SimpleNamespace(**{k: _to_obj(v) for k, v in x.items()})
-    if isinstance(x, list):
-        return [_to_obj(v) for v in x]
-    return x
-
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32
@@ -84,11 +74,12 @@ def config_pdp():
             "round_mode": "RND",
             "overflow_mode_parameters": "SAT",
             "overflow_mode_data": "SAT",
+            "granularity": "per_tensor",
         },
         "training_parameters": {"pruning_first": False},
         "fitcompress_parameters": {"enable_fitcompress": False},
     }
-    return _to_obj(cfg)
+    return PQConfig.load_from_config(cfg)
 
 
 @pytest.fixture
@@ -124,11 +115,12 @@ def config_ap():
             "round_mode": "RND",
             "overflow_mode_parameters": "SAT",
             "overflow_mode_data": "SAT",
+            "granularity": "per_tensor",
         },
         "training_parameters": {"pruning_first": False},
         "fitcompress_parameters": {"enable_fitcompress": False},
     }
-    return _to_obj(cfg)
+    return PQConfig.load_from_config(cfg)
 
 
 @pytest.fixture
@@ -167,11 +159,12 @@ def config_wanda():
             "round_mode": "RND",
             "overflow_mode_parameters": "SAT",
             "overflow_mode_data": "SAT",
+            "granularity": "per_tensor",
         },
         "training_parameters": {"pruning_first": False},
         "fitcompress_parameters": {"enable_fitcompress": False},
     }
-    return _to_obj(cfg)
+    return PQConfig.load_from_config(cfg)
 
 
 @pytest.fixture
@@ -206,11 +199,12 @@ def config_cs():
             "round_mode": "RND",
             "overflow_mode_parameters": "SAT",
             "overflow_mode_data": "SAT",
+            "granularity": "per_tensor",
         },
         "training_parameters": {"pruning_first": False},
         "fitcompress_parameters": {"enable_fitcompress": False},
     }
-    return _to_obj(cfg)
+    return PQConfig.load_from_config(cfg)
 
 
 @pytest.fixture
@@ -586,17 +580,20 @@ def test_trigger_post_pretraining(config_pdp, dense_input):
 
     model = add_compression_layers(model, config_pdp, dense_input.shape)
 
-    assert model.submodule.pruning_layer.is_pretraining is True
-    assert model.activation.is_pretraining is True
-    assert model.submodule2.pruning_layer.is_pretraining is True
-    assert model.activation2.is_pretraining is True
+    def _to_bool(val):
+        return val.numpy() if hasattr(val, "numpy") else bool(val)
+
+    assert _to_bool(model.submodule.pruning_layer.is_pretraining)
+    assert _to_bool(model.activation.is_pretraining)
+    assert _to_bool(model.submodule2.pruning_layer.is_pretraining)
+    assert _to_bool(model.activation2.is_pretraining)
 
     post_pretrain_functions(model, config_pdp)
 
-    assert model.submodule.pruning_layer.is_pretraining is False
-    assert model.activation.is_pretraining is False
-    assert model.submodule2.pruning_layer.is_pretraining is False
-    assert model.activation2.is_pretraining is False
+    assert not _to_bool(model.submodule.pruning_layer.is_pretraining)
+    assert not _to_bool(model.activation.is_pretraining)
+    assert not _to_bool(model.submodule2.pruning_layer.is_pretraining)
+    assert not _to_bool(model.activation2.is_pretraining)
 
 
 def test_hgq_weight_shape(config_pdp, dense_input):
@@ -1777,15 +1774,19 @@ def test_hgq_loss_calc_no_qoutput(config_pdp, conv2d_input):
     for m in model.modules():
         if isinstance(m, (PQWeightBiasBase)):
             m.ebops = dummy_ebops
-            m.input_quantizer.hgq_loss = dummy_hgq_loss
+            if hasattr(m, "input_quantizer"):
+                m.input_quantizer.hgq_loss = dummy_hgq_loss
             m.weight_quantizer.hgq_loss = dummy_hgq_loss
             m.bias_quantizer.hgq_loss = dummy_hgq_loss
-            m.output_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
+            if hasattr(m, "output_quantizer"):
+                m.output_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
             expected_loss += 3.0
         elif isinstance(m, (PQAvgPool1d, PQAvgPool2d, PQActivation)):
             m.ebops = dummy_ebops
-            m.input_quantizer.hgq_loss = dummy_hgq_loss
-            m.output_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
+            if hasattr(m, "input_quantizer"):
+                m.input_quantizer.hgq_loss = dummy_hgq_loss
+            if hasattr(m, "output_quantizer"):
+                m.output_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
             expected_loss += 1.0
         elif isinstance(m, (PQBatchNorm2d)):
             m.ebops = dummy_ebops
@@ -1812,15 +1813,20 @@ def test_hgq_loss_calc_no_bias_no_qoutput(config_pdp, conv2d_input):
     for m in model.modules():
         if isinstance(m, (PQWeightBiasBase)):
             m.ebops = dummy_ebops
-            m.input_quantizer.hgq_loss = dummy_hgq_loss
+            if hasattr(m, "input_quantizer"):
+                m.input_quantizer.hgq_loss = dummy_hgq_loss
             m.weight_quantizer.hgq_loss = dummy_hgq_loss
-            m.bias_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
-            m.output_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
+            if hasattr(m, "bias_quantizer"):
+                m.bias_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
+            if hasattr(m, "output_quantizer"):
+                m.output_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
             expected_loss += 2.0
         elif isinstance(m, (PQAvgPool1d, PQAvgPool2d, PQActivation)):
             m.ebops = dummy_ebops
-            m.input_quantizer.hgq_loss = dummy_hgq_loss
-            m.output_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
+            if hasattr(m, "input_quantizer"):
+                m.input_quantizer.hgq_loss = dummy_hgq_loss
+            if hasattr(m, "output_quantizer"):
+                m.output_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
             expected_loss += 1.0
         elif isinstance(m, (PQBatchNorm2d)):
             m.ebops = dummy_ebops
@@ -1883,19 +1889,24 @@ def test_hgq_loss_calc_no_qinput(config_pdp, conv2d_input):
     for m in model.modules():
         if isinstance(m, (PQWeightBiasBase)):
             m.ebops = dummy_ebops
-            m.input_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
+            if hasattr(m, "input_quantizer"):
+                m.input_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
             m.weight_quantizer.hgq_loss = dummy_hgq_loss
             m.bias_quantizer.hgq_loss = dummy_hgq_loss
-            m.output_quantizer.hgq_loss = dummy_hgq_loss
+            if hasattr(m, "output_quantizer"):
+                m.output_quantizer.hgq_loss = dummy_hgq_loss
             expected_loss += 3.0
         elif isinstance(m, (PQAvgPool1d, PQAvgPool2d, PQActivation)):
             m.ebops = dummy_ebops
-            m.input_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
-            m.output_quantizer.hgq_loss = dummy_hgq_loss
+            if hasattr(m, "input_quantizer"):
+                m.input_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
+            if hasattr(m, "output_quantizer"):
+                m.output_quantizer.hgq_loss = dummy_hgq_loss
             expected_loss += 1.0
         elif isinstance(m, (PQBatchNorm2d)):
             m.ebops = dummy_ebops
-            m.input_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
+            if hasattr(m, "input_quantizer"):
+                m.input_quantizer.hgq_loss = dummy_hgq_loss  # Won't be called
             m.weight_quantizer.hgq_loss = dummy_hgq_loss
             m.bias_quantizer.hgq_loss = dummy_hgq_loss
             expected_loss += 2.0
