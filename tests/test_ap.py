@@ -41,6 +41,7 @@ def test_linear(config):
     mask = ops.expand_dims(mask, -1)
     for _ in range(config["pruning_parameters"]["t_delta"]):
         ap.collect_output(layer_output, training=True)
+    ap.post_epoch_function(0, 1)
     result = ap(weight)
     result_masked = mask * result
     # Multiplying by mask should not change the result at all
@@ -70,6 +71,7 @@ def test_conv(config):
     # mask = ops.expand_dims(ops.expand_dims(ops.expand_dims(mask, -1), -1), -1)
     for _ in range(config["pruning_parameters"]["t_delta"]):
         ap.collect_output(layer_output, training=True)
+    ap.post_epoch_function(0, 1)
     result = ap(weight)
     result_masked = mask * result
     # Multiplying by mask should not change the result at all

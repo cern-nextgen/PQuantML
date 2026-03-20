@@ -75,15 +75,19 @@ def test_linear_structured(config):
     sparsity = config["pruning_parameters"]["sparsity"]
     config["pruning_parameters"]["structured_pruning"] = True
 
-    inp = ops.linspace(-1, 1, num=OUT_FEATURES)
+    # PDP structured linear prunes rows (dim 0 = out_features).
+    # Weight shape is (OUT_FEATURES, IN_FEATURES) matching the transposed convention
+    # used by the Keras layer before passing to the pruning layer.
+    row_scales = ops.linspace(-1, 1, num=OUT_FEATURES)
     threshold_point = int(OUT_FEATURES * sparsity) - 1
-    threshold_value = sorted(ops.abs(inp))[threshold_point]
-    inp = shuffle(inp)
-    mask = ops.cast((ops.abs(inp) > threshold_value), inp.dtype)
-    inp = ops.tile(inp, (IN_FEATURES, 1))
-    mask = ops.tile(mask, (IN_FEATURES, 1))
-    threshold_point = int(OUT_FEATURES * sparsity)
-    # In the matrix of shape NxM, prune over the M dimension
+    threshold_value = sorted(ops.abs(row_scales))[threshold_point]
+    row_scales = shuffle(row_scales)
+    mask_1d = ops.cast((ops.abs(row_scales) > threshold_value), row_scales.dtype)
+
+    # Each row i has uniform value row_scales[i], giving distinct per-row norms.
+    inp = ops.tile(ops.reshape(row_scales, (OUT_FEATURES, 1)), (1, IN_FEATURES))
+    mask = ops.tile(ops.reshape(mask_1d, (OUT_FEATURES, 1)), (1, IN_FEATURES))
+
     pdp = PDP(config, "linear")
     pdp.post_pre_train_function()
     pdp.build(inp.shape)
@@ -99,17 +103,21 @@ def test_conv_structured(config):
     config["pruning_parameters"]["structured_pruning"] = True
     sparsity = config["pruning_parameters"]["sparsity"]
 
-    inp = ops.ones(shape=(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, KERNEL_SIZE))
-    channel_dim = ops.linspace(-1, 1, num=OUT_FEATURES)
+    # PDP structured conv prunes rows (dim 0 = out_channels).
+    # Weight shape is (OUT_FEATURES, IN_FEATURES, kH, kW) matching the transposed
+    # convention used by the Keras layer before passing to the pruning layer.
+    channel_scales = ops.linspace(-1, 1, num=OUT_FEATURES)
     threshold_point = int(OUT_FEATURES * sparsity) - 1
-    threshold_value = sorted(ops.abs(channel_dim))[threshold_point]
-    channel_dim = shuffle(channel_dim)
-    mask = ops.cast((ops.abs(channel_dim) > threshold_value), inp.dtype)
-    mask = ops.expand_dims(ops.expand_dims(ops.expand_dims(mask, axis=0), axis=-1), axis=-1)
-    mask = ops.tile(mask, (IN_FEATURES, 1, KERNEL_SIZE, KERNEL_SIZE))
+    threshold_value = sorted(ops.abs(channel_scales))[threshold_point]
+    channel_scales = shuffle(channel_scales)
+    mask_1d = ops.cast((ops.abs(channel_scales) > threshold_value), channel_scales.dtype)
 
-    mult = ops.expand_dims(ops.expand_dims(ops.expand_dims(channel_dim, axis=0), axis=-1), axis=-1)
-    inp *= mult
+    # Each output channel c has all spatial elements equal to channel_scales[c].
+    mult = ops.reshape(channel_scales, (OUT_FEATURES, 1, 1, 1))
+    inp = ops.ones(shape=(OUT_FEATURES, IN_FEATURES, KERNEL_SIZE, KERNEL_SIZE)) * mult
+    mask = ops.ones(shape=(OUT_FEATURES, IN_FEATURES, KERNEL_SIZE, KERNEL_SIZE)) * ops.reshape(
+        mask_1d, (OUT_FEATURES, 1, 1, 1)
+    )
 
     pdp = PDP(config, "conv")
     pdp.post_pre_train_function()
