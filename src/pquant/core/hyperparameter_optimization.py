@@ -397,7 +397,6 @@ class TuningTask:
                 model,
                 self.get_training_function(),
                 self.get_validation_function(),
-                n_jobs=os.cpu_count(),
                 **kwargs,
             ),
             n_trials=num_trials,
