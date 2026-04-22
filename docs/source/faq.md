@@ -12,12 +12,12 @@ An example to install PyTorch with CUDA 13.0:
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 ```
 ## Can I use MLflow locally?
-Yes. 
+Yes.
 
 PQuantML integrates with MLflow for experiment tracking and model logging and local usage is fully supported.
 
 
-### Start local MLFlow UI: 
+### Start local MLFlow UI:
 ```python
 mlflow ui --host 0.0.0.0 --port 5000
 ```

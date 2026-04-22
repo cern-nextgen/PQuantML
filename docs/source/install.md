@@ -1,6 +1,6 @@
 # Installation
 
-Use `pip install pquant-ml` to install the latest version from PyPI. You will need an environment with `python>=3.10,<=3.12` installed. 
+Use `pip install pquant-ml` to install the latest version from PyPI. You will need an environment with `python>=3.10,<=3.12` installed.
 
 
 ```{warning}

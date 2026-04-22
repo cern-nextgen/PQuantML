@@ -1,5 +1,5 @@
-sphinx
 furo
 myst-parser
-sphinx_rtd_theme
+sphinx
 sphinx-autodoc-typehints
+sphinx_rtd_theme

@@ -39,13 +39,13 @@ def build_model(config):
     class Model(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.dense1 = PQDense(config, 16, 64, 
+            self.dense1 = PQDense(config, 16, 64,
                                   in_quant_bits = (1, 3, 3))
             self.relu = PQActivation(config, "relu")
             self.dense2 = PQDense(config, 64, 32)
             self.dense3 = PQDense(config, 32, 32)
-            self.dense4 = PQDense(config, 32, 5, 
-                                  quantize_output=True, 
+            self.dense4 = PQDense(config, 32, 5,
+                                  quantize_output=True,
                                   out_quant_bits=(1, 3, 3))
 
         def forward(self, x):
@@ -78,7 +78,7 @@ def build_model():
             x = self.relu(self.dense3(x))
             x = self.dense4(x)
             return x
-    
+
 
     return Model()
 
@@ -86,10 +86,10 @@ def build_model():
 model = add_compression_layers(model, config)
 ```
 
-### Fine-Tuning with PQuantML 
+### Fine-Tuning with PQuantML
 PQuantML provides an automated fine-tuning and hyperparameter-optimization workflow through the `TuningTask API`. This allows you to search for optimal pruning, quantization, and training parameters using your own training, validation, and objective functions.
 
-```python 
+```python
 from pquant.core.finetuning import TuningTask, TuningConfig
 
 # Convert defined yaml file into the object
@@ -142,13 +142,13 @@ Training is handled through the `train_model(...)` wrapper:
 ```python
 from pquant import train_model
 
-trained_model = train_model(model = model, 
-                                config = config, 
-                                train_func = ..., 
-                                valid_func = ..., 
-                                trainloader = ..., 
+trained_model = train_model(model = model,
+                                config = config,
+                                train_func = ...,
+                                valid_func = ...,
+                                trainloader = ...,
                                 device="cuda",
-                                testloader = ..., 
+                                testloader = ...,
                                 loss_func = loss_func,
                                 optimizer = optimizer,
                                 scheduler=scheduler
@@ -164,15 +164,15 @@ def build_model(config):
     class Model(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.dense1 = PQDense(config, 16, 64, 
+            self.dense1 = PQDense(config, 16, 64,
                                   in_quant_bits = (1, 3, 3))
             self.relu1 = PQActivation(config, "relu")
             self.relu2 = PQActivation(config, "relu")
             self.relu3 = PQActivation(config, "relu")
             self.dense2 = PQDense(config, 64, 32)
             self.dense3 = PQDense(config, 32, 32)
-            self.dense4 = PQDense(config, 32, 5, 
-                                  quantize_output=True, 
+            self.dense4 = PQDense(config, 32, 5,
+                                  quantize_output=True,
                                   out_quant_bits=(1, 3, 3))
 
         def forward(self, x):

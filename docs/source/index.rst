@@ -16,10 +16,10 @@ PQuantML
 
 Welcome to the official documentation for **PQuantML**, a hardware-aware model compression framework supporting:
 
-- Joint pruning + quantization  
-- Layer-wise precision configuration  
-- Flexible training pipelines  
-- PyTorch and TensorFlow backends 
+- Joint pruning + quantization
+- Layer-wise precision configuration
+- Flexible training pipelines
+- PyTorch and TensorFlow backends
 - Integration with hardware-friendly toolchains (e.g., hls4ml)
 
 PQuantML enables efficient deployment of compact neural networks on resource-constrained hardware such as FPGAs and embedded accelerators.
@@ -49,7 +49,7 @@ Contents
 
 .. toctree::
    :maxdepth: 2
-   
+
    status
    install
    getting_started

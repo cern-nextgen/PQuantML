@@ -6,7 +6,6 @@ from typing import Annotated, Callable, Dict, Optional, Union
 
 import keras
 import optuna
-import torch
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
@@ -37,10 +36,9 @@ def get_sampler(sampler_type, **kwargs):
         raise ValueError(f"Unknown sampler type: {sampler_type}")
 
 
-def log_model_by_backend(model, name, signature=None, registered_model_name=None):
+def log_model_by_backend(model, name, backend, signature=None, registered_model_name=None):
     import mlflow
 
-    backend = keras.backend.backend()
     kwargs = {
         "artifact_path": name,
         "signature": signature,
@@ -61,7 +59,7 @@ class MetricFunction(BaseModel):
     @field_validator('direction')
     def validate_direction(cls, direction):
         if direction not in constants.FINETUNING_DIRECTION:
-            raise ValueError("direction must be 'maximize' or 'minimize'")
+            raise ValueError("Direction must be 'maximize' or 'minimize'")
         return direction
 
 
@@ -115,6 +113,58 @@ class PQConfig(BaseModel):
         return self.model_dump(mode="json")
 
 
+class BackendAdapter:
+    def __init__(self, model):
+        self.backend = self._detect_backend(model)
+        self.device = None
+
+    def clone_model(self, model):
+        if self.backend == constants.TORCH_BACKEND:
+            return copy.deepcopy(model)
+        elif self.backend == constants.TF_BACKEND:
+            new_model = keras.models.clone_model(model)
+            new_model.set_weights(model.get_weights())
+            return new_model
+
+    def get_backend(self):
+        return self.backend
+
+    def get_device(self):
+        return self.device
+
+    def _detect_backend(self, model):
+        if hasattr(model, "parameters"):
+            return constants.TORCH_BACKEND
+        elif isinstance(model, keras.Model):
+            return constants.TF_BACKEND
+        else:
+            raise ValueError("Unsupported model type")
+
+    def move_to_device(self, model):
+        if self.backend == constants.TORCH_BACKEND:
+            self.device = next(model.parameters()).device
+            return model.to(self.device)
+        return model
+
+    def eval(self, model):
+        if self.backend == constants.TORCH_BACKEND:
+            model.eval()
+        return model
+
+    def tensor_to_numpy(self, tensor):
+        if self.backend == constants.TORCH_BACKEND:
+            return tensor.detach().cpu().numpy()
+        elif self.backend == constants.TF_BACKEND:
+            return tensor.numpy()
+
+    def forward(self, model, x):
+        if self.backend == constants.TORCH_BACKEND:
+            x = x.to(self.device)
+            return model(x)
+        elif self.backend == constants.TF_BACKEND:
+            return model(x, training=False)
+
+
 class TuningTask:
     def __init__(self, config: PQConfig):
         self.config = config
@@ -124,7 +174,6 @@ class TuningTask:
         self._validation_function: Optional[Callable] = None
         self._optimizer_function: Optional[Callable] = None
         self._scheduler_function: Optional[Callable] = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.enable_mlflow = False
         self.tracking_uri = None
         self.storage_db = None
@@ -245,16 +294,17 @@ class TuningTask:
     def objective(self, trial, model, train_func, valid_func, **kwargs):
         from pquant import add_compression_layers, train_model
 
+        config_copy = copy.deepcopy(self.config)
         for param_name, (optuna_func, func_args, func_kwargs) in self.hyperparameters.items():
             new_value = optuna_func(trial, *func_args, **func_kwargs)
             logging.info(f"Suggested {param_name} = {new_value}")
 
             applied = False
             for sub_config in [
-                self.config.training_parameters,
-                self.config.pruning_parameters,
-                self.config.quantization_parameters,
-                self.config.fitcompress_parameters,
+                config_copy.training_parameters,
+                config_copy.pruning_parameters,
+                config_copy.quantization_parameters,
+                config_copy.fitcompress_parameters,
             ]:
                 if hasattr(sub_config, param_name):
                     setattr(sub_config, param_name, new_value)
@@ -266,29 +316,32 @@ class TuningTask:
         trainloader = kwargs['trainloader']
         raw_input_batch = next(iter(trainloader))
         sample_input = raw_input_batch[0]
-        sample_output = model(sample_input.to(next(model.parameters()).device))
+        model_copy = self.adapter.clone_model(model)
+        model_copy = self.adapter.move_to_device(model_copy)
+        sample_output = self.adapter.forward(model_copy, sample_input)
 
         input_shape = sample_input.shape
-        compressed_model = add_compression_layers(model, self.config, input_shape)
+        compressed_model = add_compression_layers(model_copy, config_copy, input_shape)
         optimizer_func = self.get_optimizer_function()
-        optimizer = optimizer_func(self.config, compressed_model)
+        optimizer = optimizer_func(config_copy, compressed_model)
         scheduler_func = self.get_scheduler_function()
-        scheduler = scheduler_func(optimizer, self.config)
+        scheduler = scheduler_func(optimizer, config_copy)
+        device = self.adapter.get_device()
 
         trained_model = train_model(
             compressed_model,
-            self.config,
+            config_copy,
             train_func,
             valid_func,
             optimizer=optimizer,
             scheduler=scheduler,
-            device=self.device,
+            device=device,
             writer=None,
             **kwargs,
         )
-        trained_model.eval()
+        self.adapter.eval(trained_model)
         objectives = [
-            metric_object.function_name(trained_model, device=self.device, **kwargs)
+            metric_object.function_name(trained_model, device=device, **kwargs)
             for _, metric_object in self.objectives.items()
         ]
 
@@ -297,23 +350,27 @@ class TuningTask:
             from mlflow.models import infer_signature
 
             with mlflow.start_run(nested=True):
-                mlflow.log_params({param_name: getattr(self.config, param_name) for param_name in self.config.model_fields})
+                mlflow.log_params({param_name: getattr(config_copy, param_name) for param_name in config_copy.model_fields})
                 mlflow.log_metrics({key: val for key, val in zip(self.objectives.keys(), objectives)})
-                signature = infer_signature(sample_input.cpu().numpy(), sample_output.detach().cpu().numpy())
+                signature = infer_signature(
+                    self.adapter.tensor_to_numpy(sample_input), self.adapter.tensor_to_numpy(sample_output)
+                )
 
                 mlflow.log_text(yaml.safe_dump(self.get_dict()), "config.yaml")
-                model_name = self.config.hpo_parameters.model_name
+                model_name = config_copy.hpo_parameters.model_name
                 log_model_by_backend(
                     model=trained_model,
                     name=model_name,
                     signature=signature,
                     registered_model_name=model_name,
+                    backend=self.adapter.get_backend(),
                 )
 
         return objectives if len(objectives) > 1 else objectives[0]
 
     def run_optimization(self, model, **kwargs):
         hpo_parameters = self.config.hpo_parameters
+        num_trials = hpo_parameters.num_trials
         if self.enable_mlflow:
             import mlflow
 
@@ -330,12 +387,11 @@ class TuningTask:
             load_if_exists=True,
             directions=[metric_object.direction for _, metric_object in self.objectives.items()],
         )
-
-        num_trials = hpo_parameters.num_trials
+        self.adapter = BackendAdapter(model)
         study.optimize(
             lambda trial: self.objective(
                 trial,
-                copy.deepcopy(model.cpu()).to(self.device),
+                model,
                 self.get_training_function(),
                 self.get_validation_function(),
                 **kwargs,
