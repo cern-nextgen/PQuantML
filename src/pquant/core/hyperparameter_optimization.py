@@ -40,7 +40,7 @@ def log_model_by_backend(model, name, backend, signature=None, registered_model_
     import mlflow
 
     kwargs = {
-        "artifact_path": name,
+        "name": name,
         "signature": signature,
         "registered_model_name": registered_model_name,
     }
@@ -249,7 +249,7 @@ class TuningTask:
 
         if numerical_params:
             self.set_numerical_params(numerical_params)
-        elif categorical_params:
+        if categorical_params:
             self.set_categorical_params(categorical_params)
 
     def set_numerical_params(self, numerical_params):
@@ -293,8 +293,9 @@ class TuningTask:
 
     def objective(self, trial, model, train_func, valid_func, **kwargs):
         from pquant import add_compression_layers, train_model
-
+        
         config_copy = copy.deepcopy(self.config)
+        applied_parameters = {}
         for param_name, (optuna_func, func_args, func_kwargs) in self.hyperparameters.items():
             new_value = optuna_func(trial, *func_args, **func_kwargs)
             logging.info(f"Suggested {param_name} = {new_value}")
@@ -308,6 +309,7 @@ class TuningTask:
             ]:
                 if hasattr(sub_config, param_name):
                     setattr(sub_config, param_name, new_value)
+                    applied_parameters[param_name] = new_value
                     applied = True
                     break
             if not applied:
@@ -315,12 +317,13 @@ class TuningTask:
 
         trainloader = kwargs['trainloader']
         raw_input_batch = next(iter(trainloader))
+        
         sample_input = raw_input_batch[0]
         model_copy = self.adapter.clone_model(model)
         model_copy = self.adapter.move_to_device(model_copy)
         sample_output = self.adapter.forward(model_copy, sample_input)
-
         input_shape = sample_input.shape
+        
         compressed_model = add_compression_layers(model_copy, config_copy, input_shape)
         optimizer_func = self.get_optimizer_function()
         optimizer = optimizer_func(config_copy, compressed_model)
@@ -350,7 +353,7 @@ class TuningTask:
             from mlflow.models import infer_signature
 
             with mlflow.start_run(nested=True):
-                mlflow.log_params({param_name: getattr(config_copy, param_name) for param_name in config_copy.model_fields})
+                mlflow.log_params(applied_parameters)
                 mlflow.log_metrics({key: val for key, val in zip(self.objectives.keys(), objectives)})
                 signature = infer_signature(
                     self.adapter.tensor_to_numpy(sample_input), self.adapter.tensor_to_numpy(sample_output)
