@@ -16,6 +16,8 @@ from pquant.pruning_methods.constraint_functions import (
     LessThanOrEqualConstraint,
 )
 from pquant.pruning_methods.metric_functions import (
+    FPGAAwareSparsityMetric,
+    PACAPatternMetric,
     StructuredSparsityMetric,
     UnstructuredSparsityMetric,
 )
@@ -58,6 +60,8 @@ N_JOBS = 1
 METRIC_REGISTRY = {
     "UnstructuredSparsity": UnstructuredSparsityMetric,
     "StructuredSparsity": StructuredSparsityMetric,
+    "FPGAAwareSparsity": FPGAAwareSparsityMetric,
+    "PACAPatternSparsity": PACAPatternMetric,
 }
 
 CONSTRAINT_REGISTRY = {

@@ -229,7 +229,6 @@ def test_hard_mask_threshold(config):
 
 
 
-@pytest.mark.xfail(raises=TypeError, strict=False, reason="Known bug: get_layer_sparsity has float32/int32 dtype mismatch on TF backend")
 def test_get_layer_sparsity(config):
     """Half zero, half nonzero -> sparsity = 0.5."""
     weight = ops.convert_to_tensor(

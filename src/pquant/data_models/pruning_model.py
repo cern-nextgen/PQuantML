@@ -67,6 +67,8 @@ class ActivationPruningModel(BasePruningModel):
 class MetricType(str, Enum):
     UNSTRUCTURED = "UnstructuredSparsity"
     STRUCTURED = "StructuredSparsity"
+    FPGA_AWARE = "FPGAAwareSparsity"
+    PACA_PATTERN = "PACAPatternSparsity"
 
 
 class ConstraintType(str, Enum):
@@ -89,3 +91,11 @@ class MDMMPruningModel(BasePruningModel):
     l0_mode: Literal["coarse", "smooth"] = Field(default="coarse")
     scale_mode: Literal["mean", "sum"] = Field(default="mean")
     constraint_lr: float = Field(default=1.0e-3)
+    # FPGAAwareSparsityMetric (only used when metric_type == "FPGAAwareSparsity")
+    precision: Optional[int] = Field(default=None)
+    target_resource: Optional[Literal["DSP", "BRAM"]] = Field(default=None)
+    bram_width: Optional[int] = Field(default=None)
+    # PACAPatternMetric (only used when metric_type == "PACAPatternSparsity")
+    num_patterns_to_keep: Optional[int] = Field(default=None)
+    beta: Optional[float] = Field(default=None)
+    distance_metric: Optional[Literal["hamming", "valued_hamming", "cosine"]] = Field(default=None)

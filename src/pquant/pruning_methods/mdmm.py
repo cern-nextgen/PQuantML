@@ -9,6 +9,7 @@ import keras
 from keras import ops
 
 from pquant.core.constants import CONSTRAINT_REGISTRY, METRIC_REGISTRY
+from pquant.pruning_methods.metric_functions import PACAPatternMetric
 
 # -------------------------------------------------------------------
 #                   MDMM Layer
@@ -44,6 +45,14 @@ class MDMM(keras.layers.Layer):
             "l0_mode": l0_mode,
             "scale_mode": scale_mode,
             "rf": pruning_parameters.rf,
+            # FPGAAwareSparsityMetric
+            "precision": pruning_parameters.precision,
+            "target_resource": pruning_parameters.target_resource,
+            "bram_width": pruning_parameters.bram_width,
+            # PACAPatternMetric
+            "num_patterns_to_keep": pruning_parameters.num_patterns_to_keep,
+            "beta": pruning_parameters.beta,
+            "distance_metric": pruning_parameters.distance_metric,
         }
 
         metric_cls = METRIC_REGISTRY.get(metric_type)
@@ -53,6 +62,11 @@ class MDMM(keras.layers.Layer):
             metric_fn = metric_cls(**metric_kwargs)
         else:
             raise ValueError(f"Unknown metric_type: {metric_type}")
+
+        # PACA always pairs with EqualityConstraint at target 0 (preserves original design).
+        if metric_type == "PACAPatternSparsity":
+            constraint_type = "Equality"
+            target_value = 0.0
 
         common_args = {
             "metric_fn": metric_fn,
@@ -89,7 +103,14 @@ class MDMM(keras.layers.Layer):
 
     def call(self, weight):
         epsilon = self.config.pruning_parameters.epsilon
-        hard_mask = ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+        # PACA needs a projection mask in finetuning. By then, dominant_patterns are
+        # guaranteed populated from prior active-phase constraint calls. In other phases
+        # use the generic abs-threshold mask.
+        is_paca = isinstance(self.constraint_layer.metric_fn, PACAPatternMetric)
+        if is_paca and self._is_finetuning:
+            hard_mask = self.constraint_layer.metric_fn.get_projection_mask(weight)
+        else:
+            hard_mask = ops.cast(ops.abs(weight) > epsilon, weight.dtype)
         not_active = ops.logical_or(self.is_pretraining, self.is_finetuning)
         self.mask.assign(ops.where(not_active, ops.convert_to_tensor(self.mask), hard_mask))
 
@@ -105,7 +126,8 @@ class MDMM(keras.layers.Layer):
         return ops.cast(ops.abs(weight) > epsilon, weight.dtype)
 
     def get_layer_sparsity(self, weight):
-        return ops.sum(self.get_hard_mask(weight)) / ops.size(weight)
+        mask = self.get_hard_mask(weight)
+        return ops.sum(mask) / ops.cast(ops.size(weight), mask.dtype)
 
     def calculate_additional_loss(self):
         # Loss is added via self.add_loss() in call() for model.fit.
