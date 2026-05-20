@@ -101,6 +101,12 @@ class Quantizer(nn.Module):
                 abs_x = torch.amax(torch.abs(x), dim=(1, 2, 3), keepdim=True)
         elif self.granularity == "per_weight":
             abs_x = torch.abs(x)
+        elif self.granularity == "per_tensor":
+            if self.is_data and self.training:
+                abs_x = torch.amax(torch.abs(x))
+            else:
+                _, i, f = self.get_quantization_bits()
+                return i, f
         else:
             raise ValueError("The selected granularity is not supported.")
         return self.calculate_bits_from_abs(abs_x)
