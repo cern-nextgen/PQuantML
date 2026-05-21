@@ -103,6 +103,7 @@ class PQWeightBiasBase(nn.Module):
                 is_data=True,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
+                dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
             )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -139,6 +140,7 @@ class PQWeightBiasBase(nn.Module):
                 is_data=True,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
+                dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
             )
 
         self.n_parallel = ops.prod(tuple(input_shape)[1:-1])
@@ -661,6 +663,7 @@ class PQAvgPoolBase(nn.Module):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.output_quantizer = Quantizer(
             k=torch.tensor(self.k_output),
@@ -672,6 +675,7 @@ class PQAvgPoolBase(nn.Module):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.dynamic_data,
         )
         self.input_shape = (1,) + input_shape[1:]
 
@@ -870,6 +874,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -1033,6 +1038,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -1211,6 +1217,7 @@ class PQLayerNorm(nn.LayerNorm):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.output_quantizer = Quantizer(
             k=torch.tensor(self.k_output),
@@ -1222,6 +1229,7 @@ class PQLayerNorm(nn.LayerNorm):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -1429,6 +1437,7 @@ class PQMultiheadAttention(nn.Module):
                 is_data=True,
                 hgq_gamma=config.quantization_parameters.hgq_gamma,
                 place="datalane",
+                dynamic_data=config.quantization_parameters.dynamic_data_quantization,
             )
 
         if quantize_attn_weights:

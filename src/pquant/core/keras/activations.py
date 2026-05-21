@@ -68,6 +68,7 @@ class PQActivation(keras.layers.Layer):
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.hgq_heterogeneous = config.quantization_parameters.hgq_heterogeneous
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
+        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
 
         self.post_fitcompress_calibration = False
         self.saved_inputs = []
@@ -89,6 +90,7 @@ class PQActivation(keras.layers.Layer):
                 is_heterogeneous=self.use_hgq,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
+                dynamic_data=self.dynamic_data,
             )
         if self.quantize_output:
             self.output_quantizer = Quantizer(
@@ -101,6 +103,7 @@ class PQActivation(keras.layers.Layer):
                 is_heterogeneous=self.use_hgq,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
+                dynamic_data=self.dynamic_data,
             )
 
         if self.use_multiplier:

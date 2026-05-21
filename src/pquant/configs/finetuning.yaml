@@ -13,6 +13,7 @@ quantization_parameters:
       integer_bits: 4
       fractional_bits: 6
   use_high_granularity_quantization: false
+  dynamic_data_quantization: true
   granularity: "per_tensor"
   use_real_tanh: false
   use_symmetric_quantization: false

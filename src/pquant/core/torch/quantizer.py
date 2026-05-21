@@ -19,6 +19,7 @@ class Quantizer(nn.Module):
         granularity='per_tensor',
         hgq_gamma=0,
         place="datalane",
+        dynamic_data=True,
     ):
         super().__init__()
         self.k = torch.nn.Parameter(torch.tensor(float(k)), requires_grad=False)
@@ -27,6 +28,7 @@ class Quantizer(nn.Module):
         self.round_mode = round_mode
         self.use_hgq = is_heterogeneous
         self.is_data = is_data
+        self.dynamic_data = dynamic_data
         self.i_init = i
         self.f_init = f
         self.i = torch.nn.Parameter(torch.tensor(i), requires_grad=False)
@@ -72,7 +74,24 @@ class Quantizer(nn.Module):
     def post_pre_train_function(self):
         self.is_pretraining = False
 
-    def compute_dynamic_bits(self, x):
+    def calculate_bits_from_abs(self, abs_x):
+        m = torch.ceil(torch.log2(abs_x + 1e-6))
+        int_bits = torch.clamp(m, min=0)
+        b = self.b if hasattr(self, "b") else self.k + self.i_init + self.f_init
+        frac_bits = torch.clamp(b - int_bits - self.k, min=0)
+        return int_bits, frac_bits
+
+    def compute_data_dynamic_bits(self, x):
+        if not (self.training and self.dynamic_data):
+            _, i, f = self.get_quantization_bits()
+            return i, f
+        abs_x = torch.amax(torch.abs(x))
+        return self.calculate_bits_from_abs(abs_x)
+
+    def compute_weight_dynamic_bits(self, x):
+        if self.granularity == "per_tensor":
+            _, i, f = self.get_quantization_bits()
+            return i, f
         if self.granularity == "per_channel":
             if x.ndim == 2:
                 abs_x = torch.amax(torch.abs(x), dim=1, keepdim=True)
@@ -82,20 +101,14 @@ class Quantizer(nn.Module):
                 abs_x = torch.amax(torch.abs(x), dim=(1, 2, 3), keepdim=True)
         elif self.granularity == "per_weight":
             abs_x = torch.abs(x)
-        elif self.granularity == "per_tensor":
-            if self.is_data and self.training:
-                abs_x = torch.amax(torch.abs(x))
-            else:
-                _, i, f = self.get_quantization_bits()
-                return i, f
         else:
             raise ValueError("The selected granularity is not supported.")
+        return self.calculate_bits_from_abs(abs_x)
 
-        m = torch.ceil(torch.log2(abs_x + 1e-6))
-        int_bits = torch.clamp(m, min=0)
-        b = self.b if hasattr(self, "b") else self.k + self.i_init + self.f_init
-        frac_bits = torch.clamp(b - int_bits - self.k, min=0)
-        return int_bits, frac_bits
+    def compute_dynamic_bits(self, x):
+        if self.is_data:
+            return self.compute_data_dynamic_bits(x)
+        return self.compute_weight_dynamic_bits(x)
 
     def forward(self, x):
         if self.use_hgq:
