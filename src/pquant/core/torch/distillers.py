@@ -125,7 +125,7 @@ class LayerwiseDistiller:
         n_batches = 0
         try:
             with torch.no_grad():
-                for x, *_ in dataloader:
+                for x, _ in dataloader:
                     if self.device is not None:
                         x = x.to(self.device)
                     self.teacher(x)
@@ -174,7 +174,7 @@ class LayerwiseDistiller:
         batch_losses: list[float] = []
         try:
             with torch.no_grad():
-                for x, *_ in val_dataloader:
+                for x, _ in val_dataloader:
                     if self.device is not None:
                         x = x.to(self.device)
                     self.teacher(x)
@@ -281,7 +281,7 @@ class LayerwiseDistiller:
                         optimizer.step()
                         batch_losses.append(loss.item())
                 else:
-                    for x, *_ in dataloader:
+                    for x, _ in dataloader:
                         if self.device is not None:
                             x = x.to(self.device)
                         with torch.no_grad():
@@ -463,17 +463,17 @@ class ModelDistiller:
         cache_dir: str,
         shuffle: bool = True,
     ) -> torch.utils.data.DataLoader:
-        """Run one teacher inference pass and cache ``(x, teacher_output)`` to disk."""
+        """Run one teacher inference pass and cache ``(x, teacher_output, y)`` to disk."""
         n_batches = 0
         self.teacher.eval()
         with torch.no_grad():
-            for x, *_ in dataloader:
+            for x, y in dataloader:
                 if self.device is not None:
                     x = x.to(self.device)
                 teacher_logits = self.teacher(x)
                 teacher_out = self.teacher_transform(teacher_logits) if self.teacher_transform else teacher_logits
                 torch.save(
-                    (x.cpu(), teacher_out.cpu()),
+                    (x.cpu(), teacher_out.cpu(), y.cpu()),
                     os.path.join(cache_dir, f"{n_batches:08d}.pt"),
                 )
                 n_batches += 1
@@ -541,17 +541,24 @@ class ModelDistiller:
     ) -> float:
         """Compute mean validation loss over one pass of val_dataloader (no grad, eval mode).
 
-        Accepts both raw ``(x, y)`` batches and precomputed ``(x, y, teacher_merged)``
-        batches produced by ``precompute_teacher_outputs``.
+        When ``precompute_teacher_outputs=True`` the dataloader yields
+        ``(x, teacher_logits, y)`` and the cached teacher output is used directly.
+        Otherwise it yields ``(x, y)`` and the teacher is run live.
         """
         self.student.eval()
         batch_losses: list[float] = []
         with torch.no_grad():
-            for x, y in val_dataloader:
-                if self.device is not None:
-                    x, y = x.to(self.device), y.to(self.device)
-                teacher_logits = self.teacher(x)
-                teacher_logits = self.teacher_transform(teacher_logits) if self.teacher_transform else teacher_logits
+            for batch in val_dataloader:
+                if self._precompute_teacher_outputs:
+                    x, teacher_logits, y = batch
+                    if self.device is not None:
+                        x, teacher_logits, y = x.to(self.device), teacher_logits.to(self.device), y.to(self.device)
+                else:
+                    x, y = batch
+                    if self.device is not None:
+                        x, y = x.to(self.device), y.to(self.device)
+                    teacher_logits = self.teacher(x)
+                    teacher_logits = self.teacher_transform(teacher_logits) if self.teacher_transform else teacher_logits
                 student_logits = self.student(x)
                 loss = self.compute_loss(student_logits, teacher_logits, y)
                 batch_losses.append(loss.item())
@@ -566,13 +573,18 @@ class ModelDistiller:
         self.student.train()
         batch_losses: list[float] = []
 
-        for x, y in dataloader:
-            if self.device is not None:
-                x, y = x.to(self.device), y.to(self.device)
-
-            with torch.no_grad():
-                teacher_logits = self.teacher(x)
-                teacher_logits = self.teacher_transform(teacher_logits) if self.teacher_transform else teacher_logits
+        for batch in dataloader:
+            if self._precompute_teacher_outputs:
+                x, teacher_logits, y = batch
+                if self.device is not None:
+                    x, teacher_logits, y = x.to(self.device), teacher_logits.to(self.device), y.to(self.device)
+            else:
+                x, y = batch
+                if self.device is not None:
+                    x, y = x.to(self.device), y.to(self.device)
+                with torch.no_grad():
+                    teacher_logits = self.teacher(x)
+                    teacher_logits = self.teacher_transform(teacher_logits) if self.teacher_transform else teacher_logits
 
             student_logits = self.student(x)
             loss = self.compute_loss(student_logits, teacher_logits, y)
