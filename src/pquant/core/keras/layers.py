@@ -96,6 +96,7 @@ class PQWeightBiasBase(keras.layers.Layer):
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.granularity = config.quantization_parameters.granularity
+        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
         self.final_compression_done = False
         self.built = False
         self.parallelization_factor = -1
@@ -140,6 +141,7 @@ class PQWeightBiasBase(keras.layers.Layer):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.dynamic_data,
         )
         self.output_quantizer = Quantizer(
             k=ops.convert_to_tensor(self.k_output),
@@ -151,6 +153,7 @@ class PQWeightBiasBase(keras.layers.Layer):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.dynamic_data,
         )
 
     def set_enable_pruning(self, enable_pruning):
@@ -1307,6 +1310,7 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
         self.quantize_input = quantize_input
         self.quantize_parameters = quantize_parameters
         self.granularity = config.quantization_parameters.granularity
+        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
         self.config = config
         self.f_weight = self.f_bias = ops.convert_to_tensor(config.quantization_parameters.default_weight_fractional_bits)
         self.i_weight = self.i_bias = ops.convert_to_tensor(config.quantization_parameters.default_weight_integer_bits)
@@ -1334,6 +1338,7 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.dynamic_data,
         )
         self.weight_quantizer = Quantizer(
             k=1.0,
@@ -1521,6 +1526,7 @@ class PQAvgPoolBase(keras.layers.Layer):
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.hgq_beta = config.quantization_parameters.hgq_beta
         self.hgq_heterogeneous = config.quantization_parameters.hgq_heterogeneous
+        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
         self._is_pretraining = True
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
@@ -1551,6 +1557,7 @@ class PQAvgPoolBase(keras.layers.Layer):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.dynamic_data,
         )
         self.output_quantizer = Quantizer(
             k=1.0,
@@ -1562,6 +1569,7 @@ class PQAvgPoolBase(keras.layers.Layer):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.dynamic_data,
         )
         self.input_quantizer.build(input_shape)
         self.output_quantizer.build(self.compute_output_shape(input_shape))
@@ -1703,6 +1711,272 @@ class PQAvgPool2d(PQAvgPoolBase, keras.layers.AveragePooling2D):
         return super().get_config()
 
 
+@keras.saving.register_keras_serializable(package="PQuantML")
+class PQMultiheadAttention(keras.layers.Layer):
+    """Multi-head attention with quantization support.
+
+    Uses separate PQDense projections for Q, K, V, and output, and computes
+    scaled dot-product attention manually.
+
+    Args:
+        config: PQuant configuration object.
+        embed_dim: Total embedding dimension.
+        num_heads: Number of attention heads.
+        dropout: Dropout probability on attention weights.
+        bias: Whether to add bias to projection layers.
+        kdim: Key feature dimension (defaults to embed_dim).
+        vdim: Value feature dimension (defaults to embed_dim).
+        quantize_input: Whether to quantize Q/K/V projection inputs.
+        quantize_output: Whether to quantize projection outputs.
+        quantize_attn_weights: Whether to quantize attention weights after softmax.
+        quantize_attn_scores: Whether to quantize attention scores before softmax.
+        quantize_context: Whether to quantize the context vector before merging heads.
+        approximate_softmax: Placeholder for approximate softmax (currently uses standard softmax).
+        in_quant_bits: (k, i, f) bits for input quantization.
+        weight_quant_bits: (k, i, f) bits for weight quantization.
+        bias_quant_bits: (k, i, f) bits for bias quantization.
+        out_quant_bits: (k, i, f) bits for output quantization.
+        attn_quant_bits: (k, i, f) bits for attention weight quantization.
+        attn_score_quant_bits: (k, i, f) bits for attention score quantization.
+        context_quant_bits: (k, i, f) bits for context quantization.
+
+    Call args:
+        inputs: A tuple (query, key, value) of tensors with shape (batch, seq, features),
+            or a single tensor for self-attention.
+        training: Python boolean indicating whether the layer should behave in training mode.
+        key_padding_mask: Boolean tensor of shape (batch, key_seq). True means the position
+            should be ignored.
+        attn_mask: Additive mask of shape (query_seq, key_seq) or
+            (batch, num_heads, query_seq, key_seq).
+        need_weights: If True, returns (output, attn_weights). If False, returns (output, None).
+    """
+
+    def __init__(
+        self,
+        config,
+        embed_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        bias: bool = True,
+        kdim: int = None,
+        vdim: int = None,
+        quantize_input: bool = True,
+        quantize_output: bool = False,
+        quantize_attn_weights: bool = False,
+        quantize_attn_scores: bool = False,
+        quantize_context: bool = False,
+        approximate_softmax: bool = False,
+        in_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_bits: Tuple[T, T, T] = None,
+        bias_quant_bits: Tuple[T, T, T] = None,
+        out_quant_bits: Tuple[T, T, T] = None,
+        attn_quant_bits: Tuple[T, T, T] = None,
+        attn_score_quant_bits: Tuple[T, T, T] = None,
+        context_quant_bits: Tuple[T, T, T] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+
+        if isinstance(config, dict):
+            config = PQConfig.load_from_config(config)
+
+        self.config = config
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.dropout_rate = dropout
+        self.use_bias = bias
+        self.kdim = kdim if kdim is not None else embed_dim
+        self.vdim = vdim if vdim is not None else embed_dim
+        self.quantize_attn_weights = quantize_attn_weights
+        self.quantize_attn_scores = quantize_attn_scores
+        self.quantize_context = quantize_context
+        self.approximate_softmax = approximate_softmax
+        self.scale = self.head_dim**-0.5
+        self.enable_quantization = config.quantization_parameters.enable_quantization
+        self.use_hgq = config.quantization_parameters.use_high_granularity_quantization
+
+        self.in_quant_bits = in_quant_bits
+        self.weight_quant_bits = weight_quant_bits
+        self.bias_quant_bits = bias_quant_bits
+        self.out_quant_bits = out_quant_bits
+        self.attn_quant_bits = attn_quant_bits
+        self.attn_score_quant_bits = attn_score_quant_bits
+        self.context_quant_bits = context_quant_bits
+
+        proj_kwargs = dict(
+            use_bias=bias,
+            quantize_input=quantize_input,
+            quantize_output=quantize_output,
+            in_quant_bits=in_quant_bits,
+            weight_quant_bits=weight_quant_bits,
+            bias_quant_bits=bias_quant_bits,
+            out_quant_bits=out_quant_bits,
+        )
+        self.q_proj = PQDense(config, embed_dim, enable_pruning=False, **proj_kwargs)
+        self.k_proj = PQDense(config, embed_dim, enable_pruning=False, **proj_kwargs)
+        self.v_proj = PQDense(config, embed_dim, enable_pruning=False, **proj_kwargs)
+        self.out_proj = PQDense(config, embed_dim, **proj_kwargs)
+
+        self.attn_dropout = keras.layers.Dropout(dropout) if dropout > 0.0 else None
+
+        def _make_data_quantizer(bits):
+            if bits is not None:
+                k, i, f = bits
+            else:
+                k = config.quantization_parameters.default_data_keep_negatives
+                i = config.quantization_parameters.default_data_integer_bits
+                f = config.quantization_parameters.default_data_fractional_bits
+            return Quantizer(
+                k=ops.convert_to_tensor(k),
+                i=ops.convert_to_tensor(i),
+                f=ops.convert_to_tensor(f),
+                overflow=config.quantization_parameters.overflow_mode_data,
+                round_mode=config.quantization_parameters.round_mode,
+                is_heterogeneous=config.quantization_parameters.use_high_granularity_quantization,
+                is_data=True,
+                hgq_gamma=config.quantization_parameters.hgq_gamma,
+                place="datalane",
+                dynamic_data=config.quantization_parameters.dynamic_data_quantization,
+            )
+
+        if quantize_attn_weights:
+            self.attn_weight_quantizer = _make_data_quantizer(attn_quant_bits)
+        if quantize_attn_scores:
+            self.attn_score_quantizer = _make_data_quantizer(attn_score_quant_bits)
+        if quantize_context:
+            self.context_quantizer = _make_data_quantizer(context_quant_bits)
+
+    def call(
+        self,
+        inputs,
+        training=None,
+        key_padding_mask=None,
+        attn_mask=None,
+        need_weights=True,
+    ):
+        if isinstance(inputs, (list, tuple)):
+            if len(inputs) == 3:
+                query, key, value = inputs
+            elif len(inputs) == 2:
+                query, key = inputs
+                value = key
+            else:
+                query = key = value = inputs[0]
+        else:
+            query = key = value = inputs
+
+        batch_size = ops.shape(query)[0]
+        query_len = ops.shape(query)[1]
+        key_len = ops.shape(key)[1]
+
+        q = self.q_proj(query, training=training)  # (B, T, E)
+        k = self.k_proj(key, training=training)  # (B, S, E)
+        v = self.v_proj(value, training=training)  # (B, S, E)
+
+        # Reshape to (B, H, T/S, head_dim)
+        q = ops.reshape(q, (batch_size, query_len, self.num_heads, self.head_dim))
+        q = ops.transpose(q, (0, 2, 1, 3))
+        k = ops.reshape(k, (batch_size, key_len, self.num_heads, self.head_dim))
+        k = ops.transpose(k, (0, 2, 1, 3))
+        v = ops.reshape(v, (batch_size, key_len, self.num_heads, self.head_dim))
+        v = ops.transpose(v, (0, 2, 1, 3))
+
+        # Scaled dot-product attention scores: (B, H, T, S)
+        attn_scores = ops.matmul(q, ops.transpose(k, (0, 1, 3, 2))) * self.scale
+
+        if attn_mask is not None:
+            if ops.ndim(attn_mask) == 2:
+                # (T, S) -> (1, 1, T, S)
+                attn_mask = ops.reshape(attn_mask, (1, 1, query_len, key_len))
+            elif ops.ndim(attn_mask) == 3:
+                # (B*H, T, S) -> (B, H, T, S)
+                attn_mask = ops.reshape(attn_mask, (batch_size, self.num_heads, query_len, key_len))
+            attn_scores = attn_scores + ops.cast(attn_mask, attn_scores.dtype)
+
+        if key_padding_mask is not None:
+            # key_padding_mask: (B, S), True means ignore -> (B, 1, 1, S)
+            mask = ops.cast(key_padding_mask, attn_scores.dtype)
+            mask = ops.reshape(mask, (batch_size, 1, 1, key_len))
+            attn_scores = attn_scores + mask * -1e9
+
+        if self.quantize_attn_scores and self.enable_quantization:
+            attn_scores = self.attn_score_quantizer(attn_scores, training=training)
+
+        attn_weights = ops.softmax(attn_scores, axis=-1)
+
+        if self.quantize_attn_weights and self.enable_quantization:
+            attn_weights = self.attn_weight_quantizer(attn_weights, training=training)
+
+        if self.attn_dropout is not None:
+            attn_weights = self.attn_dropout(attn_weights, training=training)
+
+        # Weighted sum of values: (B, H, T, head_dim)
+        out = ops.matmul(attn_weights, v)
+
+        if self.quantize_context and self.enable_quantization:
+            out = self.context_quantizer(out, training=training)
+
+        # Merge heads: (B, T, E)
+        out = ops.transpose(out, (0, 2, 1, 3))
+        out = ops.reshape(out, (batch_size, query_len, self.embed_dim))
+        out = self.out_proj(out, training=training)
+
+        if self.use_hgq:
+            if self.quantize_attn_scores:
+                self.add_loss(self.attn_score_quantizer.hgq_loss())
+            if self.quantize_attn_weights:
+                self.add_loss(self.attn_weight_quantizer.hgq_loss())
+            if self.quantize_context:
+                self.add_loss(self.context_quantizer.hgq_loss())
+
+        if need_weights:
+            # Average attention weights over heads: (B, T, S)
+            return out, ops.mean(attn_weights, axis=1)
+        return out, None
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "config": self.config.get_dict(),
+                "embed_dim": self.embed_dim,
+                "num_heads": self.num_heads,
+                "dropout": self.dropout_rate,
+                "bias": self.use_bias,
+                "kdim": self.kdim,
+                "vdim": self.vdim,
+                "quantize_input": self.q_proj.quantize_input,
+                "quantize_output": self.q_proj.quantize_output,
+                "quantize_attn_weights": self.quantize_attn_weights,
+                "quantize_attn_scores": self.quantize_attn_scores,
+                "quantize_context": self.quantize_context,
+                "approximate_softmax": self.approximate_softmax,
+                "in_quant_bits": self.in_quant_bits,
+                "weight_quant_bits": self.weight_quant_bits,
+                "bias_quant_bits": self.bias_quant_bits,
+                "out_quant_bits": self.out_quant_bits,
+                "attn_quant_bits": self.attn_quant_bits,
+                "attn_score_quant_bits": self.attn_score_quant_bits,
+                "context_quant_bits": self.context_quant_bits,
+            }
+        )
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        config = config.copy()
+        config.pop("q_proj", None)
+        config.pop("k_proj", None)
+        config.pop("v_proj", None)
+        config.pop("out_proj", None)
+        config.pop("attn_weight_quantizer", None)
+        config.pop("attn_score_quantizer", None)
+        config.pop("context_quantizer", None)
+        return cls(**config)
+
+
 def call_post_round_functions(model, rewind, rounds, r):
     last_round = r == rounds - 1
     if rewind == "every-round":
@@ -1721,6 +1995,9 @@ def apply_final_compression(model):
                 layer.input_quantizer.apply_final_compression()
             if hasattr(layer, "output_quantizer"):
                 layer.output_quantizer.apply_final_compression()
+        elif isinstance(layer, PQMultiheadAttention):
+            for proj in (layer.q_proj, layer.k_proj, layer.v_proj, layer.out_proj):
+                proj.apply_final_compression()
     return model
 
 

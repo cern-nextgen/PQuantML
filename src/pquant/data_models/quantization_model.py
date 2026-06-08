@@ -19,6 +19,7 @@ class BaseQuantizationModel(BaseModel):
     quantize_input: bool = Field(default=True)
     quantize_output: bool = Field(default=False)
     granularity: QuantizationGranularity = Field(default=QuantizationGranularity.PER_TENSOR)
+    dynamic_data_quantization: bool = Field(default=False)
     enable_quantization: bool = Field(default=True)
     hgq_gamma: float = Field(default=0.0003)
     hgq_beta: float = Field(default=1e-5)

@@ -1,8 +1,8 @@
-import keras
+import os
+
 import numpy as np
 import pytest
 import torch
-from keras import ops
 from torch import nn
 from torch.nn import (
     AvgPool2d,
@@ -14,10 +14,15 @@ from torch.nn import (
     Tanh,
 )
 
-from pquant import post_training_prune
-from pquant.activations import PQActivation
-from pquant.core.hyperparameter_optimization import PQConfig
-from pquant.layers import (
+os.environ["KERAS_BACKEND"] = "torch"
+
+import keras  # noqa: E402
+from keras import ops  # noqa: E402
+
+from pquant import post_training_prune  # noqa: E402
+from pquant.activations import PQActivation  # noqa: E402
+from pquant.core.hyperparameter_optimization import PQConfig  # noqa: E402
+from pquant.layers import (  # noqa: E402
     PQAvgPool1d,
     PQAvgPool2d,
     PQBatchNorm2d,

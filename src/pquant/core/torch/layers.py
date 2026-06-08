@@ -87,6 +87,7 @@ class PQWeightBiasBase(nn.Module):
         self.post_fitcompress_calibration = False
         self.saved_inputs = []
         self.saved_outputs = []
+        self.config = config
 
     def check_is_built(self, input_shape):
         if self.built:
@@ -103,6 +104,7 @@ class PQWeightBiasBase(nn.Module):
                 is_data=True,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
+                dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
             )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -139,6 +141,7 @@ class PQWeightBiasBase(nn.Module):
                 is_data=True,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
+                dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
             )
 
         self.n_parallel = ops.prod(tuple(input_shape)[1:-1])
@@ -663,6 +666,7 @@ class PQAvgPoolBase(nn.Module):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.output_quantizer = Quantizer(
             k=torch.tensor(self.k_output),
@@ -674,6 +678,7 @@ class PQAvgPoolBase(nn.Module):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.input_shape = (1,) + input_shape[1:]
 
@@ -872,6 +877,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -1035,6 +1041,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -1110,7 +1117,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
             loss += self.input_quantizer.hgq_loss()
         return loss
 
-    def post_pretrain_function(self):
+    def post_pre_train_function(self):
         self.is_pretraining = False
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
@@ -1122,6 +1129,411 @@ class PQBatchNorm1d(nn.BatchNorm1d):
                 if self.post_fitcompress_calibration:
                     self.saved_inputs.append(input)
         return super().forward(input)
+
+
+class PQLayerNorm(nn.LayerNorm):
+    def __init__(
+        self,
+        config,
+        normalized_shape: Union[int, Tuple[int, ...], torch.Size],
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+        bias: bool = True,
+        device=None,
+        dtype=None,
+        quantize_input=True,
+        quantize_output=False,
+        in_quant_bits: Tuple[T, T, T] = None,
+        out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_bits: Tuple[T, T, T] = None,
+        bias_quant_bits: Tuple[T, T, T] = None,
+    ):
+        try:
+            super().__init__(normalized_shape, eps, elementwise_affine, bias, device=device, dtype=dtype)
+        except TypeError:
+            # Older torch versions don't accept the bias kwarg
+            super().__init__(normalized_shape, eps, elementwise_affine, device=device, dtype=dtype)
+        if in_quant_bits is not None:
+            self.k_input, self.i_input, self.f_input = in_quant_bits
+        else:
+            self.k_input = config.quantization_parameters.default_data_keep_negatives
+            self.i_input = config.quantization_parameters.default_data_integer_bits
+            self.f_input = config.quantization_parameters.default_data_fractional_bits
+
+        if out_quant_bits is not None:
+            self.k_output, self.i_output, self.f_output = out_quant_bits
+        else:
+            self.k_output = config.quantization_parameters.default_data_keep_negatives
+            self.i_output = config.quantization_parameters.default_data_integer_bits
+            self.f_output = config.quantization_parameters.default_data_fractional_bits
+
+        if weight_quant_bits is not None:
+            self.k_weight, self.i_weight, self.f_weight = weight_quant_bits
+        else:
+            self.k_weight = config.quantization_parameters.default_weight_keep_negatives
+            self.i_weight = config.quantization_parameters.default_weight_integer_bits
+            self.f_weight = config.quantization_parameters.default_weight_fractional_bits
+        if bias_quant_bits is not None:
+            self.k_bias, self.i_bias, self.f_bias = bias_quant_bits
+        else:
+            self.k_bias = config.quantization_parameters.default_weight_keep_negatives
+            self.i_bias = config.quantization_parameters.default_weight_integer_bits
+            self.f_bias = config.quantization_parameters.default_weight_fractional_bits
+        self.overflow_mode_parameters = config.quantization_parameters.overflow_mode_parameters
+        self.overflow_mode_data = config.quantization_parameters.overflow_mode_data
+        self.round_mode = config.quantization_parameters.round_mode
+        self.use_hgq = config.quantization_parameters.use_high_granularity_quantization
+        self.hgq_gamma = config.quantization_parameters.hgq_gamma
+        self.hgq_beta = config.quantization_parameters.hgq_beta
+        self.enable_quantization = config.quantization_parameters.enable_quantization
+        self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
+        self.config = config
+        self.quantize_input = quantize_input
+        self.quantize_output = quantize_output
+        if self.weight is not None:
+            self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
+            self.register_parameter("_weight", self._weight)
+        else:
+            self.register_parameter("_weight", None)
+        if self.bias is not None:
+            self._bias = nn.Parameter(self.bias.clone()).to(self.bias.device)
+            self.register_parameter("_bias", self._bias)
+        else:
+            self.register_parameter("_bias", None)
+        self.built = False
+        self.final_compression_done = False
+        self.is_pretraining = True
+        self.post_fitcompress_calibration = False
+        self.saved_inputs = []
+
+    def check_is_built(self, input_shape):
+        if self.built:
+            return
+        self.built = True
+        self.input_quantizer = Quantizer(
+            k=torch.tensor(self.k_input),
+            i=torch.tensor(self.i_input),
+            f=torch.tensor(self.f_input),
+            overflow=self.overflow_mode_data,
+            round_mode=self.round_mode,
+            is_heterogeneous=self.use_hgq,
+            is_data=True,
+            hgq_gamma=self.hgq_gamma,
+            place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+        )
+        self.output_quantizer = Quantizer(
+            k=torch.tensor(self.k_output),
+            i=torch.tensor(self.i_output),
+            f=torch.tensor(self.f_output),
+            overflow=self.overflow_mode_data,
+            round_mode=self.round_mode,
+            is_heterogeneous=self.use_hgq,
+            is_data=True,
+            hgq_gamma=self.hgq_gamma,
+            place="datalane",
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+        )
+        self.weight_quantizer = Quantizer(
+            k=torch.tensor(self.k_weight),
+            i=torch.tensor(self.i_weight),
+            f=torch.tensor(self.f_weight),
+            round_mode=self.round_mode,
+            overflow=self.overflow_mode_parameters,
+            is_data=False,
+            is_heterogeneous=self.use_hgq,
+            place="weight",
+        )
+        self.bias_quantizer = Quantizer(
+            k=torch.tensor(self.k_bias),
+            i=torch.tensor(self.i_bias),
+            f=torch.tensor(self.f_bias),
+            round_mode=self.round_mode,
+            overflow=self.overflow_mode_parameters,
+            is_data=False,
+            is_heterogeneous=self.use_hgq,
+            place="bias",
+        )
+        if self.use_hgq:
+            self.input_quantizer.quantizer.build(input_shape)
+            self.output_quantizer.quantizer.build(input_shape)
+        self.input_shape = (1,) + tuple(input_shape[1:])
+
+    def apply_final_compression(self):
+        self.final_compression_done = True
+        if self._weight is not None:
+            self._weight.data = self.weight
+        if self._bias is not None:
+            self._bias.data = self.bias
+
+    def get_input_quantization_bits(self):
+        return self.input_quantizer.get_quantization_bits()
+
+    def get_output_quantization_bits(self):
+        return self.output_quantizer.get_quantization_bits()
+
+    def get_weight_quantization_bits(self):
+        return self.weight_quantizer.get_quantization_bits()
+
+    def get_bias_quantization_bits(self):
+        return self.bias_quantizer.get_quantization_bits()
+
+    def is_fitcompress_pretraining(self):
+        return self.is_pretraining and self.use_fitcompress
+
+    @property
+    def weight(self):
+        if self._weight is None:
+            return None
+        if self.enable_quantization and not self.final_compression_done and not self.is_fitcompress_pretraining():
+            return self.weight_quantizer(self._weight)
+        return self._weight
+
+    @property
+    def bias(self):
+        if self._bias is None:
+            return None
+        if self.enable_quantization and not self.final_compression_done and not self.is_fitcompress_pretraining():
+            return self.bias_quantizer(self._bias)
+        return self._bias
+
+    def ebops(self):
+        return 0.0
+
+    def hgq_loss(self):
+        if self.is_pretraining or not self.use_hgq:
+            return ops.convert_to_tensor(0.0)
+        loss = self.hgq_beta * self.ebops()
+        if self._weight is not None:
+            loss += self.weight_quantizer.hgq_loss()
+        if self._bias is not None:
+            loss += self.bias_quantizer.hgq_loss()
+        if self.quantize_input:
+            loss += self.input_quantizer.hgq_loss()
+        if self.quantize_output:
+            loss += self.output_quantizer.hgq_loss()
+        return loss
+
+    def post_pre_train_function(self):
+        self.is_pretraining = False
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        self.check_is_built(input.shape)
+        if self.quantize_input and self.enable_quantization:
+            if not self.is_fitcompress_pretraining():
+                input = self.input_quantizer(input)
+            else:
+                if self.post_fitcompress_calibration:
+                    self.saved_inputs.append(input)
+        out = F.layer_norm(input, self.normalized_shape, self.weight, self.bias, self.eps)
+        if self.quantize_output and self.enable_quantization and not self.is_fitcompress_pretraining():
+            out = self.output_quantizer(out)
+        return out
+
+    def extra_repr(self) -> str:
+        return (
+            f"normalized_shape={tuple(self.normalized_shape)}, eps={self.eps}, "
+            f"elementwise_affine={self.elementwise_affine}, "
+            f"quantize_input={self.quantize_input}, quantize_output={self.quantize_output}"
+        )
+
+
+class PQMultiheadAttention(nn.Module):
+    """Multi-head attention with quantization support, implemented without F.multihead_attention.
+
+    Uses separate PQDense projections for Q, K, V, and output, and computes
+    scaled dot-product attention manually.
+
+    Args:
+        config: PQuant configuration object.
+        embed_dim: Total embedding dimension.
+        num_heads: Number of attention heads.
+        dropout: Dropout probability on attention weights.
+        bias: Whether to add bias to projection layers.
+        kdim: Key feature dimension (defaults to embed_dim).
+        vdim: Value feature dimension (defaults to embed_dim).
+        batch_first: If True, input/output tensors are (batch, seq, feature).
+            If False (default), tensors are (seq, batch, feature).
+        quantize_input: Whether to quantize Q/K/V projection inputs.
+        quantize_output: Whether to quantize projection outputs.
+        quantize_attn_weights: Whether to quantize attention weights after softmax.
+        in_quant_bits: (k, i, f) bits for input quantization.
+        weight_quant_bits: (k, i, f) bits for weight quantization.
+        bias_quant_bits: (k, i, f) bits for bias quantization.
+        out_quant_bits: (k, i, f) bits for output quantization.
+        attn_quant_bits: (k, i, f) bits for attention weight quantization.
+    """
+
+    def __init__(
+        self,
+        config,
+        embed_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        bias: bool = True,
+        kdim: int = None,
+        vdim: int = None,
+        batch_first: bool = False,
+        quantize_input: bool = True,
+        quantize_output: bool = False,
+        quantize_attn_weights: bool = False,
+        quantize_attn_scores: bool = False,
+        quantize_context: bool = False,
+        approximate_softmax: bool = False,
+        in_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_bits: Tuple[T, T, T] = None,
+        bias_quant_bits: Tuple[T, T, T] = None,
+        out_quant_bits: Tuple[T, T, T] = None,
+        attn_quant_bits: Tuple[T, T, T] = None,
+        attn_score_quant_bits: Tuple[T, T, T] = None,
+        context_quant_bits: Tuple[T, T, T] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.batch_first = batch_first
+        self.dropout = dropout
+        self.quantize_attn_weights = quantize_attn_weights
+        self.quantize_attn_scores = quantize_attn_scores
+        self.quantize_context = quantize_context
+        self.approximate_softmax = approximate_softmax
+        self.scale = self.head_dim**-0.5
+        self.softmax = nn.Softmax(dim=-1)
+
+        kdim = kdim if kdim is not None else embed_dim
+        vdim = vdim if vdim is not None else embed_dim
+
+        proj_kwargs = dict(
+            bias=bias,
+            quantize_input=quantize_input,
+            quantize_output=quantize_output,
+            in_quant_bits=in_quant_bits,
+            weight_quant_bits=weight_quant_bits,
+            bias_quant_bits=bias_quant_bits,
+            out_quant_bits=out_quant_bits,
+        )
+        self.q_proj = PQDense(config, embed_dim, embed_dim, enable_pruning=False, **proj_kwargs)
+        self.k_proj = PQDense(config, kdim, embed_dim, enable_pruning=False, **proj_kwargs)
+        self.v_proj = PQDense(config, vdim, embed_dim, enable_pruning=False, **proj_kwargs)
+        self.out_proj = PQDense(config, embed_dim, embed_dim, **proj_kwargs)
+
+        self.attn_dropout = None
+
+        def _make_data_quantizer(bits):
+            if bits is not None:
+                k, i, f = bits
+            else:
+                k = config.quantization_parameters.default_data_keep_negatives
+                i = config.quantization_parameters.default_data_integer_bits
+                f = config.quantization_parameters.default_data_fractional_bits
+            return Quantizer(
+                k=torch.tensor(k),
+                i=torch.tensor(i),
+                f=torch.tensor(f),
+                overflow=config.quantization_parameters.overflow_mode_data,
+                round_mode=config.quantization_parameters.round_mode,
+                is_heterogeneous=config.quantization_parameters.use_high_granularity_quantization,
+                is_data=True,
+                hgq_gamma=config.quantization_parameters.hgq_gamma,
+                place="datalane",
+                dynamic_data=config.quantization_parameters.dynamic_data_quantization,
+            )
+
+        if quantize_attn_weights:
+            self.attn_weight_quantizer = _make_data_quantizer(attn_quant_bits)
+        if quantize_attn_scores:
+            self.attn_score_quantizer = _make_data_quantizer(attn_score_quant_bits)
+        if quantize_context:
+            self.context_quantizer = _make_data_quantizer(context_quant_bits)
+        self.enable_quantization = config.quantization_parameters.enable_quantization
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+        attn_mask: Optional[torch.Tensor] = None,
+        need_weights: bool = True,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        if self.batch_first:
+            # (B, T, E) -> keep as-is
+            B, T, _ = query.shape
+            S = key.shape[1]
+        else:
+            # (T, B, E) -> (B, T, E)
+            query = query.transpose(0, 1)
+            key = key.transpose(0, 1)
+            value = value.transpose(0, 1)
+            B, T, _ = query.shape
+            S = key.shape[1]
+
+        q = self.q_proj(query)  # (B, T, E)
+        k = self.k_proj(key)  # (B, S, E)
+        v = self.v_proj(value)  # (B, S, E)
+
+        # Reshape to (B, H, T/S, head_dim)
+        q = q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Scaled dot-product attention scores: (B, H, T, S)
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+
+        if attn_mask is not None:
+            if attn_mask.dim() == 2:
+                # (T, S) -> (1, 1, T, S), broadcast over batch and heads
+                attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
+            elif attn_mask.dim() == 3:
+                # (B*H, T, S) -> (B, H, T, S)
+                attn_mask = attn_mask.view(B, self.num_heads, T, S)
+            attn_scores = attn_scores + attn_mask
+
+        if key_padding_mask is not None:
+            # key_padding_mask: (B, S), True means ignore
+            attn_scores = attn_scores.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
+
+        if self.quantize_attn_scores and self.enable_quantization:
+            attn_scores = self.attn_score_quantizer(attn_scores)
+
+        attn_weights = self.softmax(attn_scores)
+
+        if self.quantize_attn_weights and self.enable_quantization:
+            attn_weights = self.attn_weight_quantizer(attn_weights)
+
+        if self.attn_dropout is not None and self.training:
+            attn_weights = self.attn_dropout(attn_weights)
+
+        # Weighted sum of values: (B, H, T, head_dim)
+        out = torch.matmul(attn_weights, v)
+
+        if self.quantize_context and self.enable_quantization:
+            out = self.context_quantizer(out)
+
+        # Merge heads: (B, T, E)
+        out = out.transpose(1, 2).contiguous().view(B, T, self.embed_dim)
+        out = self.out_proj(out)
+
+        if not self.batch_first:
+            out = out.transpose(0, 1)
+
+        if need_weights:
+            # Average attention weights over heads: (B, T, S)
+            return out, attn_weights.mean(dim=1)
+        return out, None
+
+    def extra_repr(self) -> str:
+        return (
+            f"embed_dim={self.embed_dim}, num_heads={self.num_heads}, "
+            f"dropout={self.dropout}, batch_first={self.batch_first}, "
+            f"quantize_attn_scores={self.quantize_attn_scores}, "
+            f"quantize_attn_weights={self.quantize_attn_weights}, "
+            f"quantize_context={self.quantize_context}"
+        )
 
 
 def add_layer_specific_quantization_to_model(name, layer, config):
@@ -1192,6 +1604,41 @@ def add_layer_specific_quantization_to_model(name, layer, config):
                 if "quantize" in layer_config["input"]:
                     quantize = layer_config["input"]["quantize"]
                     layer.quantize_input = quantize
+    elif layer.__class__ == PQLayerNorm:
+        if name in config.quantization_parameters.layer_specific:
+            layer_config = config.quantization_parameters.layer_specific[name]
+            if "weight" in layer_config:
+                if "keep_negatives" in layer_config["weight"]:
+                    layer.k_weight = torch.tensor(layer_config["weight"]["keep_negatives"])
+                if "integer_bits" in layer_config["weight"]:
+                    layer.i_weight = torch.tensor(layer_config["weight"]["integer_bits"])
+                if "fractional_bits" in layer_config["weight"]:
+                    layer.f_weight = torch.tensor(layer_config["weight"]["fractional_bits"])
+            if "bias" in layer_config:
+                if "keep_negatives" in layer_config["bias"]:
+                    layer.k_bias = torch.tensor(layer_config["bias"]["keep_negatives"])
+                if "integer_bits" in layer_config["bias"]:
+                    layer.i_bias = torch.tensor(layer_config["bias"]["integer_bits"])
+                if "fractional_bits" in layer_config["bias"]:
+                    layer.f_bias = torch.tensor(layer_config["bias"]["fractional_bits"])
+            if "input" in layer_config:
+                if "keep_negatives" in layer_config["input"]:
+                    layer.k_input = torch.tensor(layer_config["input"]["keep_negatives"])
+                if "integer_bits" in layer_config["input"]:
+                    layer.i_input = torch.tensor(layer_config["input"]["integer_bits"])
+                if "fractional_bits" in layer_config["input"]:
+                    layer.f_input = torch.tensor(layer_config["input"]["fractional_bits"])
+                if "quantize" in layer_config["input"]:
+                    layer.quantize_input = layer_config["input"]["quantize"]
+            if "output" in layer_config:
+                if "keep_negatives" in layer_config["output"]:
+                    layer.k_output = torch.tensor(layer_config["output"]["keep_negatives"])
+                if "integer_bits" in layer_config["output"]:
+                    layer.i_output = torch.tensor(layer_config["output"]["integer_bits"])
+                if "fractional_bits" in layer_config["output"]:
+                    layer.f_output = torch.tensor(layer_config["output"]["fractional_bits"])
+                if "quantize" in layer_config["output"]:
+                    layer.quantize_output = layer_config["output"]["quantize"]
     elif layer.__class__ in [PQAvgPool1d, PQAvgPool2d]:
         if name in config.quantization_parameters.layer_specific:
             layer_config = config.quantization_parameters.layer_specific[name]
@@ -1329,6 +1776,22 @@ def add_quantized_activations_to_model_layer(module, config, prefix=""):
             )
             new_layer = add_layer_specific_quantization_to_model(full_name, new_layer, config)
             setattr(module, name, new_layer)
+        elif layer.__class__ == nn.LayerNorm:
+            ln_kwargs = dict(
+                normalized_shape=layer.normalized_shape,
+                eps=layer.eps,
+                elementwise_affine=layer.elementwise_affine,
+                quantize_input=quantize_input,
+                quantize_output=quantize_output,
+            )
+            new_layer = PQLayerNorm(config, **ln_kwargs)
+            if layer.elementwise_affine:
+                if layer.weight is not None and new_layer._weight is not None:
+                    new_layer._weight.data.copy_(layer.weight.data)
+                if layer.bias is not None and new_layer._bias is not None:
+                    new_layer._bias.data.copy_(layer.bias.data)
+            new_layer = add_layer_specific_quantization_to_model(full_name, new_layer, config)
+            setattr(module, name, new_layer)
         else:
             layer = add_quantized_activations_to_model_layer(layer, config, full_name)
     return module
@@ -1443,7 +1906,7 @@ def add_pruning_to_model(module, config, prefix=""):
 
 def apply_final_compression(module):
     for layer in module.modules():
-        if isinstance(layer, (PQWeightBiasBase, PQBatchNorm2d, PQBatchNorm1d, Quantizer)):
+        if isinstance(layer, (PQWeightBiasBase, PQBatchNorm2d, PQBatchNorm1d, PQLayerNorm, Quantizer)):
             layer.apply_final_compression()
     return module
 
@@ -1503,7 +1966,18 @@ def post_pretrain_functions(model, config, train_loader=None, loss_function=None
 
         for layer in model.modules():
             if isinstance(
-                layer, (PQConv2d, PQConv1d, PQDense, PQActivation, PQBatchNorm2d, PQBatchNorm1d, PQAvgPoolBase, Quantizer)
+                layer,
+                (
+                    PQConv2d,
+                    PQConv1d,
+                    PQDense,
+                    PQActivation,
+                    PQBatchNorm2d,
+                    PQBatchNorm1d,
+                    PQLayerNorm,
+                    PQAvgPoolBase,
+                    Quantizer,
+                ),
             ):
                 # Trigger it here to enable quantization before FITCompress
                 layer.post_pre_train_function()
@@ -1523,7 +1997,18 @@ def post_pretrain_functions(model, config, train_loader=None, loss_function=None
     else:
         for layer in model.modules():
             if isinstance(
-                layer, (PQConv2d, PQConv1d, PQDense, PQActivation, PQBatchNorm2d, PQBatchNorm1d, PQAvgPoolBase, Quantizer)
+                layer,
+                (
+                    PQConv2d,
+                    PQConv1d,
+                    PQDense,
+                    PQActivation,
+                    PQBatchNorm2d,
+                    PQBatchNorm1d,
+                    PQLayerNorm,
+                    PQAvgPoolBase,
+                    Quantizer,
+                ),
             ):
                 layer.post_pre_train_function()
     if config.pruning_parameters.pruning_method == "pdp" or (
@@ -1591,7 +2076,7 @@ def get_model_losses(model, losses):
             if layer.use_hgq:
                 loss += layer.hgq_loss()
             losses += loss
-        elif isinstance(layer, (PQAvgPool1d, PQAvgPool2d, PQBatchNorm2d, PQBatchNorm1d, PQActivation)):
+        elif isinstance(layer, (PQAvgPool1d, PQAvgPool2d, PQBatchNorm2d, PQBatchNorm1d, PQLayerNorm, PQActivation)):
             if layer.use_hgq:
                 losses += layer.hgq_loss()
     return losses
@@ -1742,7 +2227,7 @@ def get_ebops(model, **kwargs):
     for m in model.modules():
         if isinstance(m, (PQWeightBiasBase)):
             ebops += m.ebops(include_mask=m.enable_pruning)
-        elif isinstance(m, (PQAvgPoolBase, PQBatchNorm1d, PQBatchNorm2d, PQActivation)):
+        elif isinstance(m, (PQAvgPoolBase, PQBatchNorm1d, PQBatchNorm2d, PQLayerNorm, PQActivation)):
             ebops += m.ebops()
     return ebops
 
