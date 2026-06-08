@@ -16,7 +16,7 @@ quantization_parameters:
   default_data_keep_negatives: 0.
   default_data_integer_bits: 0.
   default_data_fractional_bits: 7.
-  dynamic_data_quantization: true
+  dynamic_data_quantization: false
   granularity: "per_tensor"
   quantize_input: true
   quantize_output: false

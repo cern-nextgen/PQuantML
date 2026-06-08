@@ -833,7 +833,6 @@ def test_ebops_bn(config_pdp, conv2d_input):
 
 def test_linear_direct(config_pdp, dense_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    config_pdp.quantization_parameters.dynamic_data_quantization = False
     layer = PQDense(config_pdp, IN_FEATURES, OUT_FEATURES, quantize_output=True)
     layer(dense_input)
     assert layer.get_input_quantization_bits() == (0, 0, 7)
@@ -913,7 +912,6 @@ def test_linear_direct_hgq(config_pdp, dense_input):
 
 def test_conv2d_direct(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    config_pdp.quantization_parameters.dynamic_data_quantization = False
     layer = PQConv2d(config_pdp, IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, quantize_output=True)
     layer(conv2d_input)
     assert layer.get_input_quantization_bits() == (0, 0, 7)
@@ -994,7 +992,6 @@ def test_conv2d_direct_hgq(config_pdp, conv2d_input):
 
 def test_conv1d_direct(config_pdp, conv1d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    config_pdp.quantization_parameters.dynamic_data_quantization = False
     layer = PQConv1d(config_pdp, IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, quantize_output=True)
     layer(conv1d_input)
     assert layer.get_input_quantization_bits() == (0, 0, 7)
@@ -1075,7 +1072,6 @@ def test_conv1d_direct_hgq(config_pdp, conv1d_input):
 
 def test_avgpool_direct(config_pdp, conv1d_input, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    config_pdp.quantization_parameters.dynamic_data_quantization = False
     layer = PQAvgPool1d(config_pdp, kernel_size=3)
     layer(conv1d_input)
     assert layer.get_input_quantization_bits() == (0, 0, 7)
@@ -1149,7 +1145,6 @@ def test_avgpool_direct_hgq(config_pdp, conv1d_input, conv2d_input):
 
 def test_batchnorm2d_direct(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    config_pdp.quantization_parameters.dynamic_data_quantization = False
     layer = PQBatchNorm2d(config_pdp, IN_FEATURES)
     layer(conv2d_input)
     assert layer.get_input_quantization_bits() == (0, 0, 7)
