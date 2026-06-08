@@ -5,7 +5,7 @@ import sys
 # flake8: noqa
 backend = os.getenv("KERAS_BACKEND", "tensorflow")
 if backend == "torch":
-    from . import configs, pruning_methods
+    from . import configs
     from .core.hyperparameter_optimization import (
         PQConfig,
         ap_config,
@@ -19,7 +19,7 @@ if backend == "torch":
         pdp_config,
         wanda_config,
     )
-    from .core.torch import activations, layers, optimizers, quantizer
+    from .core.torch import activations, layers, optimizers, pruning_methods, quantizer
     from .core.torch.layers import (
         add_compression_layers,
         apply_final_compression,
@@ -61,7 +61,7 @@ if backend == "torch":
     __all__ = _forwards
 
 else:
-    from . import configs, pruning_methods
+    from . import configs
     from .core.hyperparameter_optimization import (
         PQConfig,
         ap_config,
@@ -74,7 +74,7 @@ else:
         pdp_config,
         wanda_config,
     )
-    from .core.keras import activations, layers, quantizer
+    from .core.keras import activations, layers, pruning_methods, quantizer
     from .core.keras.layers import (
         add_compression_layers,
         apply_final_compression,

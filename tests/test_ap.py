@@ -2,7 +2,7 @@ import pytest
 from keras import ops
 from keras.random import shuffle
 
-from pquant.pruning_methods.activation_pruning import ActivationPruning
+from pquant.core.keras.pruning_methods.activation_pruning import ActivationPruning
 
 
 @pytest.fixture

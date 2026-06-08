@@ -25,7 +25,7 @@ from keras.src.ops.operation_utils import (
 from pquant.core.hyperparameter_optimization import PQConfig
 from pquant.core.keras.activations import PQActivation
 from pquant.core.keras.quantizer import Quantizer
-from pquant.core.utils import get_pruning_layer
+from pquant.core.keras.utils import get_pruning_layer
 
 T = TypeVar("T")
 

@@ -10,15 +10,6 @@ from pquant.data_models.pruning_model import (
     PDPPruningModel,
     WandaPruningModel,
 )
-from pquant.pruning_methods.constraint_functions import (
-    EqualityConstraint,
-    GreaterThanOrEqualConstraint,
-    LessThanOrEqualConstraint,
-)
-from pquant.pruning_methods.metric_functions import (
-    StructuredSparsityMetric,
-    UnstructuredSparsityMetric,
-)
 
 PRUNING_MODEL_REGISTRY = {
     "cs": CSPruningModel,
@@ -53,15 +44,3 @@ FINETUNING_DIRECTION = {"maximize", "minimize"}
 CONFIG_FILE = "config.yaml"
 
 N_JOBS = 1
-
-
-METRIC_REGISTRY = {
-    "UnstructuredSparsity": UnstructuredSparsityMetric,
-    "StructuredSparsity": StructuredSparsityMetric,
-}
-
-CONSTRAINT_REGISTRY = {
-    "Equality": EqualityConstraint,
-    "LessThanOrEqual": LessThanOrEqualConstraint,
-    "GreaterThanOrEqual": GreaterThanOrEqualConstraint,
-}

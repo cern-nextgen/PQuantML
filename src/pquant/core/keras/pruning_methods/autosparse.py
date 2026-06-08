@@ -113,7 +113,9 @@ class AutoSparse(keras.layers.Layer):
         is_training = ops.logical_not(ops.logical_or(self.is_pretraining, self.is_finetuning))
         self.mask.assign(ops.where(is_training, new_binary_mask, ops.convert_to_tensor(self.mask)))
 
-        sparse_weight = ops.sign(weight) * ops.reshape(autosparse_prune(w_t, self.alpha), weight.shape)
+        sparse_weight = ops.sign(weight) * ops.reshape(
+            autosparse_prune(w_t, ops.convert_to_tensor(self.alpha)), weight.shape
+        )
 
         return ops.where(
             self.is_pretraining,

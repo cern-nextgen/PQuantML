@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from keras import ops
 
-from pquant.pruning_methods.wanda import Wanda
+from pquant.core.keras.pruning_methods.wanda import Wanda
 
 
 @pytest.fixture
