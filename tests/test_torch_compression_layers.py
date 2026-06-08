@@ -606,8 +606,8 @@ def test_hgq_weight_shape(config_pdp, dense_input):
     model = add_compression_layers(model, config_pdp, dense_input.shape)
     post_pretrain_functions(model, config_pdp)
 
-    assert model.submodule.weight_quantizer.quantizer.quantizer._i.shape == model.submodule.weight.shape
-    assert model.activation.input_quantizer.quantizer.quantizer._i.shape == (1, OUT_FEATURES)
+    assert model.submodule.weight_quantizer.quantizer._i.shape == model.submodule.weight.shape
+    assert model.activation.input_quantizer.quantizer._i.shape == (1, OUT_FEATURES)
 
 
 def test_qbn_build(config_pdp, conv2d_input):
@@ -619,7 +619,7 @@ def test_qbn_build(config_pdp, conv2d_input):
 
     model = add_compression_layers(model, config_pdp, conv2d_input.shape)
     post_pretrain_functions(model, config_pdp)
-    assert model.submodule.weight_quantizer.quantizer.quantizer._i.shape == model.submodule.weight.shape
+    assert model.submodule.weight_quantizer.quantizer._i.shape == model.submodule.weight.shape
 
 
 def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
@@ -634,13 +634,13 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
         if isinstance(m, (PQWeightBiasBase)):
             assert m.i_weight == 0.0
             assert m.i_bias == 0.0
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.i == 0.0)
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.i == 0.0)
+            assert torch.all(m.weight_quantizer.quantizer.i == 0.0)
+            assert torch.all(m.weight_quantizer.quantizer.i == 0.0)
 
             assert m.f_weight == 7.0
             assert m.f_bias == 7.0
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.f == 7.0)
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.f == 7.0)
+            assert torch.all(m.weight_quantizer.quantizer.f == 7.0)
+            assert torch.all(m.weight_quantizer.quantizer.f == 7.0)
         elif isinstance(m, PQActivation) and m.activation_name == "tanh":
             k_input, i_input, f_input = m.get_input_quantization_bits()
 
@@ -655,8 +655,8 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
         elif isinstance(m, PQAvgPool2d):
             assert m.i_input == 0.0
             assert m.f_input == 7.0
-            assert torch.all(m.input_quantizer.quantizer.quantizer.i == 0.0)
-            assert torch.all(m.input_quantizer.quantizer.quantizer.f == 7.0)
+            assert torch.all(m.input_quantizer.quantizer.i == 0.0)
+            assert torch.all(m.input_quantizer.quantizer.f == 7.0)
 
     config_pdp.quantization_parameters.layer_specific = {
         'submodule': {
@@ -675,13 +675,13 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
         if isinstance(m, (PQWeightBiasBase)):
             assert m.i_weight == 1.0
             assert m.i_bias == 2.0
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.i == 1.0)
-            assert torch.all(m.bias_quantizer.quantizer.quantizer.i == 2.0)
+            assert torch.all(m.weight_quantizer.quantizer.i == 1.0)
+            assert torch.all(m.bias_quantizer.quantizer.i == 2.0)
 
             assert m.f_weight == 3.0
             assert m.f_bias == 4.0
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.f == 3.0)
-            assert torch.all(m.bias_quantizer.quantizer.quantizer.f == 4.0)
+            assert torch.all(m.weight_quantizer.quantizer.f == 3.0)
+            assert torch.all(m.bias_quantizer.quantizer.f == 4.0)
         elif isinstance(m, PQActivation) and m.activation_name == "tanh":
             k_input, i_input, f_input = m.get_input_quantization_bits()
 
@@ -695,8 +695,8 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
         elif isinstance(m, PQAvgPool2d):
             assert m.i_input == 1.0
             assert m.f_input == 3.0
-            assert torch.all(m.input_quantizer.quantizer.quantizer.i == 1.0)
-            assert torch.all(m.input_quantizer.quantizer.quantizer.f == 3.0)
+            assert torch.all(m.input_quantizer.quantizer.i == 1.0)
+            assert torch.all(m.input_quantizer.quantizer.f == 3.0)
 
 
 def test_disable_pruning_from_single_layer(config_pdp, conv2d_input):

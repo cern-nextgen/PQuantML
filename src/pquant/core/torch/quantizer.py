@@ -3,7 +3,8 @@ from enum import Enum
 import torch
 import torch.nn as nn
 
-from pquant.core.quantizer_functions import create_quantizer
+from pquant.core.torch.fixed_point_quantizer import get_fixed_quantizer
+from pquant.core.torch.hgq_quantizer import HGQQuantizer
 
 
 class Quantizer(nn.Module):
@@ -32,7 +33,9 @@ class Quantizer(nn.Module):
         self.i = torch.nn.Parameter(torch.tensor(i), requires_grad=False)
         self.f = torch.nn.Parameter(torch.tensor(f), requires_grad=False)
         self.b = torch.nn.Parameter(torch.tensor(i + k + f), requires_grad=False)
-        self.quantizer = create_quantizer(self.k, i, f, self.overflow, self.round_mode, self.use_hgq, self.is_data, place)
+        self.quantizer = create_quantizer(
+            self.k, i, f, self.overflow, self.round_mode, self.use_hgq, self.is_data, gamma=hgq_gamma
+        )
         self.is_pretraining = True
         self.hgq_gamma = hgq_gamma
         if isinstance(granularity, Enum):
@@ -45,7 +48,7 @@ class Quantizer(nn.Module):
 
     def get_quantization_bits(self):
         if self.use_hgq:
-            return self.quantizer.quantizer.k, self.quantizer.quantizer.i, self.quantizer.quantizer.f
+            return self.quantizer.k, self.quantizer.i, self.quantizer.f
         else:
             return self.k, self.i, self.f
 
@@ -58,8 +61,7 @@ class Quantizer(nn.Module):
 
     def set_quantization_bits(self, i, f):
         if self.use_hgq:
-            self.quantizer.quantizer._i.assign(self.quantizer.quantizer._i * 0.0 + i)
-            self.quantizer.quantizer._f.assign(self.quantizer.quantizer._f * 0.0 + f)
+            self.quantizer.set_bits(i, f)
         self.i.data = torch.tensor(i)
         self.f.data = torch.tensor(f)
 
@@ -108,21 +110,20 @@ class Quantizer(nn.Module):
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:
             return 0.0
-        loss = 0
-        for layer_loss in self.quantizer.quantizer.losses:
-            loss += layer_loss
-        return loss
+        return self.quantizer.regularization_loss()
 
     def post_epoch_function(self):
-        if self.use_hgq and self.quantizer.quantizer.built:
-            constrained_i = self.quantizer.quantizer._i.constraint(self.quantizer.quantizer._i)
-            self.quantizer.quantizer._i.assign(constrained_i)
-            constrained_f = self.quantizer.quantizer._f.constraint(self.quantizer.quantizer._f)
-            self.quantizer.quantizer._f.assign(constrained_f)
+        if self.use_hgq and self.quantizer.built:
+            self.quantizer.post_epoch_constraint_apply()
 
     def apply_final_compression(self):
         if self.use_hgq and not self.quantizer.built:
             return
+        if self.use_hgq:
+            with torch.no_grad():
+                self.quantizer._f.data.clamp_(self.quantizer.f_min, self.quantizer.f_max)
+                if self.quantizer.overflow_mode != "WRAP":
+                    self.quantizer._i.data.clamp_(self.quantizer.i_min, self.quantizer.i_max)
         _, i, f = self.get_quantization_bits()
         self.i.data = i
         self.f.data = f
@@ -140,5 +141,14 @@ class Quantizer(nn.Module):
     def reload_from_local(self):
         if not self.use_hgq:
             return
-        self.quantizer.quantizer._i.assign(self.i)
-        self.quantizer.quantizer._f.assign(self.f)
+        self.quantizer.set_bits(self.i, self.f)
+
+
+def create_quantizer(k, i, f, overflow, round_mode, is_heterogeneous, is_data, gamma=1e-8):
+    if is_heterogeneous:
+        if is_data:
+            return HGQQuantizer(k0=k, i0=i, f0=f, overflow_mode=overflow, round_mode=round_mode, is_data=True, gamma=gamma)
+        else:
+            return HGQQuantizer(k0=k, i0=i, f0=f, overflow_mode=overflow, round_mode=round_mode, is_data=False, gamma=gamma)
+    else:
+        return get_fixed_quantizer(round_mode=round_mode, overflow_mode=overflow)

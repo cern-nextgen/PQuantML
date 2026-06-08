@@ -1,9 +1,10 @@
 from enum import Enum
 
 import keras
+from hgq.quantizer import Quantizer as HGQQuantizer
+from hgq.quantizer import QuantizerConfig
 from keras import ops
-
-from pquant.core.quantizer_functions import create_quantizer
+from quantizers import get_fixed_quantizer
 
 
 @keras.saving.register_keras_serializable(package="PQuantML")
@@ -184,3 +185,34 @@ class Quantizer(keras.layers.Layer):
         if self.use_hgq:
             config.update({"quantizer": keras.saving.serialize_keras_object(self.quantizer)})
         return config
+
+
+def create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, gamma=1e-8):
+    quantizer_config = QuantizerConfig(
+        q_type="kif", place=place, k0=k, i0=i, f0=f, overflow_mode=overflow, round_mode=round_mode, homogeneous_axis=()
+    )
+    return HGQQuantizer(config=quantizer_config)
+
+
+def create_hgq_data_quantizer(k, i, f, overflow, round_mode, gamma=1e-8):
+    quantizer_config = QuantizerConfig(
+        q_type="kif",
+        place="datalane",
+        k0=k,
+        i0=i,
+        f0=f,
+        overflow_mode=overflow,
+        round_mode=round_mode,
+        homogeneous_axis=(0,),
+    )
+    return HGQQuantizer(config=quantizer_config)
+
+
+def create_quantizer(k, i, f, overflow, round_mode, is_heterogeneous, is_data, place="datalane", gamma=1e-8):
+    if is_heterogeneous:
+        if is_data:
+            return create_hgq_data_quantizer(k, i, f, overflow, round_mode, gamma=gamma)
+        else:
+            return create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, gamma=gamma)
+    else:
+        return get_fixed_quantizer(round_mode=round_mode, overflow_mode=overflow)

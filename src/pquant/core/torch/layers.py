@@ -9,7 +9,7 @@ from torch.nn.common_types import _size_1_t, _size_2_t
 
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.quantizer import Quantizer
-from pquant.core.utils import get_pruning_layer
+from pquant.core.torch.utils import get_pruning_layer
 
 if typing.TYPE_CHECKING:
     from pquant.core.torch.fit_compress import call_fitcompress  # noqa: 401
@@ -170,6 +170,8 @@ class PQWeightBiasBase(nn.Module):
         self.init_weight = self._weight.clone()
 
     def rewind_weights(self):
+        if not hasattr(self, "init_weight"):
+            return
         self._weight.data = self.init_weight.clone()
 
     def ebops(self):
@@ -1513,7 +1515,8 @@ def post_pretrain_functions(model, config, train_loader=None, loss_function=None
             if isinstance(layer, (PQConv2d, PQConv1d, PQDense)):
                 # layer.post_pre_train_function()
                 # set_data_quantization_bits(model)
-                layer.pruning_layer.mask.assign(pruning_mask_importance_scores[idx])
+                with torch.no_grad():
+                    layer.pruning_layer.mask.data = pruning_mask_importance_scores[idx]
                 layer.pruning_layer.pre_finetune_function()  # So mask is not updated during training anymore
                 idx += 1
         return
