@@ -87,6 +87,7 @@ class PQWeightBiasBase(nn.Module):
         self.post_fitcompress_calibration = False
         self.saved_inputs = []
         self.saved_outputs = []
+        self.config = config
 
     def check_is_built(self, input_shape):
         if self.built:
@@ -677,7 +678,7 @@ class PQAvgPoolBase(nn.Module):
             is_data=True,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
-            dynamic_data=self.dynamic_data,
+            dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
         )
         self.input_shape = (1,) + input_shape[1:]
 

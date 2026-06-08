@@ -37,14 +37,7 @@ class Quantizer(nn.Module):
         self.b = torch.nn.Parameter(torch.tensor(i + k + f), requires_grad=False)
         self.granularity = granularity.value if isinstance(granularity, Enum) else granularity
         self.quantizer = create_quantizer(
-            self.k,
-            i,
-            f,
-            self.overflow,
-            self.round_mode,
-            self.use_hgq,
-            self.is_data,
-            place,
+            self.k, i, f, self.overflow, self.round_mode, self.use_hgq, self.is_data, hgq_gamma
         )
         self.is_pretraining = True
         self.hgq_gamma = hgq_gamma
