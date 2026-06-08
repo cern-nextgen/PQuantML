@@ -89,18 +89,17 @@ class AutoSparse(nn.Module):
         return torch.sigmoid(x)
 
     def forward(self, weight):
-        weight_reshaped = weight.reshape(weight.shape[0], -1)
-        w_t = weight_reshaped.abs() - self._g(self.threshold)
-
-        if not (self._is_pretraining or self._is_finetuning):
-            new_binary_mask = (w_t > 0).to(weight.dtype).reshape(weight.shape)
-            with torch.no_grad():
-                self.mask.copy_(new_binary_mask)
-
         if self._is_pretraining:
             return weight
         if self._is_finetuning:
             return self.mask.to(weight.dtype) * weight
+
+        weight_reshaped = weight.reshape(weight.shape[0], -1)
+        w_t = weight_reshaped.abs() - torch.sigmoid(self.threshold)
+
+        new_binary_mask = (w_t > 0).to(weight.dtype).reshape(weight.shape)
+        with torch.no_grad():
+            self.mask.copy_(new_binary_mask)
 
         sparse = torch.sign(weight) * autosparse_prune(
             w_t, self.alpha, self._backward_sparsity_flag, self._backward_sparsity
@@ -112,7 +111,7 @@ class AutoSparse(nn.Module):
 
     def get_mask(self, weight):
         weight_reshaped = weight.reshape(weight.shape[0], -1)
-        w_t = weight_reshaped.abs() - self._g(self.threshold)
+        w_t = weight_reshaped.abs() - torch.sigmoid(self.threshold)
         return (w_t > 0).to(weight.dtype).reshape(weight.shape)
 
     def get_layer_sparsity(self, weight):

@@ -29,8 +29,7 @@ def _minimal_i_given_xf(absmax: torch.Tensor, f: torch.Tensor) -> torch.Tensor:
 class HGQQuantizer(nn.Module):
     """
     HGQ fixed-point quantizer parameterized by (k, i, f) — keep_negative, integer
-    bits, fractional bits — with learnable i (SAT) and f (always), matching the
-    semantics of hgq2's FixedPointQuantizerKIF wrapped by Quantizer.
+    bits, fractional bits.
 
     Parameters
     ----------
@@ -48,7 +47,7 @@ class HGQQuantizer(nn.Module):
         True  → data/activation quantizer (homogeneous over batch axis 0).
         False → weight/bias quantizer (fully heterogeneous, per-element).
     gamma : float
-        L1 regularisation coefficient on bit-widths (eq. 12 in paper).
+        L1 regularisation coefficient on bit-widths.
     i_decay_speed : float
         WRAP mode only. Rate at which tracked i can decrease per step.
         float('inf') means i is reset each step to the minimum required by data.
@@ -120,10 +119,6 @@ class HGQQuantizer(nn.Module):
         else:
             # Integer bits are trainable for SAT / SAT_SYM.
             self._i = nn.Parameter(torch.tensor(self.i0))
-
-    # ------------------------------------------------------------------
-    # Build
-    # ------------------------------------------------------------------
 
     def build(self, input_shape: tuple) -> None:
         """
