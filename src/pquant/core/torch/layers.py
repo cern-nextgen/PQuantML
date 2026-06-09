@@ -31,6 +31,10 @@ class PQWeightBiasBase(nn.Module):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         *args,
         **kwargs,
     ):
@@ -78,6 +82,12 @@ class PQWeightBiasBase(nn.Module):
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.granularity = config.quantization_parameters.granularity
+        self.weight_quant_granularity = (
+            weight_quant_granularity if weight_quant_granularity is not None else self.granularity
+        )
+        self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else self.granularity
+        self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else self.granularity
+        self.out_quant_granularity = out_quant_granularity if out_quant_granularity is not None else self.granularity
         self.final_compression_done = False
         self.built = False
         self.parallelization_factor = -1
@@ -105,6 +115,7 @@ class PQWeightBiasBase(nn.Module):
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
                 dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+                granularity=self.in_quant_granularity,
             )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -115,7 +126,7 @@ class PQWeightBiasBase(nn.Module):
             is_heterogeneous=self.use_hgq,
             is_data=False,
             hgq_gamma=self.hgq_gamma,
-            granularity=self.granularity,
+            granularity=self.weight_quant_granularity,
             place="weight",
         )
 
@@ -128,6 +139,7 @@ class PQWeightBiasBase(nn.Module):
             is_heterogeneous=self.use_hgq,
             is_data=False,
             hgq_gamma=self.hgq_gamma,
+            granularity=self.bias_quant_granularity,
             place="bias",
         )
         if self.quantize_output:
@@ -142,6 +154,7 @@ class PQWeightBiasBase(nn.Module):
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
                 dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+                granularity=self.out_quant_granularity,
             )
 
         self.n_parallel = ops.prod(tuple(input_shape)[1:-1])
@@ -244,6 +257,10 @@ class PQDense(PQWeightBiasBase, nn.Linear):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         **kwargs,
     ):
         super().__init__(
@@ -261,6 +278,10 @@ class PQDense(PQWeightBiasBase, nn.Linear):
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=weight_quant_granularity,
+            in_quant_granularity=in_quant_granularity,
+            bias_quant_granularity=bias_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             **kwargs,
         )
         self.in_features = in_features
@@ -358,6 +379,10 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         **kwargs,
     ):
         super().__init__(
@@ -381,6 +406,10 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=weight_quant_granularity,
+            in_quant_granularity=in_quant_granularity,
+            bias_quant_granularity=bias_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             **kwargs,
         )
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
@@ -499,6 +528,10 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         **kwargs,
     ):
         super().__init__(
@@ -522,6 +555,10 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=weight_quant_granularity,
+            in_quant_granularity=in_quant_granularity,
+            bias_quant_granularity=bias_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             **kwargs,
         )
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
@@ -625,6 +662,8 @@ class PQAvgPoolBase(nn.Module):
         quantize_output=False,
         in_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -654,6 +693,10 @@ class PQAvgPoolBase(nn.Module):
         self.saved_inputs = []
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
+        # Optional per-quantizer granularity override; None → inherit config granularity.
+        granularity = config.quantization_parameters.granularity
+        self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else granularity
+        self.out_quant_granularity = out_quant_granularity if out_quant_granularity is not None else granularity
 
     def build(self, input_shape):
         self.input_quantizer = Quantizer(
@@ -667,6 +710,7 @@ class PQAvgPoolBase(nn.Module):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+            granularity=self.in_quant_granularity,
         )
         self.output_quantizer = Quantizer(
             k=torch.tensor(self.k_output),
@@ -679,6 +723,7 @@ class PQAvgPoolBase(nn.Module):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+            granularity=self.out_quant_granularity,
         )
         self.input_shape = (1,) + input_shape[1:]
 
@@ -743,6 +788,8 @@ class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
         quantize_output=False,
         in_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
         **kwargs,
     ):
         super().__init__(
@@ -756,6 +803,8 @@ class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
             quantize_output=quantize_output,
             in_quant_bits=in_quant_bits,
             out_quant_bits=out_quant_bits,
+            in_quant_granularity=in_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             **kwargs,
         )
 
@@ -780,6 +829,8 @@ class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
         quantize_output=False,
         in_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
         **kwargs,
     ):
         super().__init__(
@@ -794,6 +845,8 @@ class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
             quantize_output=quantize_output,
             in_quant_bits=in_quant_bits,
             out_quant_bits=out_quant_bits,
+            in_quant_granularity=in_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             **kwargs,
         )
 
@@ -819,6 +872,9 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         in_quant_bits: Tuple[T, T, T] = None,
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        weight_quant_granularity=None,
+        bias_quant_granularity=None,
     ):
         super().__init__(num_features, eps, momentum, affine, track_running_stats, device=device, dtype=dtype)
         if in_quant_bits is not None:
@@ -850,6 +906,10 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
         self.config = config
         self.quantize_input = quantize_input
+        granularity = config.quantization_parameters.granularity
+        self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else granularity
+        self.weight_quant_granularity = weight_quant_granularity if weight_quant_granularity is not None else granularity
+        self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else granularity
         self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
         self.register_parameter("_weight", self._weight)
         if self.bias is not None:
@@ -878,6 +938,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+            granularity=self.in_quant_granularity,
         )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -888,6 +949,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
             is_data=False,
             is_heterogeneous=self.use_hgq,
             place="weight",
+            granularity=self.weight_quant_granularity,
         )
         self.bias_quantizer = Quantizer(
             k=torch.tensor(self.k_bias),
@@ -898,6 +960,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
             is_data=False,
             is_heterogeneous=self.use_hgq,
             place="bias",
+            granularity=self.bias_quant_granularity,
         )
         if self.use_hgq:
             self.input_quantizer.quantizer.build(input_shape)
@@ -982,6 +1045,9 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         in_quant_bits: Tuple[T, T, T] = None,
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        weight_quant_granularity=None,
+        bias_quant_granularity=None,
     ):
         super().__init__(num_features, eps, momentum, affine, track_running_stats, device=device, dtype=dtype)
         if in_quant_bits is not None:
@@ -1013,6 +1079,10 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
         self.config = config
         self.quantize_input = quantize_input
+        granularity = config.quantization_parameters.granularity
+        self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else granularity
+        self.weight_quant_granularity = weight_quant_granularity if weight_quant_granularity is not None else granularity
+        self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else granularity
         self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
         self.register_parameter("_weight", self._weight)
         if self.bias is not None:
@@ -1042,6 +1112,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+            granularity=self.in_quant_granularity,
         )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -1052,6 +1123,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
             is_data=False,
             is_heterogeneous=self.use_hgq,
             place="weight",
+            granularity=self.weight_quant_granularity,
         )
         self.bias_quantizer = Quantizer(
             k=torch.tensor(self.k_bias),
@@ -1062,6 +1134,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
             is_data=False,
             is_heterogeneous=self.use_hgq,
             place="bias",
+            granularity=self.bias_quant_granularity,
         )
         if self.use_hgq:
             self.input_quantizer.quantizer.build(input_shape)
@@ -1147,6 +1220,10 @@ class PQLayerNorm(nn.LayerNorm):
         out_quant_bits: Tuple[T, T, T] = None,
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
+        weight_quant_granularity=None,
+        bias_quant_granularity=None,
     ):
         try:
             super().__init__(normalized_shape, eps, elementwise_affine, bias, device=device, dtype=dtype)
@@ -1190,6 +1267,11 @@ class PQLayerNorm(nn.LayerNorm):
         self.config = config
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
+        granularity = config.quantization_parameters.granularity
+        self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else granularity
+        self.out_quant_granularity = out_quant_granularity if out_quant_granularity is not None else granularity
+        self.weight_quant_granularity = weight_quant_granularity if weight_quant_granularity is not None else granularity
+        self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else granularity
         if self.weight is not None:
             self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
             self.register_parameter("_weight", self._weight)
@@ -1221,6 +1303,7 @@ class PQLayerNorm(nn.LayerNorm):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+            granularity=self.in_quant_granularity,
         )
         self.output_quantizer = Quantizer(
             k=torch.tensor(self.k_output),
@@ -1233,6 +1316,7 @@ class PQLayerNorm(nn.LayerNorm):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+            granularity=self.out_quant_granularity,
         )
         self.weight_quantizer = Quantizer(
             k=torch.tensor(self.k_weight),
@@ -1243,6 +1327,7 @@ class PQLayerNorm(nn.LayerNorm):
             is_data=False,
             is_heterogeneous=self.use_hgq,
             place="weight",
+            granularity=self.weight_quant_granularity,
         )
         self.bias_quantizer = Quantizer(
             k=torch.tensor(self.k_bias),
@@ -1253,6 +1338,7 @@ class PQLayerNorm(nn.LayerNorm):
             is_data=False,
             is_heterogeneous=self.use_hgq,
             place="bias",
+            granularity=self.bias_quant_granularity,
         )
         if self.use_hgq:
             self.input_quantizer.quantizer.build(input_shape)
@@ -1385,6 +1471,9 @@ class PQMultiheadAttention(nn.Module):
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
         attn_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
+        param_quant_granularity=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1402,19 +1491,31 @@ class PQMultiheadAttention(nn.Module):
         kdim = kdim if kdim is not None else embed_dim
         vdim = vdim if vdim is not None else embed_dim
 
+        # Granularity split: `param` (weight+bias) is uniform across all four projections;
+        # `in` applies only to the Q/K/V projection inputs (the boundary inputs) and `out` only
+        # to the out_proj output (the boundary output).
+        self.in_quant_granularity = in_quant_granularity
+        self.out_quant_granularity = out_quant_granularity
+        self.param_quant_granularity = param_quant_granularity
+        # Q/K/V projection outputs are matmul operands, so they are always output-quantized (gated
+        # only by enable_quantization) to make Q/K/V fixed-point. The MHA-level `quantize_output`
+        # controls the block's actual output, i.e. only the out_proj output quantizer.
         proj_kwargs = dict(
             bias=bias,
             in_quant_bits=in_quant_bits,
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=param_quant_granularity,
+            bias_quant_granularity=param_quant_granularity,
         )
-        qkv_kwargs = dict(quantize_input=quantize_input, quantize_output=True, **proj_kwargs)
+
+        qkv_kwargs = dict(quantize_input=quantize_input, quantize_output=True,  in_quant_granularity=in_quant_granularity, **proj_kwargs)
         self.q_proj = PQDense(config, embed_dim, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.k_proj = PQDense(config, kdim, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.v_proj = PQDense(config, vdim, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.out_proj = PQDense(
-            config, embed_dim, embed_dim, quantize_input=True, quantize_output=quantize_output, **proj_kwargs
+            config, embed_dim, embed_dim, quantize_input=True, quantize_output=quantize_output,  out_quant_granularity=out_quant_granularity, **proj_kwargs
         )
 
         self.attn_dropout = None

@@ -41,7 +41,12 @@ def configure_backend():
 
     match backend:
         case 'tensorflow':
-            pass
+            import tensorflow as tf
+
+            # Use full float32 matmul precision to match numpy/onnxruntime. Without this, TF uses
+            # TF32 on Ampere+ GPUs and the ~1e-3 relative error exceeds tight test tolerances
+            # (e.g. the keras→ONNX parity tests). Mirrors the torch 'highest' setting below.
+            tf.config.experimental.enable_tensor_float_32_execution(False)
         case 'torch':
             import torch
 

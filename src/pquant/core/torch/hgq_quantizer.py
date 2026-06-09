@@ -44,8 +44,12 @@ class HGQQuantizer(nn.Module):
     round_mode : str
         One of 'RND', 'RND_CONV', 'TRN', etc.
     is_data : bool
-        True  → data/activation quantizer (homogeneous over batch axis 0).
-        False → weight/bias quantizer (fully heterogeneous, per-element).
+        True  → data/activation quantizer (batch axis 0 always homogeneous;
+                per_channel keys on channel axis 1).
+        False → weight/bias quantizer (per_channel keys on output-channel axis 0).
+    granularity : str
+        One of 'per_tensor' (one shared bit-width) or 'per_weight' (one per element).
+        Controls which axes are shared. per_channel is not supported.
     gamma : float
         L1 regularisation coefficient on bit-widths.
     i_decay_speed : float
@@ -73,6 +77,7 @@ class HGQQuantizer(nn.Module):
         overflow_mode: str,
         round_mode: str,
         is_data: bool,
+        granularity: str = "per_weight",
         gamma: float = 1e-8,
         i_decay_speed: float = float("inf"),
         i_min: float = -23.0,
@@ -92,6 +97,7 @@ class HGQQuantizer(nn.Module):
         self.overflow_mode = overflow_mode.upper()
         self.round_mode = round_mode.upper()
         self.is_data = is_data
+        self.granularity = granularity
         self.gamma = gamma
         self.i_decay_speed = i_decay_speed
         self.i_min = i_min
@@ -129,9 +135,8 @@ class HGQQuantizer(nn.Module):
         parameters, not the scalar placeholders from __init__.
         """
         device = self._k.device
+        self.homogeneous_axis = self._homogeneous_axis(len(input_shape))
         bw_shape = self._infer_bw_shape(input_shape)
-
-        self.homogeneous_axis = (0,) if self.is_data else ()
 
         # k: non-trainable sign-bit buffer
         self.register_buffer("_k", torch.full(bw_shape, self.k0, device=device))
@@ -146,15 +151,23 @@ class HGQQuantizer(nn.Module):
 
         self._built = True
 
+    def _homogeneous_axis(self, ndim: int) -> tuple[int, ...]:
+        """Axes shared (collapsed to 1 in the bit-width tensor), derived from `granularity`.
+
+        HGQ supports only per_tensor and per_weight (data always shares the batch axis 0).
+        per_channel is intentionally unsupported (the channel axis is layout-dependent).
+        """
+        if self.granularity == "per_tensor":
+            return tuple(range(ndim))
+        if self.granularity == "per_weight":
+            return (0,) if self.is_data else ()
+        if self.granularity == "per_channel":
+            raise ValueError("per_channel granularity is not supported for HGQ. Use 'per_tensor' or 'per_weight'.")
+        raise ValueError(f"Unsupported granularity: {self.granularity}")
+
     def _infer_bw_shape(self, input_shape: tuple) -> tuple:
-        """Shape of bit-width parameter tensors given input tensor shape."""
-        if self.is_data:
-            # Batch axis (0) is homogeneous → dimension 0 collapses to 1.
-            shape = list(input_shape)
-            shape[0] = 1
-            return tuple(shape)
-        # Fully heterogeneous (per-parameter): same shape as input.
-        return tuple(input_shape)
+        """Shape of bit-width parameter tensors: homogeneous axes collapse to 1."""
+        return tuple(1 if ax in self.homogeneous_axis else d for ax, d in enumerate(input_shape))
 
     # ------------------------------------------------------------------
     # Properties
