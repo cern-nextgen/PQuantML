@@ -14,7 +14,6 @@ from alkaid.trace import FVArray
 
 from pquant._alkaid_plugin._alkaid_common import (
     PQuantAlkaidError,
-    assert_static_pruning,
     replay_quantizer,
 )
 from pquant.core.torch.activations import PQActivation
@@ -50,10 +49,6 @@ def _assert_torch_conversion_ready(layer: torch.nn.Module, input_shape: Any) -> 
             f'{layer.__class__.__name__} must be in eval mode before Alkaid conversion; '
             'call model.eval() after building the graph.'
         )
-    if not bool(getattr(layer, 'built', False)):
-        raise PQuantAlkaidError(
-            f'{layer.__class__.__name__} must be built before Alkaid conversion; ' 'run a real no-grad forward pass first.'
-        )
 
 
 def _assert_avg_pool_ready(layer: PQAvgPoolBase, x: Any) -> None:
@@ -63,10 +58,6 @@ def _assert_avg_pool_ready(layer: PQAvgPoolBase, x: Any) -> None:
         raise PQuantAlkaidError(
             f'{layer.__class__.__name__} must be in eval mode before Alkaid conversion; '
             'call model.eval() after building the graph.'
-        )
-    if not hasattr(layer, 'input_quantizer'):
-        raise PQuantAlkaidError(
-            f'{layer.__class__.__name__} must be built before Alkaid conversion; ' 'run a real no-grad forward pass first.'
         )
 
 
@@ -107,7 +98,6 @@ def _module_bool(module: torch.nn.Module, name: str, default: bool = False) -> b
 def _static_prune_weight(module: PQWeightBiasBase, weight: torch.Tensor) -> torch.Tensor:
     if not bool(getattr(module, 'enable_pruning', False)):
         return weight
-    assert_static_pruning(module)
     mask = module.pruning_layer.get_hard_mask().to(device=weight.device, dtype=weight.dtype)
     return weight * mask
 
@@ -245,7 +235,6 @@ def _patch_lazy_build_assertions() -> None:
                 return original(self, weight)
             if not bool(getattr(self, 'enable_pruning', False)):
                 return weight
-            assert_static_pruning(self)
             mask = self.pruning_layer.get_hard_mask()
             return weight * mask
 

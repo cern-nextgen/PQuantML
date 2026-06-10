@@ -15,10 +15,8 @@ from keras.layers import DepthwiseConv1D, DepthwiseConv2D
 
 from pquant._alkaid_plugin._alkaid_common import (
     PQuantAlkaidError,
-    assert_built,
     replay_quantizer,
     replay_quantizer_if_enabled,
-    replay_static_pruning,
     to_bool,
     to_numpy,
 )
@@ -36,38 +34,24 @@ from pquant.core.keras.layers import (
 from pquant.core.keras.quantizer import Quantizer
 
 
-def _assert_layer_built(layer) -> None:
-    assert_built(layer, f'{layer.__class__.__name__}')
+def _assert_final_compression(layer) -> None:
+    if not to_bool(getattr(layer, 'final_compression_done', False)):
+        raise PQuantAlkaidError(
+            f'{layer.__class__.__name__} must have apply_final_compression() applied before Alkaid conversion.'
+        )
 
 
 def _weight(layer) -> np.ndarray:
-    _assert_layer_built(layer)
-    weight = to_numpy(layer._kernel)
-    if to_bool(getattr(layer, 'final_compression_done', False)):
-        return weight
-
-    if bool(getattr(layer, 'pruning_first', False)):
-        weight = replay_static_pruning(layer, weight)
-        if bool(getattr(layer, 'enable_quantization', True)):
-            weight = replay_quantizer(layer.weight_quantizer, weight)
-    else:
-        if bool(getattr(layer, 'enable_quantization', True)):
-            weight = replay_quantizer(layer.weight_quantizer, weight)
-        weight = replay_static_pruning(layer, weight)
-    return to_numpy(weight)
+    _assert_final_compression(layer)
+    return to_numpy(layer._kernel)
 
 
 def _bias(layer) -> np.ndarray:
-    _assert_layer_built(layer)
+    _assert_final_compression(layer)
     bias = getattr(layer, '_bias', None)
     if bias is None:
         return np.array(0.0)
-    bias_np = to_numpy(bias)
-    if to_bool(getattr(layer, 'final_compression_done', False)):
-        return bias_np
-    if bool(getattr(layer, 'enable_quantization', True)):
-        bias_np = to_numpy(replay_quantizer(layer.bias_quantizer, bias_np))
-    return bias_np
+    return to_numpy(bias)
 
 
 class ReplayPQuantQuantizer(ReplayOperationBase):
@@ -75,7 +59,6 @@ class ReplayPQuantQuantizer(ReplayOperationBase):
     handles = (Quantizer,)
 
     def call(self, x: FVArray) -> FVArray:
-        _assert_layer_built(self.op)
         return replay_quantizer(self.op, x)
 
 
@@ -84,7 +67,6 @@ class ReplayPQuantDense(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        _assert_layer_built(layer)
         inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
         out = np.einsum('...c,cC->...C', inputs, _weight(layer)) + _bias(layer)
         return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
@@ -95,7 +77,6 @@ class ReplayPQuantConv(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        _assert_layer_built(layer)
         inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
         kernel = _weight(layer)
         bias = _bias(layer)
@@ -138,7 +119,6 @@ class ReplayPQuantSeparableConv(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        _assert_layer_built(layer)
         x = ReplayPQuantConv(layer.depthwise_conv).call(inputs)
         return ReplayPQuantConv(layer.pointwise_conv).call(x)
 
@@ -148,26 +128,15 @@ class ReplayPQuantBatchNormalization(ReplayBatchNormalization):
 
     def fused_scale_offset(self) -> tuple[np.ndarray, np.ndarray]:
         layer = self.op
+        _assert_final_compression(layer)
         mean = to_numpy(keras.ops.cast(layer.moving_mean, layer.dtype))
         variance = to_numpy(keras.ops.cast(layer.moving_variance, layer.dtype))
         if layer.scale:
             gamma = to_numpy(keras.ops.cast(layer.gamma, layer.dtype))
-            if (
-                bool(getattr(layer, 'enable_quantization', True))
-                and bool(getattr(layer, 'quantize_parameters', True))
-                and not to_bool(getattr(layer, 'final_compression_done', False))
-            ):
-                gamma = to_numpy(replay_quantizer(layer.weight_quantizer, gamma))
         else:
             gamma = np.ones_like(mean)
         if layer.center:
             beta = to_numpy(keras.ops.cast(layer.beta, layer.dtype))
-            if (
-                bool(getattr(layer, 'enable_quantization', True))
-                and bool(getattr(layer, 'quantize_parameters', True))
-                and not to_bool(getattr(layer, 'final_compression_done', False))
-            ):
-                beta = to_numpy(replay_quantizer(layer.bias_quantizer, beta))
         else:
             beta = np.zeros_like(mean)
         scale = gamma / np.sqrt(variance + layer.epsilon)
@@ -176,7 +145,6 @@ class ReplayPQuantBatchNormalization(ReplayBatchNormalization):
 
     def call(self, inputs: FVArray, mask=None) -> FVArray:
         layer = self.op
-        _assert_layer_built(layer)
         inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
         scale, offset = self.fused_scale_offset()
         shape = [1] * inputs.ndim
@@ -198,7 +166,6 @@ class ReplayPQuantAvgPool(ReplayPool):
 
     def call(self, inputs: FVArray, mask: None = None) -> FVArray:
         layer = self.op
-        _assert_layer_built(layer)
         inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
         out = super().call(inputs, mask=mask)
         return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
@@ -210,7 +177,6 @@ class ReplayPQuantActivation(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        _assert_layer_built(layer)
         if bool(getattr(layer, 'use_fitcompress', False)) and bool(getattr(layer, 'is_pretraining', False)):
             if layer.activation_name != 'relu':
                 raise PQuantAlkaidError('Only ReLU FITCompress pretraining bypass is supported for PQActivation.')
