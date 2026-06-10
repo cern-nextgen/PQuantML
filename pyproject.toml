@@ -30,6 +30,9 @@ optional-dependencies.test = [ "pytest>=8.4" ]
 optional-dependencies.torch = [ "torch>=2.1" ]
 urls.repository = "https://github.com/cern-nextgen/PQuantML"
 
+entry-points."alkaid_keras".pquant = "pquant._alkaid_plugin._alkaid_keras_plugin:register"
+entry-points."alkaid_torch".pquant = "pquant._alkaid_plugin._alkaid_torch_plugin:register"
+
 [tool.setuptools]
 packages = [ "pquant" ]
 include-package-data = true
