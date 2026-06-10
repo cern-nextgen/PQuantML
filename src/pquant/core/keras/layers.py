@@ -1994,12 +1994,12 @@ class PQMultiheadAttention(keras.layers.Layer):
         v = ops.reshape(v, (batch_size, key_len, self.num_heads, self.head_dim))
         v = ops.transpose(v, (0, 2, 1, 3))
 
+        q = q * self.scale
+
         attn_scores = ops.matmul(q, ops.transpose(k, (0, 1, 3, 2)))
 
         if self.quantize_attn_scores and self.enable_quantization:
             attn_scores = self.attn_score_quantizer(attn_scores, training=training)
-
-        attn_scores = attn_scores * self.scale
 
         if attn_mask is not None:
             if ops.ndim(attn_mask) == 2:
