@@ -301,12 +301,37 @@ def test_check_quantization_fix_requires_config(config_pdp):
         check_quantization(model, add_missing_quantizers=True)
 
 
-def test_check_quantization_pqactivation_producer_fix(config_pdp):
-    # The PQActivation's quantize_output=False feeds the `add` op, so the fix flips the activation's quantize_output.
+def test_check_quantization_pqactivation_relu_preserves_quantization(config_pdp):
+    # A relu PQActivation with quantize_input=True quantizes its input, and relu is a
+    # grid-preserving clip, so its output is already quantized: the `add` it feeds needs
+    # no extra quantizer. The model passes as-is and the activation's quantize_output stays False.
     class ActChain(nn.Module):
         def __init__(self):
             super().__init__()
             self.act = PQActivation(config_pdp, "relu", quantize_input=True, quantize_output=False)
+            self.b = PQDense(config_pdp, IN_FEATURES, OUT_FEATURES, quantize_input=True, quantize_output=True)
+
+        def forward(self, x):
+            y = self.act(x)
+            y = y + y
+            return self.b(y)
+
+    model = ActChain()
+    assert check_quantization(model) is True
+    traced = check_quantization(model, add_missing_quantizers=True, config=config_pdp)
+    assert model.act.quantize_output is False  # relu needs no output quantizer
+    added = [name for name, _ in traced.named_modules() if name.startswith("_auto_missing_quantizer_")]
+    assert added == []
+    assert check_quantization(traced) is True
+
+
+def test_check_quantization_pqactivation_nonlinear_producer_fix(config_pdp):
+    # A tanh PQActivation is NOT grid-preserving, so its quantize_output=False output feeds
+    # the `add` unquantized and the fix flips the activation's quantize_output to True.
+    class ActChain(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.act = PQActivation(config_pdp, "tanh", quantize_input=True, quantize_output=False)
             self.b = PQDense(config_pdp, IN_FEATURES, OUT_FEATURES, quantize_input=True, quantize_output=True)
 
         def forward(self, x):

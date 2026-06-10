@@ -652,7 +652,7 @@ def add_compression_layers(model, config, input_shape=None, add_missing_quantize
         # imports the layer classes defined in this module.
         from pquant.core.torch.tracing import check_quantization
 
-        check_quantization(model, add_missing_quantizers=True, config=config)
+        model = check_quantization(model, add_missing_quantizers=True, config=config)
     model.to("cuda")
     if input_shape is not None:
         model(torch.rand(input_shape).to("cuda"))

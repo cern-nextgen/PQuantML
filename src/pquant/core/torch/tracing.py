@@ -218,7 +218,12 @@ def _analyze_quantization(model):
                     for n in input_nodes:
                         if not quantized.get(n, False):
                             edges_to_quantize.add((n, node))
-                quantized[node] = bool(getattr(mod, "quantize_output", False))
+                # A relu activation is a grid-preserving clip (its optional multiplier is a
+                # power-of-two scale), so if the value reaching it is already quantized the
+                # output stays on-grid and needs no output quantizer.
+                grid_preserving = isinstance(mod, PQActivation) and mod.activation_name == "relu"
+                input_quantized = bool(getattr(mod, "quantize_input", False)) or all_inputs_quantized
+                quantized[node] = bool(getattr(mod, "quantize_output", False)) or (grid_preserving and input_quantized)
             elif isinstance(mod, Quantizer):
                 quantized[node] = True
             else:

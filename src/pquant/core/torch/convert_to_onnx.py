@@ -1528,8 +1528,11 @@ def convert_to_onnx_fx(
     # need to expand torch's two-arg .transpose(d0, d1) into a full ONNX perm.
     from torch.fx.passes.shape_prop import ShapeProp
 
+    # Build the probe tensor on the model's own device so ShapeProp doesn't hit a
+    # device mismatch when a default device (e.g. CUDA) is set via torch.set_default_device.
+    device = next((p.device for p in model.parameters()), None)
     with torch.no_grad():
-        ShapeProp(gm).propagate(torch.zeros(1, *input_shape))
+        ShapeProp(gm).propagate(torch.zeros(1, *input_shape, device=device))
 
     onnx_nodes: list[onnx.NodeProto] = []
     initializers: list[onnx.TensorProto] = []
@@ -1765,7 +1768,7 @@ def convert_to_onnx_fx(
                 output_names.append(val[0] if isinstance(val, tuple) else val)
 
     with torch.no_grad():
-        dummy_out = model(torch.zeros(1, *input_shape))
+        dummy_out = model(torch.zeros(1, *input_shape, device=device))
     dummy_outs = list(dummy_out) if isinstance(dummy_out, (tuple, list)) else [dummy_out]
 
     batch_dim = oh.make_tensor_value_info("input", TensorProto.FLOAT, [None, *input_shape])
