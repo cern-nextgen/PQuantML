@@ -177,10 +177,6 @@ class ReplayPQuantActivation(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        if bool(getattr(layer, 'use_fitcompress', False)) and bool(getattr(layer, 'is_pretraining', False)):
-            if layer.activation_name != 'relu':
-                raise PQuantAlkaidError('Only ReLU FITCompress pretraining bypass is supported for PQActivation.')
-            return np.maximum(0, inputs)  # type: ignore
         if (
             not bool(getattr(layer, 'use_hgq', False))
             and bool(getattr(layer, 'use_multiplier', False))

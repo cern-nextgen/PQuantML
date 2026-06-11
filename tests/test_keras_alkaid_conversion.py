@@ -14,9 +14,20 @@ between the model inputs and the flat hardware input ports.
 import keras
 import numpy as np
 import pytest
+from alkaid.codegen import RTLModel  # noqa: E402
+
+# Alkaid is required for this test; skip cleanly if it (or its deps) isn't installed.
+from alkaid.converter import trace_model
+from alkaid.trace import trace  # noqa: E402
 from keras import ops
 
 from pquant import pdp_config
+
+# Load the pquant Alkaid plugin explicitly instead of relying on the `alkaid_keras`
+# entry point: importing the module registers the replay handlers and register()
+# marks the plugin loaded, so the test works even if the installed package metadata
+# doesn't expose the entry point (e.g. some editable installs).
+from pquant._alkaid_plugin import _alkaid_keras_plugin  # noqa: E402
 from pquant.activations import PQActivation
 from pquant.core.keras.quantizer import Quantizer
 from pquant.layers import (
@@ -30,17 +41,6 @@ from pquant.layers import (
     PQSeparableConv2d,
     apply_final_compression,
 )
-
-# Alkaid is required for this test; skip cleanly if it (or its deps) isn't installed.
-trace_model = pytest.importorskip("alkaid.converter").trace_model
-from alkaid.codegen import RTLModel  # noqa: E402
-from alkaid.trace import trace as alir_trace  # noqa: E402
-
-# Load the pquant Alkaid plugin explicitly instead of relying on the `alkaid_keras`
-# entry point: importing the module registers the replay handlers and register()
-# marks the plugin loaded, so the test works even if the installed package metadata
-# doesn't expose the entry point (e.g. some editable installs).
-from pquant._alkaid_plugin import _alkaid_keras_plugin  # noqa: E402
 
 _alkaid_keras_plugin.register()
 
@@ -157,7 +157,7 @@ def test_alkaid_rtl_matches_model(tmp_path):
     inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
     # Lower the trace to combinational logic: the pure-Python interpreter `comb(...)`
     # is the exact software model the RTL is generated from.
-    comb = alir_trace(inp_fv, out_fv, optimize=True)
+    comb = trace(inp_fv, out_fv, optimize=True)
 
     # Sample inputs exactly representable in INPUT_KIF (non-negative multiples of
     # 2**-4) so the input-port quantization is a no-op and model == hardware input.
@@ -269,7 +269,7 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
     apply_final_compression(model)
 
     inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
-    comb = alir_trace(inp_fv, out_fv, optimize=True)
+    comb = trace(inp_fv, out_fv, optimize=True)
     assert out_fv.shape == (OUT_FEATURES,)
 
     n_samples = 16
@@ -367,7 +367,7 @@ def test_alkaid_single_layer(case_id):
     apply_final_compression(model)
 
     inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
-    comb = alir_trace(inp_fv, out_fv, optimize=True)
+    comb = trace(inp_fv, out_fv, optimize=True)
 
     n_samples = 16
     x = rng.integers(0, 16, size=(n_samples,) + input_shape).astype("float32") / 16.0

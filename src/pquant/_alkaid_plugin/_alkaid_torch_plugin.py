@@ -7,6 +7,11 @@ from typing import Any
 
 import numpy as np
 import torch
+
+try:
+    from torch.fx._symbolic_trace import is_fx_symbolic_tracing
+except ImportError:  # torch < 2.8 exposes it as is_fx_tracing
+    from torch.fx._symbolic_trace import is_fx_tracing as is_fx_symbolic_tracing
 from alkaid.converter.builtin.torch.layers.functional import _functional_map
 from alkaid.converter.builtin.torch.layers.methods import _method_map
 from alkaid.converter.builtin.torch.layers.modules import ReplayModuleBase
@@ -18,7 +23,6 @@ from pquant._alkaid_plugin._alkaid_common import (
 )
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.layers import (
-    PQAvgPoolBase,
     PQBatchNorm1d,
     PQBatchNorm2d,
     PQConv1d,
@@ -41,26 +45,6 @@ def _contains_fx_proxy(value: Any) -> bool:
     return False
 
 
-def _assert_torch_conversion_ready(layer: torch.nn.Module, input_shape: Any) -> None:
-    if not _contains_fx_proxy(input_shape):
-        return
-    if layer.training:
-        raise PQuantAlkaidError(
-            f'{layer.__class__.__name__} must be in eval mode before Alkaid conversion; '
-            'call model.eval() after building the graph.'
-        )
-
-
-def _assert_avg_pool_ready(layer: PQAvgPoolBase, x: Any) -> None:
-    if not _contains_fx_proxy(x):
-        return
-    if layer.training:
-        raise PQuantAlkaidError(
-            f'{layer.__class__.__name__} must be in eval mode before Alkaid conversion; '
-            'call model.eval() after building the graph.'
-        )
-
-
 def _patch_once(cls: type, name: str, wrapper_factory) -> None:
     marker = f'__alkaid_pquant_patched_{name}__'
     if getattr(cls, marker, False):
@@ -69,17 +53,6 @@ def _patch_once(cls: type, name: str, wrapper_factory) -> None:
     setattr(cls, f'__alkaid_pquant_original_{name}__', original)
     setattr(cls, name, wrapper_factory(original))
     setattr(cls, marker, True)
-
-
-def _is_fx_tracing() -> bool:
-    try:
-        from torch.fx._symbolic_trace import is_fx_symbolic_tracing
-
-        return bool(is_fx_symbolic_tracing())
-    except ImportError:
-        from torch.fx._symbolic_trace import is_fx_tracing
-
-        return bool(is_fx_tracing())
 
 
 def _module_parameter(module: torch.nn.Module, name: str) -> Any:
@@ -95,20 +68,11 @@ def _module_bool(module: torch.nn.Module, name: str, default: bool = False) -> b
     return bool(value)
 
 
-def _static_prune_weight(module: PQWeightBiasBase, weight: torch.Tensor) -> torch.Tensor:
-    if not bool(getattr(module, 'enable_pruning', False)):
-        return weight
-    mask = module.pruning_layer.get_hard_mask().to(device=weight.device, dtype=weight.dtype)
-    return weight * mask
-
-
-def _static_quantize(module: torch.nn.Module, tensor: torch.Tensor | None, quantizer_name: str) -> torch.Tensor | None:
-    if tensor is None:
-        return None
-    if not bool(getattr(module, 'enable_quantization', True)):
-        return tensor
-    quantized = replay_quantizer(getattr(module, quantizer_name), tensor.detach().cpu().numpy())
-    return torch.as_tensor(quantized, dtype=tensor.dtype, device=tensor.device)
+def _assert_final_compression(module: torch.nn.Module) -> None:
+    if not _module_bool(module, 'final_compression_done'):
+        raise PQuantAlkaidError(
+            f'{type(module).__name__} must have apply_final_compression() applied before Alkaid conversion.'
+        )
 
 
 def _patch_weight_bias_properties() -> None:
@@ -120,28 +84,16 @@ def _patch_weight_bias_properties() -> None:
         original_bias = cls.bias.fget
 
         def weight(self, _original_weight=original_weight):
-            if not _is_fx_tracing():
+            if not is_fx_symbolic_tracing():
                 return _original_weight(self)
-            raw_weight = _module_parameter(self, '_weight')
-            if _module_bool(self, 'final_compression_done') or self.is_fitcompress_pretraining():
-                return raw_weight
-            if isinstance(self, (PQBatchNorm1d, PQBatchNorm2d)):
-                return _static_quantize(self, raw_weight, 'weight_quantizer')
-            if self.pruning_first:
-                weight_value = _static_prune_weight(self, raw_weight)
-                return _static_quantize(self, weight_value, 'weight_quantizer')
-            weight_value = _static_quantize(self, raw_weight, 'weight_quantizer')
-            return _static_prune_weight(self, weight_value)
+            _assert_final_compression(self)
+            return _module_parameter(self, '_weight')
 
         def bias(self, _original_bias=original_bias):
-            if not _is_fx_tracing():
+            if not is_fx_symbolic_tracing():
                 return _original_bias(self)
-            raw_bias = _module_parameter(self, '_bias')
-            if raw_bias is None:
-                return None
-            if _module_bool(self, 'final_compression_done') or self.is_fitcompress_pretraining():
-                return raw_bias
-            return _static_quantize(self, raw_bias, 'bias_quantizer')
+            _assert_final_compression(self)
+            return _module_parameter(self, '_bias')
 
         cls.weight = property(weight)
         cls.bias = property(bias)
@@ -149,25 +101,11 @@ def _patch_weight_bias_properties() -> None:
 
 
 def _patch_lazy_build_assertions() -> None:
-    def wrap_check_is_built(original):
-        @wraps(original)
-        def wrapped(self, input_shape):
-            _assert_torch_conversion_ready(self, input_shape)
-            return original(self, input_shape)
-
-        return wrapped
-
-    for cls in (PQWeightBiasBase, PQActivation, PQBatchNorm1d, PQBatchNorm2d):
-        _patch_once(cls, 'check_is_built', wrap_check_is_built)
-
     def wrap_pre_forward(original):
         @wraps(original)
         def wrapped(self, x):
             if not _contains_fx_proxy(x):
                 return original(self, x)
-            self.check_is_built(x.shape)
-            if self.post_fitcompress_calibration:
-                raise PQuantAlkaidError('FITCompress calibration capture is not supported during Alkaid conversion.')
             if self.quantize_input:
                 x = self.quantize(x, self.input_quantizer)
             return x
@@ -197,10 +135,7 @@ def _patch_lazy_build_assertions() -> None:
         def wrapped(self, input):
             if not _contains_fx_proxy(input):
                 return original(self, input)
-            self.check_is_built(input.shape)
             if self.quantize_input and self.enable_quantization:
-                if self.is_fitcompress_pretraining():
-                    raise PQuantAlkaidError('FITCompress pretraining is not supported during Alkaid conversion.')
                 input = self.input_quantizer(input)
             return torch.nn.functional.batch_norm(
                 input,
@@ -218,39 +153,11 @@ def _patch_lazy_build_assertions() -> None:
     _patch_once(PQBatchNorm1d, 'forward', wrap_bn_forward)
     _patch_once(PQBatchNorm2d, 'forward', wrap_bn_forward)
 
-    def wrap_pre_pooling(original):
-        @wraps(original)
-        def wrapped(self, x):
-            _assert_avg_pool_ready(self, x)
-            return original(self, x)
-
-        return wrapped
-
-    _patch_once(PQAvgPoolBase, 'pre_pooling', wrap_pre_pooling)
-
-    def wrap_prune(original):
-        @wraps(original)
-        def wrapped(self, weight):
-            if not _contains_fx_proxy(weight):
-                return original(self, weight)
-            if not bool(getattr(self, 'enable_pruning', False)):
-                return weight
-            mask = self.pruning_layer.get_hard_mask()
-            return weight * mask
-
-        return wrapped
-
-    _patch_once(PQWeightBiasBase, 'prune', wrap_prune)
-
 
 class ReplayPQuantQuantizer(ReplayModuleBase):
     handles = (Quantizer,)
 
     def call(self, input: FVArray) -> FVArray:
-        if self.module.training:
-            raise PQuantAlkaidError(
-                'PQuant Torch Quantizer must be in eval mode before Alkaid conversion; call model.eval().'
-            )
         return replay_quantizer(self.module, input)
 
 

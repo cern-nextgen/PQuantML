@@ -17,8 +17,22 @@ import numpy as np
 import pytest
 import torch
 import torch.nn as nn
+from alkaid.codegen import RTLModel  # noqa: E402
+
+# Alkaid is required for this test; skip cleanly if it (or its deps) isn't installed.
+from alkaid.converter import trace_model
+from alkaid.trace import trace  # noqa: E402
+from alkaid.trace import FVArray, HWConfig  # noqa: E402
 
 from pquant import pdp_config
+
+# Load the pquant Alkaid plugin explicitly instead of relying on the `alkaid_torch`
+# entry point. register() patches the PQ layers for fx tracing and marks the plugin
+# loaded so Alkaid's lazy loader skips re-discovery. Without it (e.g. when the
+# installed package metadata doesn't expose the entry point, as with some editable
+# installs) tracing hits the un-patched `weight` property and torch.fx raises a
+# control-flow TraceError.
+from pquant._alkaid_plugin import _alkaid_torch_plugin  # noqa: E402
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.layers import (
     PQAvgPool1d,
@@ -31,20 +45,6 @@ from pquant.core.torch.layers import (
     apply_final_compression,
 )
 from pquant.core.torch.quantizer import Quantizer
-
-# Alkaid is required for this test; skip cleanly if it (or its deps) isn't installed.
-trace_model = pytest.importorskip("alkaid.converter").trace_model
-from alkaid.codegen import RTLModel  # noqa: E402
-from alkaid.trace import FVArray, HWConfig  # noqa: E402
-from alkaid.trace import trace as alir_trace  # noqa: E402
-
-# Load the pquant Alkaid plugin explicitly instead of relying on the `alkaid_torch`
-# entry point. register() patches the PQ layers for fx tracing and marks the plugin
-# loaded so Alkaid's lazy loader skips re-discovery. Without it (e.g. when the
-# installed package metadata doesn't expose the entry point, as with some editable
-# installs) tracing hits the un-patched `weight` property and torch.fx raises a
-# control-flow TraceError.
-from pquant._alkaid_plugin import _alkaid_torch_plugin  # noqa: E402
 
 _alkaid_torch_plugin.register()
 
@@ -167,7 +167,7 @@ def test_alkaid_rtl_matches_model(tmp_path):
     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
     # Lower the trace to combinational logic: the pure-Python interpreter `comb(...)`
     # is the exact software model the RTL is generated from.
-    comb = alir_trace(inp_fv, out_fv, optimize=True)
+    comb = trace(inp_fv, out_fv, optimize=True)
 
     # Sample inputs exactly representable in INPUT_KIF (non-negative multiples of
     # 2**-4) so the input-port quantization is a no-op and model == hardware input.
@@ -277,7 +277,7 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
 
     inputs = (_fixed_point_input((1, IN_FEATURES, ALL_H, ALL_W)), _fixed_point_input((1, IN_FEATURES, ALL_LIN)))
     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
-    comb = alir_trace(inp_fv, out_fv, optimize=True)
+    comb = trace(inp_fv, out_fv, optimize=True)
     assert out_fv.shape == (OUT_FEATURES,)
 
     n_samples = 16
@@ -368,7 +368,7 @@ def test_alkaid_single_layer(case_id):
     model.eval()
 
     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=(_fixed_point_input(shape),), framework="torch")
-    comb = alir_trace(inp_fv, out_fv, optimize=True)
+    comb = trace(inp_fv, out_fv, optimize=True)
 
     n_samples = 16
     x = rng.integers(0, 16, size=(n_samples,) + shape[1:]).astype("float32") / 16.0
