@@ -53,6 +53,7 @@ from pquant.core.torch.layers import (  # noqa: E402
     PQLayerNorm,
     PQMultiheadAttention,
 )
+from pquant.core.torch.quantizer import Quantizer  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # QONNX Quant node
@@ -1200,6 +1201,15 @@ def _emit_module(
             module, prefix, current, current, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
         )
         return out
+    if isinstance(module, Quantizer):
+        # Standalone quantizer (e.g. an auto-inserted missing quantizer or a
+        # constant-matrix quantizer): emit a single QDQ node from its k/i/f.
+        k, i, f = module.get_quantization_bits()
+        new_nodes, out = quant_fn(
+            prefix, current, module.round_mode, k, i, f, initializers, overflow_mode=getattr(module, "overflow", "SAT")
+        )
+        nodes.extend(new_nodes)
+        return out
     raise TypeError(f"Unsupported module type for ONNX export: {type(module).__name__}")
 
 
@@ -1481,6 +1491,8 @@ class _PQTracer(_fx.Tracer):
         PQAvgPool1d,
         PQAvgPool2d,
         PQMultiheadAttention,
+        PQActivation,
+        Quantizer,
     )
 
     def is_leaf_module(self, m: nn.Module, qualname: str) -> bool:
@@ -1516,13 +1528,16 @@ def convert_to_onnx_fx(
     # need to expand torch's two-arg .transpose(d0, d1) into a full ONNX perm.
     from torch.fx.passes.shape_prop import ShapeProp
 
+    # Build the probe tensor on the model's own device so ShapeProp doesn't hit a
+    # device mismatch when a default device (e.g. CUDA) is set via torch.set_default_device.
+    device = next((p.device for p in model.parameters()), None)
     with torch.no_grad():
-        ShapeProp(gm).propagate(torch.zeros(1, *input_shape))
+        ShapeProp(gm).propagate(torch.zeros(1, *input_shape, device=device))
 
     onnx_nodes: list[onnx.NodeProto] = []
     initializers: list[onnx.TensorProto] = []
     node_to_name: dict[_fx.Node, str] = {}
-    output_name: str = ""
+    output_names: list[str] = []
 
     def _res(arg) -> str:
         if isinstance(arg, _fx.Node):
@@ -1680,6 +1695,11 @@ def convert_to_onnx_fx(
                 onnx_nodes.append(oh.make_node("Relu", inputs=[_res(node.args[0])], outputs=[out]))
                 node_to_name[node] = out
 
+            elif fn in (_F.sigmoid, torch.sigmoid):
+                out = f"{node.name}_sigmoid"
+                onnx_nodes.append(oh.make_node("Sigmoid", inputs=[_res(node.args[0])], outputs=[out]))
+                node_to_name[node] = out
+
             elif fn is torch.flatten:
                 start_dim = node.args[1] if len(node.args) > 1 else node.kwargs.get("start_dim", 0)
                 out = f"{node.name}_flatten"
@@ -1739,28 +1759,29 @@ def convert_to_onnx_fx(
 
         elif node.op == "output":
             ret = node.args[0]
-            if isinstance(ret, _fx.Node):
-                val = node_to_name[ret]
+            rets = list(ret) if isinstance(ret, (tuple, list)) else [ret]
+            for r in rets:
+                if not isinstance(r, _fx.Node):
+                    raise TypeError("FX ONNX export: unsupported (non-tensor) model output")
+                val = node_to_name[r]
                 # MHA nodes store a tuple (out, avg_attn); expose the attention output.
-                output_name = val[0] if isinstance(val, tuple) else val
-            elif isinstance(ret, (tuple, list)) and len(ret) == 1:
-                val = node_to_name[ret[0]]
-                output_name = val[0] if isinstance(val, tuple) else val
-            else:
-                raise TypeError("Only single-output models are supported for FX ONNX export")
+                output_names.append(val[0] if isinstance(val, tuple) else val)
 
     with torch.no_grad():
-        dummy_out = model(torch.zeros(1, *input_shape))
-    output_shape = [None] + list(dummy_out.shape[1:])
+        dummy_out = model(torch.zeros(1, *input_shape, device=device))
+    dummy_outs = list(dummy_out) if isinstance(dummy_out, (tuple, list)) else [dummy_out]
 
     batch_dim = oh.make_tensor_value_info("input", TensorProto.FLOAT, [None, *input_shape])
-    output_vi = oh.make_tensor_value_info(output_name, TensorProto.FLOAT, output_shape)
+    output_vis = [
+        oh.make_tensor_value_info(name, TensorProto.FLOAT, [None] + list(t.shape[1:]))
+        for name, t in zip(output_names, dummy_outs)
+    ]
 
     onnx_graph = oh.make_graph(
         nodes=onnx_nodes,
         name="pquant_onnx_fx",
         inputs=[batch_dim],
-        outputs=[output_vi],
+        outputs=output_vis,
         initializer=initializers,
     )
 

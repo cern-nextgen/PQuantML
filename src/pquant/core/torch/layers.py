@@ -644,9 +644,15 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
         return s.format(**self.__dict__)
 
 
-def add_compression_layers(model, config, input_shape=None):
+def add_compression_layers(model, config, input_shape=None, add_missing_quantizers=False):
     model = add_quantized_activations_to_model_layer(model, config)
     model = add_pruning_to_model(model, config)
+    if add_missing_quantizers:
+        # Imported here (not at module top) to avoid a circular import: tracing.py
+        # imports the layer classes defined in this module.
+        from pquant.core.torch.tracing import check_quantization
+
+        model = check_quantization(model, add_missing_quantizers=True, config=config)
     model.to("cuda")
     if input_shape is not None:
         model(torch.rand(input_shape).to("cuda"))
