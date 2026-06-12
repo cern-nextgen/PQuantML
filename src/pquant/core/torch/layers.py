@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.fx import symbolic_trace
 from torch.nn.common_types import _size_1_t, _size_2_t
 
-from pquant.core.torch.activations import PQActivation
+from pquant.core.torch.activations import PQActivation, PQSoftmax
 from pquant.core.torch.quantizer import Quantizer
 from pquant.core.torch.utils import get_pruning_layer
 
@@ -1354,14 +1354,17 @@ class PQMultiheadAttention(nn.Module):
         vdim: Value feature dimension (defaults to embed_dim).
         batch_first: If True, input/output tensors are (batch, seq, feature).
             If False (default), tensors are (seq, batch, feature).
-        quantize_input: Whether to quantize Q/K/V projection inputs.
-        quantize_output: Whether to quantize projection outputs.
-        quantize_attn_weights: Whether to quantize attention weights after softmax.
+        quantize_input: Whether to quantize the Q/K/V projection inputs (the MHA inputs).
+        quantize_output: Whether to quantize the output projection's output (the MHA output).
+            The q/k/v projection outputs and the out_proj input (the context) are always
+            quantized, mirroring HGQ's QMultiHeadAttention.
         in_quant_bits: (k, i, f) bits for input quantization.
         weight_quant_bits: (k, i, f) bits for weight quantization.
         bias_quant_bits: (k, i, f) bits for bias quantization.
         out_quant_bits: (k, i, f) bits for output quantization.
-        attn_quant_bits: (k, i, f) bits for attention weight quantization.
+        attn_quant_bits: (k, i, f) bits for the softmax output quantizer (the attention
+            weights). The scores and context need no dedicated quantizers: the softmax's
+            input quantizer and the output projection's input quantizer cover them.
     """
 
     def __init__(
@@ -1376,17 +1379,12 @@ class PQMultiheadAttention(nn.Module):
         batch_first: bool = False,
         quantize_input: bool = True,
         quantize_output: bool = False,
-        quantize_attn_weights: bool = False,
-        quantize_attn_scores: bool = False,
-        quantize_context: bool = False,
         approximate_softmax: bool = False,
         in_quant_bits: Tuple[T, T, T] = None,
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
         attn_quant_bits: Tuple[T, T, T] = None,
-        attn_score_quant_bits: Tuple[T, T, T] = None,
-        context_quant_bits: Tuple[T, T, T] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1397,59 +1395,65 @@ class PQMultiheadAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.batch_first = batch_first
         self.dropout = dropout
-        self.quantize_attn_weights = quantize_attn_weights
-        self.quantize_attn_scores = quantize_attn_scores
-        self.quantize_context = quantize_context
         self.approximate_softmax = approximate_softmax
-        self.scale = self.head_dim**-0.5
-        self.softmax = nn.Softmax(dim=-1)
+        self.scale = float(torch.tensor(self.head_dim**-0.5, dtype=torch.float32).item())
+        self.softmax = PQSoftmax(config, -1, quantize_input=True, quantize_output=True, out_quant_bits=attn_quant_bits)
 
         kdim = kdim if kdim is not None else embed_dim
         vdim = vdim if vdim is not None else embed_dim
 
         proj_kwargs = dict(
             bias=bias,
-            quantize_input=quantize_input,
-            quantize_output=quantize_output,
             in_quant_bits=in_quant_bits,
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
         )
-        self.q_proj = PQDense(config, embed_dim, embed_dim, enable_pruning=False, **proj_kwargs)
-        self.k_proj = PQDense(config, kdim, embed_dim, enable_pruning=False, **proj_kwargs)
-        self.v_proj = PQDense(config, vdim, embed_dim, enable_pruning=False, **proj_kwargs)
-        self.out_proj = PQDense(config, embed_dim, embed_dim, **proj_kwargs)
+        qkv_kwargs = dict(quantize_input=quantize_input, quantize_output=True, **proj_kwargs)
+        self.q_proj = PQDense(config, embed_dim, embed_dim, enable_pruning=False, **qkv_kwargs)
+        self.k_proj = PQDense(config, kdim, embed_dim, enable_pruning=False, **qkv_kwargs)
+        self.v_proj = PQDense(config, vdim, embed_dim, enable_pruning=False, **qkv_kwargs)
+        self.out_proj = PQDense(
+            config, embed_dim, embed_dim, quantize_input=True, quantize_output=quantize_output, **proj_kwargs
+        )
 
         self.attn_dropout = None
-
-        def _make_data_quantizer(bits):
-            if bits is not None:
-                k, i, f = bits
-            else:
-                k = config.quantization_parameters.default_data_keep_negatives
-                i = config.quantization_parameters.default_data_integer_bits
-                f = config.quantization_parameters.default_data_fractional_bits
-            return Quantizer(
-                k=torch.tensor(k),
-                i=torch.tensor(i),
-                f=torch.tensor(f),
-                overflow=config.quantization_parameters.overflow_mode_data,
-                round_mode=config.quantization_parameters.round_mode,
-                is_heterogeneous=config.quantization_parameters.use_high_granularity_quantization,
-                is_data=True,
-                hgq_gamma=config.quantization_parameters.hgq_gamma,
-                place="datalane",
-                dynamic_data=config.quantization_parameters.dynamic_data_quantization,
-            )
-
-        if quantize_attn_weights:
-            self.attn_weight_quantizer = _make_data_quantizer(attn_quant_bits)
-        if quantize_attn_scores:
-            self.attn_score_quantizer = _make_data_quantizer(attn_score_quant_bits)
-        if quantize_context:
-            self.context_quantizer = _make_data_quantizer(context_quant_bits)
         self.enable_quantization = config.quantization_parameters.enable_quantization
+        self.use_hgq = config.quantization_parameters.use_high_granularity_quantization
+        self.hgq_beta = config.quantization_parameters.hgq_beta
+        self.is_pretraining = True
+
+    def post_pre_train_function(self):
+        # The projections, softmax and data quantizers are handled separately by the
+        # recursive modules() walk in post_pretrain_functions.
+        self.is_pretraining = False
+
+    def _head_bits(self, proj, seq_len):
+        """Bitwidths of a projection's output, in per-head layout (1, H, seq, head_dim)."""
+        bw = proj.output_quantizer.get_total_bits((1, seq_len, self.embed_dim))
+        return bw.reshape(1, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+    def _attention_ebops(self):
+        """EBOPs of the q @ k^T and attn @ v einsums (mirrors HGQ's QMultiHeadAttention._compute_ebops)."""
+        attn_shape = self.softmax.input_shape  # (1, H, T, S), stored when the softmax was built
+        query_len, key_len = attn_shape[2], attn_shape[3]
+        bw_q = self._head_bits(self.q_proj, query_len)
+        bw_k = self._head_bits(self.k_proj, key_len)
+        bw_v = self._head_bits(self.v_proj, key_len)
+        bw_attn = self.softmax.output_quantizer.get_total_bits(attn_shape)
+        ebops_qk = torch.einsum("bhtd,bhsd->", bw_q, bw_k)
+        ebops_av = torch.einsum("bhts,bhsd->", bw_attn, bw_v)
+        return ebops_qk + ebops_av
+
+    def ebops(self):
+        # Only the attention einsum costs are this module's own: the projections,
+        # softmax and lookup tables are counted by get_ebops's recursive modules() walk.
+        return self._attention_ebops()
+
+    def hgq_loss(self):
+        if self.is_pretraining or not self.use_hgq:
+            return torch.tensor(0.0)
+        return self.hgq_beta * self._attention_ebops()
 
     def forward(
         self,
@@ -1460,59 +1464,43 @@ class PQMultiheadAttention(nn.Module):
         attn_mask: Optional[torch.Tensor] = None,
         need_weights: bool = True,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        if self.batch_first:
-            # (B, T, E) -> keep as-is
-            B, T, _ = query.shape
-            S = key.shape[1]
-        else:
+        if not self.batch_first:
             # (T, B, E) -> (B, T, E)
             query = query.transpose(0, 1)
             key = key.transpose(0, 1)
             value = value.transpose(0, 1)
-            B, T, _ = query.shape
-            S = key.shape[1]
+
+        B, T = query.shape[0], query.shape[1]
+        S = key.shape[1]
 
         q = self.q_proj(query)  # (B, T, E)
         k = self.k_proj(key)  # (B, S, E)
         v = self.v_proj(value)  # (B, S, E)
 
-        # Reshape to (B, H, T/S, head_dim)
         q = q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # Scaled dot-product attention scores: (B, H, T, S)
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
 
         if attn_mask is not None:
             if attn_mask.dim() == 2:
-                # (T, S) -> (1, 1, T, S), broadcast over batch and heads
                 attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
             elif attn_mask.dim() == 3:
-                # (B*H, T, S) -> (B, H, T, S)
                 attn_mask = attn_mask.view(B, self.num_heads, T, S)
             attn_scores = attn_scores + attn_mask
 
+        mask = None
         if key_padding_mask is not None:
-            # key_padding_mask: (B, S), True means ignore
-            attn_scores = attn_scores.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
+            mask = ~key_padding_mask.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, S)
 
-        if self.quantize_attn_scores and self.enable_quantization:
-            attn_scores = self.attn_score_quantizer(attn_scores)
-
-        attn_weights = self.softmax(attn_scores)
-
-        if self.quantize_attn_weights and self.enable_quantization:
-            attn_weights = self.attn_weight_quantizer(attn_weights)
+        # The softmax's own input/output quantizers handle the scores and the attention weights;
+        attn_weights = self.softmax(attn_scores, mask=mask)
 
         if self.attn_dropout is not None and self.training:
             attn_weights = self.attn_dropout(attn_weights)
 
-        # Weighted sum of values: (B, H, T, head_dim)
         out = torch.matmul(attn_weights, v)
-
-        if self.quantize_context and self.enable_quantization:
-            out = self.context_quantizer(out)
 
         # Merge heads: (B, T, E)
         out = out.transpose(1, 2).contiguous().view(B, T, self.embed_dim)
@@ -1529,10 +1517,7 @@ class PQMultiheadAttention(nn.Module):
     def extra_repr(self) -> str:
         return (
             f"embed_dim={self.embed_dim}, num_heads={self.num_heads}, "
-            f"dropout={self.dropout}, batch_first={self.batch_first}, "
-            f"quantize_attn_scores={self.quantize_attn_scores}, "
-            f"quantize_attn_weights={self.quantize_attn_weights}, "
-            f"quantize_context={self.quantize_context}"
+            f"dropout={self.dropout}, batch_first={self.batch_first}"
         )
 
 
@@ -1976,6 +1961,8 @@ def post_pretrain_functions(model, config, train_loader=None, loss_function=None
                     PQBatchNorm1d,
                     PQLayerNorm,
                     PQAvgPoolBase,
+                    PQSoftmax,
+                    PQMultiheadAttention,
                     Quantizer,
                 ),
             ):
@@ -2007,6 +1994,8 @@ def post_pretrain_functions(model, config, train_loader=None, loss_function=None
                     PQBatchNorm1d,
                     PQLayerNorm,
                     PQAvgPoolBase,
+                    PQSoftmax,
+                    PQMultiheadAttention,
                     Quantizer,
                 ),
             ):
@@ -2076,7 +2065,19 @@ def get_model_losses(model, losses):
             if layer.use_hgq:
                 loss += layer.hgq_loss()
             losses += loss
-        elif isinstance(layer, (PQAvgPool1d, PQAvgPool2d, PQBatchNorm2d, PQBatchNorm1d, PQLayerNorm, PQActivation)):
+        elif isinstance(
+            layer,
+            (
+                PQAvgPool1d,
+                PQAvgPool2d,
+                PQBatchNorm2d,
+                PQBatchNorm1d,
+                PQLayerNorm,
+                PQActivation,
+                PQSoftmax,
+                PQMultiheadAttention,
+            ),
+        ):
             if layer.use_hgq:
                 losses += layer.hgq_loss()
     return losses
@@ -2227,7 +2228,9 @@ def get_ebops(model, **kwargs):
     for m in model.modules():
         if isinstance(m, (PQWeightBiasBase)):
             ebops += m.ebops(include_mask=m.enable_pruning)
-        elif isinstance(m, (PQAvgPoolBase, PQBatchNorm1d, PQBatchNorm2d, PQLayerNorm, PQActivation)):
+        elif isinstance(
+            m, (PQAvgPoolBase, PQBatchNorm1d, PQBatchNorm2d, PQLayerNorm, PQActivation, PQSoftmax, PQMultiheadAttention)
+        ):
             ebops += m.ebops()
     return ebops
 

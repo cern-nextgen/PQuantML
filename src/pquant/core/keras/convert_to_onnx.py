@@ -873,11 +873,9 @@ def _add_mha(layer, prefix, q_input, k_input, v_input, nodes, initializers, quan
     k_h = _split_heads(k_proj_out, f"{prefix}_k")
     v_h = _split_heads(v_proj_out, f"{prefix}_v")
 
-    # --- k^T: (B, H, S, head_dim) → (B, H, head_dim, S) ---
     k_t_name = f"{prefix}_k_T"
     nodes.append(oh.make_node("Transpose", inputs=[k_h], outputs=[k_t_name], perm=[0, 1, 3, 2]))
 
-    # --- Scaled dot-product scores: (B, H, T, head_dim) @ (B, H, head_dim, S) → (B, H, T, S) ---
     raw_scores = f"{prefix}_scores_raw"
     scaled_scores = f"{prefix}_scores_scaled"
     scale_cst = f"{prefix}_attn_scale"
@@ -886,13 +884,8 @@ def _add_mha(layer, prefix, q_input, k_input, v_input, nodes, initializers, quan
     nodes.append(oh.make_node("Mul", inputs=[raw_scores, scale_cst], outputs=[scaled_scores]))
     current = scaled_scores
 
-    # --- Optional attn-score quantization ---
-    if (
-        getattr(layer, "quantize_attn_scores", False)
-        and hasattr(layer, "attn_score_quantizer")
-        and getattr(layer, "enable_quantization", True)
-    ):
-        q = layer.attn_score_quantizer
+    if layer.softmax.quantize_input and getattr(layer, "enable_quantization", True):
+        q = layer.softmax.input_quantizer
         k_q, i_q, f_q = q.get_quantization_bits()
         q_nodes, current = quant_fn(
             f"{prefix}_attn_score_q",
@@ -911,13 +904,9 @@ def _add_mha(layer, prefix, q_input, k_input, v_input, nodes, initializers, quan
     nodes.append(oh.make_node("Softmax", inputs=[current], outputs=[attn_w_name], axis=-1))
     current = attn_w_name
 
-    # --- Optional attn-weight quantization ---
-    if (
-        getattr(layer, "quantize_attn_weights", False)
-        and hasattr(layer, "attn_weight_quantizer")
-        and getattr(layer, "enable_quantization", True)
-    ):
-        q = layer.attn_weight_quantizer
+    # --- Softmax output quantization (the MHA enables the softmax's output quantizer) ---
+    if layer.softmax.quantize_output and getattr(layer, "enable_quantization", True):
+        q = layer.softmax.output_quantizer
         k_q, i_q, f_q = q.get_quantization_bits()
         q_nodes, current = quant_fn(
             f"{prefix}_attn_weight_q",
@@ -931,32 +920,10 @@ def _add_mha(layer, prefix, q_input, k_input, v_input, nodes, initializers, quan
         )
         nodes.extend(q_nodes)
 
-    # --- Context: (B, H, T, S) @ (B, H, S, head_dim) → (B, H, T, head_dim) ---
     ctx_raw = f"{prefix}_ctx_raw"
     nodes.append(oh.make_node("MatMul", inputs=[current, v_h], outputs=[ctx_raw]))
     current_ctx = ctx_raw
 
-    # --- Optional context quantization ---
-    if (
-        getattr(layer, "quantize_context", False)
-        and hasattr(layer, "context_quantizer")
-        and getattr(layer, "enable_quantization", True)
-    ):
-        q = layer.context_quantizer
-        k_q, i_q, f_q = q.get_quantization_bits()
-        q_nodes, current_ctx = quant_fn(
-            f"{prefix}_context_q",
-            current_ctx,
-            q.round_mode,
-            _np(k_q),
-            _np(i_q),
-            _np(f_q),
-            initializers,
-            overflow_mode=getattr(q, "overflow", "SAT"),
-        )
-        nodes.extend(q_nodes)
-
-    # --- Merge heads: (B, H, T, head_dim) → (B, T, E) using dynamic shapes ---
     ctx_t = f"{prefix}_ctx_t"
     ctx_shape = f"{prefix}_ctx_shape"
     ctx_b_sc = f"{prefix}_ctx_b_sc"

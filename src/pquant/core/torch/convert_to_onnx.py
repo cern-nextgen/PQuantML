@@ -906,13 +906,9 @@ def _add_mha(module, prefix, q_input, k_input, v_input, nodes, initializers, qua
     nodes.append(oh.make_node("Mul", inputs=[raw_scores, scale_cst], outputs=[scaled_scores]))
     current = scaled_scores
 
-    # --- Optional attn-score quantization ---
-    if (
-        getattr(module, "quantize_attn_scores", False)
-        and hasattr(module, "attn_score_quantizer")
-        and getattr(module, "enable_quantization", True)
-    ):
-        q = module.attn_score_quantizer
+    # --- Softmax input quantization (the MHA enables the softmax's input quantizer) ---
+    if module.softmax.quantize_input and getattr(module, "enable_quantization", True):
+        q = module.softmax.input_quantizer
         k_q, i_q, f_q = q.get_quantization_bits()
         q_nodes, current = quant_fn(
             f"{prefix}_attn_score_q",
@@ -931,13 +927,9 @@ def _add_mha(module, prefix, q_input, k_input, v_input, nodes, initializers, qua
     nodes.append(oh.make_node("Softmax", inputs=[current], outputs=[attn_w_name], axis=-1))
     current = attn_w_name
 
-    # --- Optional attn-weight quantization ---
-    if (
-        getattr(module, "quantize_attn_weights", False)
-        and hasattr(module, "attn_weight_quantizer")
-        and getattr(module, "enable_quantization", True)
-    ):
-        q = module.attn_weight_quantizer
+    # --- Softmax output quantization (the MHA enables the softmax's output quantizer) ---
+    if module.softmax.quantize_output and getattr(module, "enable_quantization", True):
+        q = module.softmax.output_quantizer
         k_q, i_q, f_q = q.get_quantization_bits()
         q_nodes, current = quant_fn(
             f"{prefix}_attn_weight_q",
@@ -952,29 +944,10 @@ def _add_mha(module, prefix, q_input, k_input, v_input, nodes, initializers, qua
         nodes.extend(q_nodes)
 
     # --- Context: (B, H, T, S) @ (B, H, S, head_dim) → (B, H, T, head_dim) ---
+    # No dedicated quantizer: out_proj's input quantizer (exported with the dense) covers it.
     ctx_raw = f"{prefix}_ctx_raw"
     nodes.append(oh.make_node("MatMul", inputs=[current, v_h], outputs=[ctx_raw]))
     current_ctx = ctx_raw
-
-    # --- Optional context quantization ---
-    if (
-        getattr(module, "quantize_context", False)
-        and hasattr(module, "context_quantizer")
-        and getattr(module, "enable_quantization", True)
-    ):
-        q = module.context_quantizer
-        k_q, i_q, f_q = q.get_quantization_bits()
-        q_nodes, current_ctx = quant_fn(
-            f"{prefix}_context_q",
-            current_ctx,
-            q.round_mode,
-            k_q,
-            i_q,
-            f_q,
-            initializers,
-            overflow_mode=getattr(q, "overflow", "SAT"),
-        )
-        nodes.extend(q_nodes)
 
     # --- Merge heads: (B, H, T, head_dim) → (B, T, E) using dynamic shapes ---
     ctx_t = f"{prefix}_ctx_t"  # after Transpose → (B, T, H, head_dim)
