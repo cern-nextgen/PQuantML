@@ -6,10 +6,6 @@ gradients on the fractional-bit parameter `f`, and should follow a similar
 training trajectory when fed the same data with the same initial state.
 """
 
-import os
-
-os.environ.setdefault("KERAS_BACKEND", "torch")
-
 import pytest  # noqa: E402
 import torch  # noqa: E402
 
