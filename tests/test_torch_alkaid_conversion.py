@@ -84,6 +84,18 @@ def _fixed_point_input(shape, kif=INPUT_KIF):
     return FVArray.from_kif(k, i, f, HWCONF, 0, None)
 
 
+def _rtl_predict(comb, path, data):
+    """Write the RTL project, compile the simulation emulator, and run bit-accurate inference."""
+    rtl_model = RTLModel(comb, str(path), "model", flavor="verilog", latency_cutoff=5, clock_period=5.0, print_latency=False)
+    rtl_model.write()
+    rtl_model.compile()
+    if isinstance(data, list):
+        data = [a.astype(np.float64) for a in data]
+    else:
+        data = data.astype(np.float64)
+    return rtl_model.predict(data)
+
+
 def _build_pruned_compressed_model(config, rng):
     """Build the model, build it (one forward), prune 90%, apply final compression, eval."""
     model = TwoBranchNet(config)
@@ -140,19 +152,11 @@ def test_alkaid_rtl_matches_model(tmp_path):
             model(torch.tensor(img, device=device), torch.tensor(seq, device=device)).cpu().numpy().astype(np.float64)
         )  # (n_samples, OUT_FEATURES)
 
-    emulated = np.stack(
-        [
-            np.asarray(comb(np.concatenate([img[n].ravel(), seq[n].ravel()]), quantize=True), dtype=np.float64)
-            for n in range(n_samples)
-        ]
-    )
+    emulated = _rtl_predict(comb, tmp_path, [img, seq])
+    assert (tmp_path / "src" / "model.v").exists()
 
     assert np.any(reference != 0)  # the comparison is non-trivial
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
-
-    # Generate the actual RTL project from the same combinational logic.
-    RTLModel(comb, str(tmp_path), "model", flavor="verilog", print_latency=False).write()
-    assert (tmp_path / "src" / "model.v").exists()
 
 
 # --- Coverage of every PQ layer the torch Alkaid plugin handles ---------------
@@ -243,18 +247,11 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
         reference = (
             model(torch.tensor(img, device=device), torch.tensor(seq, device=device)).cpu().numpy().astype(np.float64)
         )
-    emulated = np.stack(
-        [
-            np.asarray(comb(np.concatenate([img[n].ravel(), seq[n].ravel()]), quantize=True), dtype=np.float64)
-            for n in range(n_samples)
-        ]
-    )
+    emulated = _rtl_predict(comb, tmp_path, [img, seq])
+    assert (tmp_path / "src" / "model.v").exists()
 
     assert np.any(reference != 0)
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
-
-    RTLModel(comb, str(tmp_path), "model", flavor="verilog", print_latency=False).write()
-    assert (tmp_path / "src" / "model.v").exists()
 
 
 # --- Per-layer conversion: a model that is a single layer ---------------------
@@ -309,7 +306,7 @@ _SINGLE_LAYER_CASES = {
 
 
 @pytest.mark.parametrize("case_id", list(_SINGLE_LAYER_CASES))
-def test_alkaid_single_layer(case_id):
+def test_alkaid_single_layer(case_id, tmp_path):
     config = pdp_config()
     config.quantization_parameters.enable_quantization = True
     shape, model = _SINGLE_LAYER_CASES[case_id](config)
@@ -328,7 +325,7 @@ def test_alkaid_single_layer(case_id):
     x = rng.integers(0, 16, size=(n_samples,) + shape[1:]).astype("float32") / 16.0
     with torch.no_grad():
         reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
-    emulated = np.stack([np.asarray(comb(x[i].ravel(), quantize=True), dtype=np.float64) for i in range(n_samples)])
+    emulated = _rtl_predict(comb, tmp_path, x)
 
     assert np.any(reference != 0)
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
@@ -384,7 +381,7 @@ def test_alkaid_multihead_attention(tmp_path):
     x = rng.integers(0, 16, size=(n_samples, MHA_SEQ_LEN, MHA_EMBED_DIM)).astype("float32") / 16.0
     with torch.no_grad():
         reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
-    emulated = np.stack([np.asarray(comb(x[i].ravel(), quantize=True), dtype=np.float64) for i in range(n_samples)])
+    emulated = _rtl_predict(comb, tmp_path, x)
 
     assert np.any(reference != 0)
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
