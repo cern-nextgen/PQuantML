@@ -1901,26 +1901,21 @@ class PQMultiheadAttention(keras.layers.Layer):
             weight_quant_granularity=param_quant_granularity,
             bias_quant_granularity=param_quant_granularity,
         )
-        self.q_proj = PQDense(
-            config, embed_dim, enable_pruning=False, in_quant_granularity=in_quant_granularity, **proj_kwargs
-        )
-        self.k_proj = PQDense(
-            config, embed_dim, enable_pruning=False, in_quant_granularity=in_quant_granularity, **proj_kwargs
-        )
-        self.v_proj = PQDense(
-            config, embed_dim, enable_pruning=False, in_quant_granularity=in_quant_granularity, **proj_kwargs
-        )
-        self.out_proj = PQDense(
-            config,
-            embed_dim,
-            **{**proj_kwargs, "quantize_output": quantize_output, "out_quant_granularity": out_quant_granularity},
-        )
 
-        qkv_kwargs = dict(quantize_input=quantize_input, quantize_output=True,  in_quant_granularity=in_quant_granularity, **proj_kwargs)
+        qkv_kwargs = dict(
+            quantize_input=quantize_input, quantize_output=True, in_quant_granularity=in_quant_granularity, **proj_kwargs
+        )
         self.q_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.k_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.v_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
-        self.out_proj = PQDense(config, embed_dim, quantize_input=True, quantize_output=quantize_output, **proj_kwargs)
+        self.out_proj = PQDense(
+            config,
+            embed_dim,
+            quantize_input=True,
+            quantize_output=quantize_output,
+            out_quant_granularity=out_quant_granularity,
+            **proj_kwargs,
+        )
 
         self.attn_dropout = keras.layers.Dropout(dropout) if dropout > 0.0 else None
 
@@ -1994,12 +1989,8 @@ class PQMultiheadAttention(keras.layers.Layer):
         v = ops.reshape(v, (batch_size, key_len, self.num_heads, self.head_dim))
         v = ops.transpose(v, (0, 2, 1, 3))
 
-        q = q * self.scale
-
-        attn_scores = ops.matmul(q, ops.transpose(k, (0, 1, 3, 2)))
-
-        if self.quantize_attn_scores and self.enable_quantization:
-            attn_scores = self.attn_score_quantizer(attn_scores, training=training)
+        # Scaled dot-product attention scores: (B, H, T, S)
+        attn_scores = ops.matmul(q, ops.transpose(k, (0, 1, 3, 2))) * self.scale
 
         if attn_mask is not None:
             if ops.ndim(attn_mask) == 2:

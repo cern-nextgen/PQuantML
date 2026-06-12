@@ -1491,15 +1491,9 @@ class PQMultiheadAttention(nn.Module):
         kdim = kdim if kdim is not None else embed_dim
         vdim = vdim if vdim is not None else embed_dim
 
-        # Granularity split: `param` (weight+bias) is uniform across all four projections;
-        # `in` applies only to the Q/K/V projection inputs (the boundary inputs) and `out` only
-        # to the out_proj output (the boundary output).
         self.in_quant_granularity = in_quant_granularity
         self.out_quant_granularity = out_quant_granularity
         self.param_quant_granularity = param_quant_granularity
-        # Q/K/V projection outputs are matmul operands, so they are always output-quantized (gated
-        # only by enable_quantization) to make Q/K/V fixed-point. The MHA-level `quantize_output`
-        # controls the block's actual output, i.e. only the out_proj output quantizer.
         proj_kwargs = dict(
             bias=bias,
             in_quant_bits=in_quant_bits,
@@ -1510,12 +1504,20 @@ class PQMultiheadAttention(nn.Module):
             bias_quant_granularity=param_quant_granularity,
         )
 
-        qkv_kwargs = dict(quantize_input=quantize_input, quantize_output=True,  in_quant_granularity=in_quant_granularity, **proj_kwargs)
+        qkv_kwargs = dict(
+            quantize_input=quantize_input, quantize_output=True, in_quant_granularity=in_quant_granularity, **proj_kwargs
+        )
         self.q_proj = PQDense(config, embed_dim, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.k_proj = PQDense(config, kdim, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.v_proj = PQDense(config, vdim, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.out_proj = PQDense(
-            config, embed_dim, embed_dim, quantize_input=True, quantize_output=quantize_output,  out_quant_granularity=out_quant_granularity, **proj_kwargs
+            config,
+            embed_dim,
+            embed_dim,
+            quantize_input=True,
+            quantize_output=quantize_output,
+            out_quant_granularity=out_quant_granularity,
+            **proj_kwargs,
         )
 
         self.attn_dropout = None
