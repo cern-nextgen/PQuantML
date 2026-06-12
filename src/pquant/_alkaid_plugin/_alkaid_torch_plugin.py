@@ -176,22 +176,12 @@ def _table_fn(table):
 
 
 class ReplayPQuantSoftmax(ReplayModuleBase):
-    """Replay PQSoftmax as a single fx-leaf module.
-
-    Registering this handler makes PQSoftmax a torch.fx leaf, which is required: traced
-    op-by-op, the inv table's ``1/(x + eps)`` would add the tiny float epsilon as a plain
-    constant (exploding the fixed-point step) instead of folding into one lookup table.
-    """
+    """Replay PQSoftmax as a single fx-leaf module"""
 
     handles = (PQSoftmax,)
 
     @staticmethod
     def _replay_table(table, x: FVArray) -> FVArray:
-        """Replay an exp/inv PQActivation table: input quantizer -> unary map -> output quantizer.
-
-        The unary map yields a RetardedFVArray that the output quantizer materializes into a
-        hardware lookup table, so the table's output quantizer must be enabled.
-        """
         if not (table.quantize_output and table.enable_quantization):
             raise PQuantAlkaidError(
                 f'PQSoftmax table {type(table).__name__} must have an enabled output quantizer for Alkaid conversion.'

@@ -210,11 +210,6 @@ class ReplayPQuantSoftmax(ReplayOperationBase):
 
     @staticmethod
     def _replay_table(table, x: FVArray) -> FVArray:
-        """Replay an exp/inv PQActivation table: input quantizer -> unary map -> output quantizer.
-
-        The unary map yields a RetardedFVArray that the output quantizer materializes into a
-        hardware lookup table, so the table's output quantizer must be enabled.
-        """
         if not (table.quantize_output and table.enable_quantization):
             raise PQuantAlkaidError(
                 f'PQSoftmax table {table.name!r} must have an enabled output quantizer for Alkaid conversion.'
@@ -270,15 +265,10 @@ class ReplayPQuantMultiheadAttention(ReplayOperationBase):
         k = k.reshape(batch_size, key_len, num_heads, head_dim).transpose(0, 2, 1, 3)
         v = v.reshape(batch_size, key_len, num_heads, head_dim).transpose(0, 2, 1, 3)
 
-        # Scaled dot-product attention scores q @ k^T: (B, H, T, S). FVArray's np.matmul
-        # contracts dot-style (no batch dims), so use alkaid's two-operand einsum instead.
-        # The runtime multiplies by the scale in float32, so round it to float32 here too;
-        # this also keeps the constant short enough for alkaid's shift-add (scm) solver.
         scale = float(np.float32(layer.scale))
         attn_scores = einsum('bhtd,bhsd->bhts', q, k) * scale
 
-        # The softmax's own input/output quantizers handle the scores and the attention
-        # weights; the context is quantized by out_proj's input quantizer.
+        # The softmax's own input/output quantizers handle the scores and the attention weights
         attn_weights = ReplayPQuantSoftmax(layer.softmax).call(attn_scores)
 
         # Weighted sum of values (dropout is an inference no-op): (B, H, T, head_dim)
