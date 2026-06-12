@@ -265,7 +265,6 @@ class PQSoftmax(keras.layers.Layer):
         if out_quant_bits is not None:
             self.k_output, self.i_output, self.f_output = out_quant_bits
         else:
-            # The softmax output is in [0, 1] -> unsigned by default.
             self.k_output = 0
             self.i_output = config.quantization_parameters.default_data_integer_bits
             self.f_output = config.quantization_parameters.default_data_fractional_bits
@@ -289,7 +288,6 @@ class PQSoftmax(keras.layers.Layer):
         i_data = config.quantization_parameters.default_data_integer_bits
         f_data = config.quantization_parameters.default_data_fractional_bits
         k_data = config.quantization_parameters.default_data_keep_negatives
-        # Table outputs (exp, 1/x) are non-negative, so default them to unsigned (k=0).
         exp_in_quant_bits = exp_in_quant_bits if exp_in_quant_bits is not None else (k_data, i_data, f_data)
         exp_out_quant_bits = exp_out_quant_bits if exp_out_quant_bits is not None else (0, i_data, f_data)
         inv_in_quant_bits = inv_in_quant_bits if inv_in_quant_bits is not None else (k_data, i_data, f_data)
@@ -303,7 +301,6 @@ class PQSoftmax(keras.layers.Layer):
         def _inv(x):
             return 1.0 / (x + self.epsilon)
 
-        # exp/inv tables are PQActivations whose activation is the callable above.
         self.exp_table = PQActivation(
             config,
             _exp,
@@ -311,8 +308,6 @@ class PQSoftmax(keras.layers.Layer):
             out_quant_bits=exp_out_quant_bits,
             quantize_input=stable,
             quantize_output=True,
-            # When not stable the exp table has no input quantizer; its LUT cost is then
-            # folded into this layer's ebops (mirrors HGQ's enable_ebops=stable).
             enable_ebops=stable,
         )
         self.inv_table = PQActivation(
@@ -366,10 +361,6 @@ class PQSoftmax(keras.layers.Layer):
         self.inv_table.post_pre_train_function()
 
     def ebops(self):
-        # Cost of the softmax-specific arithmetic (subtraction, accumulation, multiplication)
-        # plus the exp/inv lookup-table costs. Unlike the torch backend (whose get_ebops walks
-        # model.modules() recursively), keras get_ebops iterates only top-level model.layers,
-        # so the nested table costs are accounted for here to avoid undercounting.
         shape = self.input_shape
         accum_shape = tuple(1 if i in self.axes else s for i, s in enumerate(shape))
         max_instance = prod(accum_shape)
@@ -386,12 +377,8 @@ class PQSoftmax(keras.layers.Layer):
 
         ebops = substract_ebops + accum_ebops + mult_ebops
         if not self.stable:
-            # exp table input quantization is disabled (enable_ebops=False there), so its
-            # lookup-table input cost is accounted for here instead, avoiding double counting.
             ebops = ebops + ops.sum((2.0**inp_bits) * exp_bits) * 1e-4
         ebops = ebops * factor
-        # Table LUT costs are not scaled by the parallelization factor (matches torch get_ebops,
-        # which sums the table PQActivation ebops separately from this layer's softmax cost).
         return ebops + self.exp_table.ebops() + self.inv_table.ebops()
 
     def hgq_loss(self):
