@@ -46,6 +46,7 @@ class Quantizer(keras.layers.Layer):
         m = ops.ceil(ops.log(abs_x + 1e-6) / ops.log(2.0))
         int_bits = ops.maximum(m, 0.0)
         b = self.b if hasattr(self, "b") else self.b_init
+        int_bits = ops.minimum(m, b - self.k)
         frac_bits = ops.maximum(b - int_bits - self.k_init, 0.0)
         return int_bits, frac_bits
 

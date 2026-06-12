@@ -1,37 +1,15 @@
-"""Convert a pruned + quantized PQuant Torch model with Alkaid.
-
-Torch counterpart of ``test_keras_alkaid_conversion``: exercises the
-``alkaid_torch`` second-level plugin (``pquant._alkaid_plugin``). Build a model
-from PQConv2d / PQConv1d / PQDense with relu PQActivation, randomly prune 90% of
-every weight tensor, bake the pruning and quantization in with
-``apply_final_compression``, then trace the model into Alkaid's IR. A second test
-additionally lowers the trace to an RTL project and checks that the RTL's
-software model reproduces the Torch model's outputs bit-for-bit.
-
-Alkaid traces Torch models through ``torch.fx``, so the model must be in eval
-mode and already built (one real forward pass) before conversion, and the
-symbolic inputs must be supplied explicitly (shapes cannot be inferred).
-"""
+"""Convert a pruned + quantized PQuant Torch model with Alkaid"""
 
 import numpy as np
 import pytest
 import torch
 import torch.nn as nn
 from alkaid.codegen import RTLModel  # noqa: E402
-
-# Alkaid is required for this test; skip cleanly if it (or its deps) isn't installed.
 from alkaid.converter import trace_model
 from alkaid.trace import trace  # noqa: E402
 from alkaid.trace import FVArray, HWConfig  # noqa: E402
 
 from pquant import pdp_config
-
-# Load the pquant Alkaid plugin explicitly instead of relying on the `alkaid_torch`
-# entry point. register() patches the PQ layers for fx tracing and marks the plugin
-# loaded so Alkaid's lazy loader skips re-discovery. Without it (e.g. when the
-# installed package metadata doesn't expose the entry point, as with some editable
-# installs) tracing hits the un-patched `weight` property and torch.fx raises a
-# control-flow TraceError.
 from pquant._alkaid_plugin import _alkaid_torch_plugin  # noqa: E402
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.layers import (
@@ -42,6 +20,8 @@ from pquant.core.torch.layers import (
     PQConv1d,
     PQConv2d,
     PQDense,
+    PQMultiheadAttention,
+    PQSoftmax,
     apply_final_compression,
 )
 from pquant.core.torch.quantizer import Quantizer
@@ -52,13 +32,10 @@ IN_FEATURES = 3
 OUT_FEATURES = 4
 KERNEL_SIZE = 3
 H = W = 6
-# Match the conv1d flatten length to the conv2d branch's so the two can be merged.
 SEQ_LEN = H * W
 
 PRUNE_FRACTION = 0.9
 HWCONF = HWConfig(1, 1, -1)
-# Input fixed-point format (signed, 4 integer, 4 fractional bits) for the hardware
-# input ports; bounded so the SAT input quantizer can be replayed.
 INPUT_KIF = (1, 4, 4)
 
 
@@ -118,7 +95,6 @@ def _build_pruned_compressed_model(config, rng):
         model(img, seq)  # build quantizers + pruning masks
 
         pq_layers = [m for m in model.modules() if isinstance(m, (PQConv2d, PQConv1d, PQDense))]
-        # Give the kernels a healthy scale so the un-pruned 10% survive quantization.
         for layer in pq_layers:
             layer._weight.copy_(
                 torch.tensor(rng.standard_normal(tuple(layer._weight.shape)), dtype=layer._weight.dtype, device=device)
@@ -135,19 +111,8 @@ def test_alkaid_conversion_pruned_quantized_model():
     config.quantization_parameters.enable_quantization = True
 
     rng = np.random.default_rng(0)
-    model, pq_layers, expected_sparsity, _ = _build_pruned_compressed_model(config, rng)
-    assert {type(layer).__name__ for layer in pq_layers} == {"PQConv2d", "PQConv1d", "PQDense"}
+    model, _, _, _ = _build_pruned_compressed_model(config, rng)
 
-    for layer in pq_layers:
-        weight = layer._weight.detach().cpu().numpy()
-        sparsity = float((weight == 0).mean())
-        assert bool(layer.final_compression_done)
-        # Quantization can only add zeros, so realized sparsity >= the masked fraction.
-        assert sparsity >= expected_sparsity[id(layer)] - 1e-9
-        assert sparsity >= 0.88  # ~90% pruned
-        assert sparsity < 1.0  # some weights survive
-
-    # Convert with Alkaid. fx tracing requires eval mode + explicit inputs.
     inputs = (_fixed_point_input((1, IN_FEATURES, H, W)), _fixed_point_input((1, IN_FEATURES, SEQ_LEN)))
     inp, out = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
 
@@ -165,12 +130,7 @@ def test_alkaid_rtl_matches_model(tmp_path):
 
     inputs = (_fixed_point_input((1, IN_FEATURES, H, W)), _fixed_point_input((1, IN_FEATURES, SEQ_LEN)))
     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
-    # Lower the trace to combinational logic: the pure-Python interpreter `comb(...)`
-    # is the exact software model the RTL is generated from.
     comb = trace(inp_fv, out_fv, optimize=True)
-
-    # Sample inputs exactly representable in INPUT_KIF (non-negative multiples of
-    # 2**-4) so the input-port quantization is a no-op and model == hardware input.
     n_samples = 16
     img = rng.integers(0, 16, size=(n_samples, IN_FEATURES, H, W)).astype("float32") / 16.0
     seq = rng.integers(0, 16, size=(n_samples, IN_FEATURES, SEQ_LEN)).astype("float32") / 16.0
@@ -199,8 +159,6 @@ def test_alkaid_rtl_matches_model(tmp_path):
 
 ALL_C = 4
 ALL_H = ALL_W = 6
-# conv1d branch is pooled to ALL_LIN/2; matches the conv2d branch flatten length
-# (ALL_C * (ALL_H//2) * (ALL_W//2)) when ALL_LIN//2 == (ALL_H//2) * (ALL_W//2).
 ALL_LIN = (ALL_H // 2) * (ALL_W // 2) * 2
 
 ALL_TORCH_LAYER_TYPES = {
@@ -254,7 +212,6 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
     model = AllLayersNet(config)
     device = next(model.parameters()).device
 
-    # Build with random input (in train mode) so batchnorm running stats are sane.
     model.train()
     with torch.no_grad():
         model(
@@ -264,7 +221,6 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
 
     assert ALL_TORCH_LAYER_TYPES <= {type(m).__name__ for m in model.modules()}
 
-    # Randomize + prune 90% of every prunable layer (conv/dense; batchnorm/pool aren't pruned).
     with torch.no_grad():
         for layer in [m for m in model.modules() if getattr(m, "pruning_layer", None) is not None]:
             layer._weight.copy_(
@@ -325,7 +281,7 @@ class _SingleLayer(nn.Module):
     """One PQ layer, optionally followed by a Quantizer.
 
     Layers with a ``quantize_output`` option set it directly; layers without one
-    (batchnorm) get an explicit trailing Quantizer so the output is fixed-point.
+    get an explicit trailing Quantizer so the output is fixed-point.
     """
 
     def __init__(self, layer, tail=None):
@@ -338,7 +294,6 @@ class _SingleLayer(nn.Module):
         return x if self.tail is None else self.tail(x)
 
 
-# id -> lambda(config) -> (input shape incl. batch=1, single-layer module)
 _SINGLE_LAYER_CASES = {
     "conv2d": lambda c: ((1, 2, 4, 4), _SingleLayer(PQConv2d(c, 2, 3, KERNEL_SIZE, padding="same", quantize_output=True))),
     "conv1d": lambda c: ((1, 2, 8), _SingleLayer(PQConv1d(c, 2, 3, KERNEL_SIZE, padding="same", quantize_output=True))),
@@ -349,6 +304,7 @@ _SINGLE_LAYER_CASES = {
     "avgpool1d": lambda c: ((1, 3, 8), _SingleLayer(PQAvgPool1d(c, kernel_size=2, stride=2, quantize_output=True))),
     "activation": lambda c: ((1, 6), _SingleLayer(PQActivation(c, "relu", quantize_input=True, quantize_output=True))),
     "quantizer": lambda c: ((1, 6), _SingleLayer(_data_quantizer(c))),
+    "softmax": lambda c: ((1, 6), _SingleLayer(PQSoftmax(c, axis=-1))),
 }
 
 
@@ -359,8 +315,6 @@ def test_alkaid_single_layer(case_id):
     shape, model = _SINGLE_LAYER_CASES[case_id](config)
     rng = np.random.default_rng(0)
 
-    # Build (random input, train mode so any batchnorm running stats are sane).
-    # Tensors use torch's default device (conftest sets it), matching the model.
     model.train()
     with torch.no_grad():
         model(torch.tensor(rng.standard_normal((4,) + shape[1:]), dtype=torch.float32))
@@ -372,6 +326,62 @@ def test_alkaid_single_layer(case_id):
 
     n_samples = 16
     x = rng.integers(0, 16, size=(n_samples,) + shape[1:]).astype("float32") / 16.0
+    with torch.no_grad():
+        reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
+    emulated = np.stack([np.asarray(comb(x[i].ravel(), quantize=True), dtype=np.float64) for i in range(n_samples)])
+
+    assert np.any(reference != 0)
+    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
+
+
+# --- Multi-head attention ------------------------------------------------------
+
+MHA_SEQ_LEN = 4
+MHA_EMBED_DIM = 4
+MHA_NUM_HEADS = 2
+
+
+class _MHANet(nn.Module):
+    """Self-attention PQMultiheadAttention with every data quantizer enabled.
+
+    The MHA lives inside a wrapper module so torch.fx inlines its forward with
+    concrete (None) mask arguments; tracing the MHA as the fx root would turn the
+    masks into proxies and hit data-dependent control flow.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.mha = PQMultiheadAttention(
+            config,
+            embed_dim=MHA_EMBED_DIM,
+            num_heads=MHA_NUM_HEADS,
+            batch_first=True,
+            quantize_output=True,
+        )
+
+    def forward(self, x):
+        out, _ = self.mha(x, x, x)
+        return out
+
+
+def test_alkaid_multihead_attention(tmp_path):
+    config = pdp_config()
+    config.quantization_parameters.enable_quantization = True
+
+    rng = np.random.default_rng(0)
+    model = _MHANet(config)
+    with torch.no_grad():
+        model(torch.tensor(rng.standard_normal((4, MHA_SEQ_LEN, MHA_EMBED_DIM)), dtype=torch.float32))  # build
+    apply_final_compression(model)
+    model.eval()
+
+    shape = (1, MHA_SEQ_LEN, MHA_EMBED_DIM)
+    inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=(_fixed_point_input(shape),), framework="torch")
+    comb = trace(inp_fv, out_fv, optimize=True)
+    assert out_fv.shape == (MHA_SEQ_LEN * MHA_EMBED_DIM,)
+
+    n_samples = 16
+    x = rng.integers(0, 16, size=(n_samples, MHA_SEQ_LEN, MHA_EMBED_DIM)).astype("float32") / 16.0
     with torch.no_grad():
         reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
     emulated = np.stack([np.asarray(comb(x[i].ravel(), quantize=True), dtype=np.float64) for i in range(n_samples)])

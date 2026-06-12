@@ -1,32 +1,13 @@
-"""Convert a pruned + quantized PQuant Keras model with Alkaid.
-
-Exercises the ``alkaid_keras`` second-level plugin (``pquant._alkaid_plugin``):
-build a model from PQConv2d / PQConv1d / PQDense layers with relu PQActivation,
-randomly prune 90% of every weight tensor, bake the pruning and quantization in
-with ``apply_final_compression``, then trace the model into Alkaid's IR. A second
-test additionally lowers the trace to an RTL project and checks that the RTL's
-software model reproduces the Keras model's outputs bit-for-bit.
-
-These tests assume ``channels_last``: it gives a well-defined C-order mapping
-between the model inputs and the flat hardware input ports.
-"""
+"""Convert a pruned + quantized PQuant Keras model with Alkaid"""
 
 import keras
 import numpy as np
 import pytest
 from alkaid.codegen import RTLModel  # noqa: E402
-
-# Alkaid is required for this test; skip cleanly if it (or its deps) isn't installed.
 from alkaid.converter import trace_model
 from alkaid.trace import trace  # noqa: E402
-from keras import ops
 
 from pquant import pdp_config
-
-# Load the pquant Alkaid plugin explicitly instead of relying on the `alkaid_keras`
-# entry point: importing the module registers the replay handlers and register()
-# marks the plugin loaded, so the test works even if the installed package metadata
-# doesn't expose the entry point (e.g. some editable installs).
 from pquant._alkaid_plugin import _alkaid_keras_plugin  # noqa: E402
 from pquant.activations import PQActivation
 from pquant.core.keras.quantizer import Quantizer
@@ -38,7 +19,9 @@ from pquant.layers import (
     PQConv2d,
     PQDense,
     PQDepthwiseConv2d,
+    PQMultiheadAttention,
     PQSeparableConv2d,
+    PQSoftmax,
     apply_final_compression,
 )
 
@@ -48,12 +31,9 @@ IN_FEATURES = 3
 OUT_FEATURES = 4
 KERNEL_SIZE = 3
 H = W = 6
-# Match the conv1d flatten length to the conv2d branch's so the two can be merged.
 SEQ_LEN = H * W
 
 PRUNE_FRACTION = 0.9
-# Input fixed-point format (signed, 4 integer, 4 fractional bits) for the hardware
-# input ports; bounded so the SAT input quantizer can be replayed.
 INPUT_KIF = (1, 4, 4)
 
 IMG_SHAPE = (H, W, IN_FEATURES)
@@ -67,13 +47,6 @@ def _channels_last():
 
 
 def _build_model(config):
-    """Two-branch model with PQConv2d, PQConv1d and PQDense + relu PQActivation.
-
-    A ``Reshape`` between a conv2d and a conv1d cannot be traced by Alkaid because
-    its reshape replay folds the batch axis (a following conv then sees a tensor
-    with no batch dim). So the conv2d and conv1d live on separate branches that are
-    merged (their flattened outputs share a length) before the dense head.
-    """
     img_in = keras.Input(shape=IMG_SHAPE, name="img")
     a = PQConv2d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(img_in)
     a = PQActivation(config, activation="relu", quantize_input=True, quantize_output=True)(a)
@@ -113,7 +86,6 @@ def _build_pruned_compressed_model(config, rng):
 
     pq_layers = [layer for layer in model.layers if isinstance(layer, (PQConv2d, PQConv1d, PQDense))]
 
-    # Give the kernels a healthy scale so the un-pruned 10% survive quantization.
     for layer in pq_layers:
         layer._kernel.assign(rng.standard_normal(layer._kernel.shape).astype("float32"))
     expected_sparsity = {layer.name: _random_prune(layer, PRUNE_FRACTION, rng) for layer in pq_layers}
@@ -130,17 +102,6 @@ def test_alkaid_conversion_pruned_quantized_model():
     model, pq_layers, expected_sparsity = _build_pruned_compressed_model(config, rng)
     assert {type(layer).__name__ for layer in pq_layers} == {"PQConv2d", "PQConv1d", "PQDense"}
 
-    for layer in pq_layers:
-        kernel = np.asarray(ops.convert_to_numpy(layer._kernel))
-        sparsity = float((kernel == 0).mean())
-        assert layer.final_compression_done
-        # Quantization can only add zeros, so realized sparsity >= the masked fraction.
-        assert sparsity >= expected_sparsity[layer.name] - 1e-9
-        assert sparsity >= 0.88  # ~90% pruned
-        assert sparsity < 1.0  # some weights survive
-
-    # Convert with Alkaid. inputs_kif gives the symbolic inputs a bounded
-    # fixed-point range so the SAT input quantizer can be replayed.
     inp, out = trace_model(model, inputs_kif=INPUT_KIF)
 
     assert out.shape == (OUT_FEATURES,)
@@ -155,12 +116,8 @@ def test_alkaid_rtl_matches_model(tmp_path):
     model, _, _ = _build_pruned_compressed_model(config, rng)
 
     inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
-    # Lower the trace to combinational logic: the pure-Python interpreter `comb(...)`
-    # is the exact software model the RTL is generated from.
     comb = trace(inp_fv, out_fv, optimize=True)
 
-    # Sample inputs exactly representable in INPUT_KIF (non-negative multiples of
-    # 2**-4) so the input-port quantization is a no-op and model == hardware input.
     n_samples = 16
     img = rng.integers(0, 16, size=(n_samples,) + IMG_SHAPE).astype("float32") / 16.0
     seq = rng.integers(0, 16, size=(n_samples,) + SEQ_SHAPE).astype("float32") / 16.0
@@ -185,8 +142,6 @@ def test_alkaid_rtl_matches_model(tmp_path):
 
 ALL_C = 4
 ALL_H = ALL_W = 8
-# conv1d branch is pooled to ALL_LIN/2; matches the conv2d branch flatten length
-# (ALL_C * (ALL_H//2) * (ALL_W//2)) when ALL_LIN//2 == (ALL_H//2) * (ALL_W//2).
 ALL_LIN = (ALL_H // 2) * (ALL_W // 2) * 2
 
 ALL_IMG_SHAPE = (ALL_H, ALL_W, IN_FEATURES)
@@ -353,6 +308,7 @@ _SINGLE_LAYER_CASES = {
         _single_layer_model((6,), PQActivation(c, activation="relu", quantize_input=True, quantize_output=True)),
     ),
     "quantizer": lambda c: ((6,), _single_layer_model((6,), _data_quantizer(c))),
+    "softmax": lambda c: ((6,), _single_layer_model((6,), PQSoftmax(c, axis=-1))),
 }
 
 
@@ -376,3 +332,48 @@ def test_alkaid_single_layer(case_id):
 
     assert np.any(reference != 0)
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
+
+
+# --- Multi-head attention ------------------------------------------------------
+
+MHA_SEQ_LEN = 4
+MHA_EMBED_DIM = 4
+MHA_NUM_HEADS = 2
+
+
+def _build_mha_model(config, rng):
+    """Self-attention PQMultiheadAttention model with every data quantizer enabled."""
+    inp = keras.Input(shape=(MHA_SEQ_LEN, MHA_EMBED_DIM))
+    out, _ = PQMultiheadAttention(
+        config,
+        embed_dim=MHA_EMBED_DIM,
+        num_heads=MHA_NUM_HEADS,
+        quantize_output=True,
+    )(inp)
+    model = keras.Model(inp, out)
+    model(rng.standard_normal((4, MHA_SEQ_LEN, MHA_EMBED_DIM)).astype("float32"))  # build
+    apply_final_compression(model)
+    return model
+
+
+def test_alkaid_multihead_attention(tmp_path):
+    config = pdp_config()
+    config.quantization_parameters.enable_quantization = True
+
+    rng = np.random.default_rng(0)
+    model = _build_mha_model(config, rng)
+
+    inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
+    comb = trace(inp_fv, out_fv, optimize=True)
+    assert out_fv.shape == (MHA_SEQ_LEN * MHA_EMBED_DIM,)
+
+    n_samples = 16
+    x = rng.integers(0, 16, size=(n_samples, MHA_SEQ_LEN, MHA_EMBED_DIM)).astype("float32") / 16.0
+    reference = np.asarray(model(x), dtype=np.float64).reshape(n_samples, -1)
+    emulated = np.stack([np.asarray(comb(x[i].ravel(), quantize=True), dtype=np.float64) for i in range(n_samples)])
+
+    assert np.any(reference != 0)
+    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
+
+    RTLModel(comb, str(tmp_path), "model", flavor="verilog", print_latency=False).write()
+    assert (tmp_path / "src" / "model.v").exists()

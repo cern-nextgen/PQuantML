@@ -20,6 +20,7 @@ from alkaid.trace import FVArray
 from pquant._alkaid_plugin._alkaid_common import (
     PQuantAlkaidError,
     replay_quantizer,
+    replay_quantizer_if_enabled,
 )
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.layers import (
@@ -28,6 +29,7 @@ from pquant.core.torch.layers import (
     PQConv1d,
     PQConv2d,
     PQDense,
+    PQSoftmax,
     PQWeightBiasBase,
 )
 from pquant.core.torch.quantizer import Quantizer
@@ -159,6 +161,59 @@ class ReplayPQuantQuantizer(ReplayModuleBase):
 
     def call(self, input: FVArray) -> FVArray:
         return replay_quantizer(self.module, input)
+
+
+def _table_fn(table):
+    """Numpy-callable for a PQActivation lookup table, evaluated in float32 like the torch runtime."""
+    fn = table.activation_function
+
+    def apply_fn(v: np.ndarray) -> np.ndarray:
+        with torch.no_grad():
+            t = torch.as_tensor(v, dtype=torch.float32, device='cpu')
+            return fn(t).detach().cpu().numpy().astype(np.float64)
+
+    return apply_fn
+
+
+class ReplayPQuantSoftmax(ReplayModuleBase):
+    """Replay PQSoftmax as a single fx-leaf module.
+
+    Registering this handler makes PQSoftmax a torch.fx leaf, which is required: traced
+    op-by-op, the inv table's ``1/(x + eps)`` would add the tiny float epsilon as a plain
+    constant (exploding the fixed-point step) instead of folding into one lookup table.
+    """
+
+    handles = (PQSoftmax,)
+
+    @staticmethod
+    def _replay_table(table, x: FVArray) -> FVArray:
+        """Replay an exp/inv PQActivation table: input quantizer -> unary map -> output quantizer.
+
+        The unary map yields a RetardedFVArray that the output quantizer materializes into a
+        hardware lookup table, so the table's output quantizer must be enabled.
+        """
+        if not (table.quantize_output and table.enable_quantization):
+            raise PQuantAlkaidError(
+                f'PQSoftmax table {type(table).__name__} must have an enabled output quantizer for Alkaid conversion.'
+            )
+        x = replay_quantizer_if_enabled(table, 'input_quantizer', x, 'quantize_input')
+        out = x.apply(_table_fn(table))
+        return replay_quantizer(table.output_quantizer, out)
+
+    def call(self, inputs: FVArray, mask=None) -> FVArray:
+        module = self.module
+        if mask is not None:
+            raise PQuantAlkaidError('PQSoftmax masks are not supported in Alkaid conversion.')
+        if not module.built:
+            raise PQuantAlkaidError('PQSoftmax must be built (one real forward) before Alkaid conversion.')
+        inputs = replay_quantizer_if_enabled(module, 'input_quantizer', inputs, 'quantize_input')
+        if module.stable:
+            inputs = np.max(inputs, axis=module.axes, keepdims=True) - inputs  # type: ignore
+        exp_inp = self._replay_table(module.exp_table, inputs)
+        sums = np.sum(exp_inp, axis=module.axes, keepdims=True)
+        divisor = self._replay_table(module.inv_table, sums)
+        out = exp_inp * divisor
+        return replay_quantizer_if_enabled(module, 'output_quantizer', out, 'quantize_output')
 
 
 def _patch_root_quantizer_trace() -> None:

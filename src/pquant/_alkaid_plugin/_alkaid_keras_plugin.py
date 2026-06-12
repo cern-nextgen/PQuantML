@@ -10,7 +10,7 @@ from alkaid.converter.builtin.keras.layers.batchnorm import ReplayBatchNormaliza
 from alkaid.converter.builtin.keras.layers.conv import _conv
 from alkaid.converter.builtin.keras.layers.pool import ReplayPool
 from alkaid.trace import FVArray
-from alkaid.trace.ops import extract_patches
+from alkaid.trace.ops import einsum, extract_patches
 from keras.layers import DepthwiseConv1D, DepthwiseConv2D
 
 from pquant._alkaid_plugin._alkaid_common import (
@@ -29,7 +29,9 @@ from pquant.core.keras.layers import (
     PQConv2d,
     PQDense,
     PQDepthwiseConv2d,
+    PQMultiheadAttention,
     PQSeparableConv2d,
+    PQSoftmax,
 )
 from pquant.core.keras.quantizer import Quantizer
 
@@ -189,6 +191,107 @@ class ReplayPQuantActivation(ReplayOperationBase):
             raise PQuantAlkaidError(f'Unsupported PQuant activation for Alkaid conversion: {layer.activation_name!r}')
         out = keras_numpy_unary_map[layer.activation_name](inputs)
         return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+
+
+def _table_fn(table):
+    """Numpy-callable for a PQActivation lookup table, evaluated in float32 like the keras runtime."""
+    fn = table.activation_function
+
+    def apply_fn(v: np.ndarray) -> np.ndarray:
+        t = keras.ops.cast(keras.ops.convert_to_tensor(v), 'float32')
+        return np.asarray(keras.ops.convert_to_numpy(fn(t)), dtype=np.float64)
+
+    return apply_fn
+
+
+class ReplayPQuantSoftmax(ReplayOperationBase):
+    __activation_handled__ = True
+    handles = (PQSoftmax,)
+
+    @staticmethod
+    def _replay_table(table, x: FVArray) -> FVArray:
+        """Replay an exp/inv PQActivation table: input quantizer -> unary map -> output quantizer.
+
+        The unary map yields a RetardedFVArray that the output quantizer materializes into a
+        hardware lookup table, so the table's output quantizer must be enabled.
+        """
+        if not (table.quantize_output and table.enable_quantization):
+            raise PQuantAlkaidError(
+                f'PQSoftmax table {table.name!r} must have an enabled output quantizer for Alkaid conversion.'
+            )
+        x = replay_quantizer_if_enabled(table, 'input_quantizer', x, 'quantize_input')
+        out = x.apply(_table_fn(table))
+        return replay_quantizer(table.output_quantizer, out)
+
+    def call(self, inputs: FVArray, mask=None) -> FVArray:
+        layer = self.op
+        if mask is not None:
+            raise PQuantAlkaidError('PQSoftmax masks are not supported in Alkaid conversion.')
+        inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        if layer.stable:
+            inputs = np.max(inputs, axis=layer.axes, keepdims=True) - inputs  # type: ignore
+        exp_inp = self._replay_table(layer.exp_table, inputs)
+        sums = np.sum(exp_inp, axis=layer.axes, keepdims=True)
+        divisor = self._replay_table(layer.inv_table, sums)
+        out = exp_inp * divisor
+        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+
+
+class ReplayPQuantMultiheadAttention(ReplayOperationBase):
+    __activation_handled__ = True
+    handles = (PQMultiheadAttention,)
+
+    def call(self, inputs, key_padding_mask=None, attn_mask=None, need_weights=True):
+        layer = self.op
+        if key_padding_mask is not None or attn_mask is not None:
+            raise PQuantAlkaidError('Attention masks are not supported in Alkaid conversion.')
+
+        if isinstance(inputs, (list, tuple)):
+            if len(inputs) == 3:
+                query, key, value = inputs
+            elif len(inputs) == 2:
+                query, key = inputs
+                value = key
+            else:
+                query = key = value = inputs[0]
+        else:
+            query = key = value = inputs
+
+        batch_size, query_len = query.shape[0], query.shape[1]
+        key_len = key.shape[1]
+        num_heads, head_dim = layer.num_heads, layer.head_dim
+
+        q = ReplayPQuantDense(layer.q_proj).call(query)  # (B, T, E)
+        k = ReplayPQuantDense(layer.k_proj).call(key)  # (B, S, E)
+        v = ReplayPQuantDense(layer.v_proj).call(value)  # (B, S, E)
+
+        # Reshape to (B, H, T/S, head_dim)
+        q = q.reshape(batch_size, query_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+        k = k.reshape(batch_size, key_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+        v = v.reshape(batch_size, key_len, num_heads, head_dim).transpose(0, 2, 1, 3)
+
+        # Scaled dot-product attention scores q @ k^T: (B, H, T, S). FVArray's np.matmul
+        # contracts dot-style (no batch dims), so use alkaid's two-operand einsum instead.
+        # The runtime multiplies by the scale in float32, so round it to float32 here too;
+        # this also keeps the constant short enough for alkaid's shift-add (scm) solver.
+        scale = float(np.float32(layer.scale))
+        attn_scores = einsum('bhtd,bhsd->bhts', q, k) * scale
+
+        # The softmax's own input/output quantizers handle the scores and the attention
+        # weights; the context is quantized by out_proj's input quantizer.
+        attn_weights = ReplayPQuantSoftmax(layer.softmax).call(attn_scores)
+
+        # Weighted sum of values (dropout is an inference no-op): (B, H, T, head_dim)
+        out = einsum('bhts,bhsd->bhtd', attn_weights, v)
+
+        # Merge heads: (B, T, E)
+        out = out.transpose(0, 2, 1, 3).reshape(batch_size, query_len, layer.embed_dim)
+        out = ReplayPQuantDense(layer.out_proj).call(out)
+
+        if need_weights:
+            # Average attention weights over heads: (B, T, S)
+            return out, np.mean(attn_weights, axis=1)
+        return (out,)
 
 
 def register() -> None:

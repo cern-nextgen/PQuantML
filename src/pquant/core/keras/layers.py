@@ -1,3 +1,4 @@
+from math import prod
 from typing import Tuple, TypeVar
 
 import keras
@@ -23,7 +24,7 @@ from keras.src.ops.operation_utils import (
 )
 
 from pquant.core.hyperparameter_optimization import PQConfig
-from pquant.core.keras.activations import PQActivation
+from pquant.core.keras.activations import PQActivation, PQSoftmax
 from pquant.core.keras.quantizer import Quantizer
 from pquant.core.keras.utils import get_pruning_layer
 
@@ -173,7 +174,7 @@ class PQWeightBiasBase(keras.layers.Layer):
 
     def build(self, input_shape):
         self.input_shape = (1,) + tuple(input_shape[1:])
-        self.n_parallel = ops.prod(input_shape[1:-1])
+        self.n_parallel = int(prod(input_shape[1:-1]))
         self.parallelization_factor = self.parallelization_factor if self.parallelization_factor > 0 else self.n_parallel
         self.is_pretraining = self.add_weight(
             shape=(),
@@ -1726,19 +1727,18 @@ class PQMultiheadAttention(keras.layers.Layer):
         bias: Whether to add bias to projection layers.
         kdim: Key feature dimension (defaults to embed_dim).
         vdim: Value feature dimension (defaults to embed_dim).
-        quantize_input: Whether to quantize Q/K/V projection inputs.
-        quantize_output: Whether to quantize projection outputs.
-        quantize_attn_weights: Whether to quantize attention weights after softmax.
-        quantize_attn_scores: Whether to quantize attention scores before softmax.
-        quantize_context: Whether to quantize the context vector before merging heads.
+        quantize_input: Whether to quantize the Q/K/V projection inputs (the MHA inputs).
+        quantize_output: Whether to quantize the output projection's output (the MHA output).
+            The q/k/v projection outputs and the out_proj input (the context) are always
+            quantized, mirroring HGQ's QMultiHeadAttention.
         approximate_softmax: Placeholder for approximate softmax (currently uses standard softmax).
         in_quant_bits: (k, i, f) bits for input quantization.
         weight_quant_bits: (k, i, f) bits for weight quantization.
         bias_quant_bits: (k, i, f) bits for bias quantization.
         out_quant_bits: (k, i, f) bits for output quantization.
-        attn_quant_bits: (k, i, f) bits for attention weight quantization.
-        attn_score_quant_bits: (k, i, f) bits for attention score quantization.
-        context_quant_bits: (k, i, f) bits for context quantization.
+        attn_quant_bits: (k, i, f) bits for the softmax output quantizer (the attention
+            weights). The scores and context need no dedicated quantizers: the softmax's
+            input quantizer and the output projection's input quantizer cover them.
 
     Call args:
         inputs: A tuple (query, key, value) of tensors with shape (batch, seq, features),
@@ -1762,17 +1762,12 @@ class PQMultiheadAttention(keras.layers.Layer):
         vdim: int = None,
         quantize_input: bool = True,
         quantize_output: bool = False,
-        quantize_attn_weights: bool = False,
-        quantize_attn_scores: bool = False,
-        quantize_context: bool = False,
         approximate_softmax: bool = False,
         in_quant_bits: Tuple[T, T, T] = None,
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
         attn_quant_bits: Tuple[T, T, T] = None,
-        attn_score_quant_bits: Tuple[T, T, T] = None,
-        context_quant_bits: Tuple[T, T, T] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1789,64 +1784,71 @@ class PQMultiheadAttention(keras.layers.Layer):
         self.use_bias = bias
         self.kdim = kdim if kdim is not None else embed_dim
         self.vdim = vdim if vdim is not None else embed_dim
-        self.quantize_attn_weights = quantize_attn_weights
-        self.quantize_attn_scores = quantize_attn_scores
-        self.quantize_context = quantize_context
         self.approximate_softmax = approximate_softmax
         self.scale = self.head_dim**-0.5
         self.enable_quantization = config.quantization_parameters.enable_quantization
         self.use_hgq = config.quantization_parameters.use_high_granularity_quantization
+        self.hgq_beta = config.quantization_parameters.hgq_beta
+        self.is_pretraining = True
 
         self.in_quant_bits = in_quant_bits
         self.weight_quant_bits = weight_quant_bits
         self.bias_quant_bits = bias_quant_bits
         self.out_quant_bits = out_quant_bits
         self.attn_quant_bits = attn_quant_bits
-        self.attn_score_quant_bits = attn_score_quant_bits
-        self.context_quant_bits = context_quant_bits
 
+        self.softmax = PQSoftmax(config, -1, quantize_input=True, quantize_output=True, out_quant_bits=attn_quant_bits)
         proj_kwargs = dict(
             use_bias=bias,
-            quantize_input=quantize_input,
-            quantize_output=quantize_output,
             in_quant_bits=in_quant_bits,
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
         )
-        self.q_proj = PQDense(config, embed_dim, enable_pruning=False, **proj_kwargs)
-        self.k_proj = PQDense(config, embed_dim, enable_pruning=False, **proj_kwargs)
-        self.v_proj = PQDense(config, embed_dim, enable_pruning=False, **proj_kwargs)
-        self.out_proj = PQDense(config, embed_dim, **proj_kwargs)
+
+        qkv_kwargs = dict(quantize_input=quantize_input, quantize_output=True, **proj_kwargs)
+        self.q_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
+        self.k_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
+        self.v_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
+        self.out_proj = PQDense(config, embed_dim, quantize_input=True, quantize_output=quantize_output, **proj_kwargs)
 
         self.attn_dropout = keras.layers.Dropout(dropout) if dropout > 0.0 else None
 
-        def _make_data_quantizer(bits):
-            if bits is not None:
-                k, i, f = bits
-            else:
-                k = config.quantization_parameters.default_data_keep_negatives
-                i = config.quantization_parameters.default_data_integer_bits
-                f = config.quantization_parameters.default_data_fractional_bits
-            return Quantizer(
-                k=ops.convert_to_tensor(k),
-                i=ops.convert_to_tensor(i),
-                f=ops.convert_to_tensor(f),
-                overflow=config.quantization_parameters.overflow_mode_data,
-                round_mode=config.quantization_parameters.round_mode,
-                is_heterogeneous=config.quantization_parameters.use_high_granularity_quantization,
-                is_data=True,
-                hgq_gamma=config.quantization_parameters.hgq_gamma,
-                place="datalane",
-                dynamic_data=config.quantization_parameters.dynamic_data_quantization,
-            )
+    def post_pre_train_function(self):
+        self.is_pretraining = False
+        for proj in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
+            proj.post_pre_train_function()
+        self.softmax.post_pre_train_function()
 
-        if quantize_attn_weights:
-            self.attn_weight_quantizer = _make_data_quantizer(attn_quant_bits)
-        if quantize_attn_scores:
-            self.attn_score_quantizer = _make_data_quantizer(attn_score_quant_bits)
-        if quantize_context:
-            self.context_quantizer = _make_data_quantizer(context_quant_bits)
+    def _head_bits(self, proj, seq_len):
+        """Bitwidths of a projection's output, in per-head layout (1, H, seq, head_dim)."""
+        bw = proj.output_quantizer.get_total_bits((1, seq_len, self.embed_dim))
+        bw = ops.reshape(bw, (1, seq_len, self.num_heads, self.head_dim))
+        return ops.transpose(bw, (0, 2, 1, 3))
+
+    def _attention_ebops(self):
+        """EBOPs of the q @ k^T and attn @ v einsums (mirrors HGQ's QMultiHeadAttention._compute_ebops)."""
+        attn_shape = self.softmax.input_shape  # (1, H, T, S), stored when the softmax was built
+        query_len, key_len = attn_shape[2], attn_shape[3]
+        bw_q = self._head_bits(self.q_proj, query_len)
+        bw_k = self._head_bits(self.k_proj, key_len)
+        bw_v = self._head_bits(self.v_proj, key_len)
+
+        bw_attn = self.softmax.output_quantizer.get_total_bits(attn_shape)
+        ebops_qk = ops.einsum("bhtd,bhsd->", bw_q, bw_k)
+        ebops_av = ops.einsum("bhts,bhsd->", bw_attn, bw_v)
+        return ebops_qk + ebops_av
+
+    def ebops(self):
+        ebops = self._attention_ebops() + self.softmax.ebops()
+        for proj in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
+            ebops += proj.ebops(include_mask=proj.enable_pruning)
+        return ebops
+
+    def hgq_loss(self):
+        if self.is_pretraining or not self.use_hgq:
+            return ops.convert_to_tensor(0.0)
+        return ops.convert_to_tensor(self.hgq_beta * self._attention_ebops() + self.softmax.hgq_loss())
 
     def call(
         self,
@@ -1875,7 +1877,6 @@ class PQMultiheadAttention(keras.layers.Layer):
         k = self.k_proj(key, training=training)  # (B, S, E)
         v = self.v_proj(value, training=training)  # (B, S, E)
 
-        # Reshape to (B, H, T/S, head_dim)
         q = ops.reshape(q, (batch_size, query_len, self.num_heads, self.head_dim))
         q = ops.transpose(q, (0, 2, 1, 3))
         k = ops.reshape(k, (batch_size, key_len, self.num_heads, self.head_dim))
@@ -1895,19 +1896,13 @@ class PQMultiheadAttention(keras.layers.Layer):
                 attn_mask = ops.reshape(attn_mask, (batch_size, self.num_heads, query_len, key_len))
             attn_scores = attn_scores + ops.cast(attn_mask, attn_scores.dtype)
 
+        mask = None
         if key_padding_mask is not None:
-            # key_padding_mask: (B, S), True means ignore -> (B, 1, 1, S)
-            mask = ops.cast(key_padding_mask, attn_scores.dtype)
-            mask = ops.reshape(mask, (batch_size, 1, 1, key_len))
-            attn_scores = attn_scores + mask * -1e9
+            mask = ops.logical_not(ops.cast(key_padding_mask, "bool"))
+            mask = ops.reshape(mask, (batch_size, 1, 1, key_len))  # (B, 1, 1, S)
 
-        if self.quantize_attn_scores and self.enable_quantization:
-            attn_scores = self.attn_score_quantizer(attn_scores, training=training)
-
-        attn_weights = ops.softmax(attn_scores, axis=-1)
-
-        if self.quantize_attn_weights and self.enable_quantization:
-            attn_weights = self.attn_weight_quantizer(attn_weights, training=training)
+        # The softmax's own input/output quantizers handle the scores and the attention weights;
+        attn_weights = self.softmax(attn_scores, mask=mask)
 
         if self.attn_dropout is not None:
             attn_weights = self.attn_dropout(attn_weights, training=training)
@@ -1915,21 +1910,13 @@ class PQMultiheadAttention(keras.layers.Layer):
         # Weighted sum of values: (B, H, T, head_dim)
         out = ops.matmul(attn_weights, v)
 
-        if self.quantize_context and self.enable_quantization:
-            out = self.context_quantizer(out, training=training)
-
         # Merge heads: (B, T, E)
         out = ops.transpose(out, (0, 2, 1, 3))
         out = ops.reshape(out, (batch_size, query_len, self.embed_dim))
         out = self.out_proj(out, training=training)
 
         if self.use_hgq:
-            if self.quantize_attn_scores:
-                self.add_loss(self.attn_score_quantizer.hgq_loss())
-            if self.quantize_attn_weights:
-                self.add_loss(self.attn_weight_quantizer.hgq_loss())
-            if self.quantize_context:
-                self.add_loss(self.context_quantizer.hgq_loss())
+            self.add_loss(self.hgq_loss())
 
         if need_weights:
             # Average attention weights over heads: (B, T, S)
@@ -1948,18 +1935,13 @@ class PQMultiheadAttention(keras.layers.Layer):
                 "kdim": self.kdim,
                 "vdim": self.vdim,
                 "quantize_input": self.q_proj.quantize_input,
-                "quantize_output": self.q_proj.quantize_output,
-                "quantize_attn_weights": self.quantize_attn_weights,
-                "quantize_attn_scores": self.quantize_attn_scores,
-                "quantize_context": self.quantize_context,
+                "quantize_output": self.out_proj.quantize_output,
                 "approximate_softmax": self.approximate_softmax,
                 "in_quant_bits": self.in_quant_bits,
                 "weight_quant_bits": self.weight_quant_bits,
                 "bias_quant_bits": self.bias_quant_bits,
                 "out_quant_bits": self.out_quant_bits,
                 "attn_quant_bits": self.attn_quant_bits,
-                "attn_score_quant_bits": self.attn_score_quant_bits,
-                "context_quant_bits": self.context_quant_bits,
             }
         )
         return config
@@ -1971,9 +1953,7 @@ class PQMultiheadAttention(keras.layers.Layer):
         config.pop("k_proj", None)
         config.pop("v_proj", None)
         config.pop("out_proj", None)
-        config.pop("attn_weight_quantizer", None)
-        config.pop("attn_score_quantizer", None)
-        config.pop("context_quantizer", None)
+        config.pop("softmax", None)
         return cls(**config)
 
 
@@ -2134,7 +2114,7 @@ def post_pretrain_functions(model, config):
         elif isinstance(layer, PQSeparableConv2d):
             layer.depthwise_conv.post_pre_train_function()
             layer.pointwise_conv.post_pre_train_function()
-        elif isinstance(layer, (PQActivation, PQAvgPoolBase, PQBatchNormalization)):
+        elif isinstance(layer, (PQActivation, PQAvgPoolBase, PQBatchNormalization, PQSoftmax, PQMultiheadAttention)):
             layer.post_pre_train_function()
     if config.pruning_parameters.pruning_method == "pdp" or (
         config.pruning_parameters.pruning_method == "wanda" and config.pruning_parameters.calculate_pruning_budget
@@ -2298,7 +2278,7 @@ def get_model_losses(model, losses):
                 loss += layer.depthwise_conv.hgq_loss()
                 loss += layer.pointwise_conv.hgq_loss()
             losses += loss
-        elif isinstance(layer, (PQActivation, PQAvgPoolBase, PQBatchNormalization)):
+        elif isinstance(layer, (PQActivation, PQAvgPoolBase, PQBatchNormalization, PQSoftmax)):
             if layer.enable_quantization and layer.use_hgq:
                 losses += layer.hgq_loss()
     return losses
@@ -2831,6 +2811,6 @@ def get_ebops(model, **kwargs):
     for m in model.layers:
         if isinstance(m, (PQWeightBiasBase)):
             ebops += m.ebops(include_mask=m.enable_pruning)
-        elif isinstance(m, (PQAvgPoolBase, PQBatchNormalization, PQActivation)):
+        elif isinstance(m, (PQAvgPoolBase, PQBatchNormalization, PQActivation, PQSoftmax, PQMultiheadAttention)):
             ebops += m.ebops()
     return ebops
