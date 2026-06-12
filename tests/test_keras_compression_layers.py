@@ -1387,6 +1387,8 @@ def test_trigger_post_pretraining(config_pdp, conv2d_input):
 def test_hgq_weight_shape(config_pdp, dense_input):
     config_pdp.quantization_parameters.enable_quantization = True
     config_pdp.quantization_parameters.use_high_granularity_quantization = True
+    # Per-weight granularity → one bit-width per kernel element.
+    config_pdp.quantization_parameters.granularity = "per_weight"
     inputs = keras.Input(shape=dense_input.shape[1:])
     out = Dense(OUT_FEATURES, use_bias=False)(inputs)
     act1 = Activation("tanh")(out)

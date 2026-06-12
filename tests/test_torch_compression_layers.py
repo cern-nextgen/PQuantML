@@ -604,6 +604,8 @@ def test_trigger_post_pretraining(config_pdp, dense_input):
 def test_hgq_weight_shape(config_pdp, dense_input):
     config_pdp.quantization_parameters.enable_quantization = True
     config_pdp.quantization_parameters.use_high_granularity_quantization = True
+    # Per-weight granularity → one bit-width per weight element.
+    config_pdp.quantization_parameters.granularity = "per_weight"
     layer = Linear(IN_FEATURES, OUT_FEATURES, bias=False)
     layer2 = Linear(OUT_FEATURES, OUT_FEATURES, bias=False)
     model = TestModel2(layer, layer2, "relu", "tanh")
@@ -618,6 +620,8 @@ def test_hgq_weight_shape(config_pdp, dense_input):
 def test_qbn_build(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
     config_pdp.quantization_parameters.use_high_granularity_quantization = True
+    # Per-weight granularity → one bit-width per conv-kernel element.
+    config_pdp.quantization_parameters.granularity = "per_weight"
     layer = Conv2d(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, bias=False)
     layer2 = BatchNorm2d(OUT_FEATURES)
     model = TestModel2(layer, layer2, None, "tanh")

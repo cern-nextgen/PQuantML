@@ -107,6 +107,7 @@ class PQActivation(nn.Module):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.dynamic_data,
+            granularity=self.config.quantization_parameters.granularity,
         )
         self.input_quantizer = Quantizer(
             k=self.k_input,
@@ -119,6 +120,7 @@ class PQActivation(nn.Module):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.dynamic_data,
+            granularity=self.config.quantization_parameters.granularity,
         )
         if self.use_hgq:
             self.input_quantizer.quantizer.build(input_shape)

@@ -37,7 +37,15 @@ class Quantizer(nn.Module):
         self.b = torch.nn.Parameter(torch.tensor(i + k + f), requires_grad=False)
         self.granularity = granularity.value if isinstance(granularity, Enum) else granularity
         self.quantizer = create_quantizer(
-            self.k, i, f, self.overflow, self.round_mode, self.use_hgq, self.is_data, hgq_gamma
+            self.k,
+            i,
+            f,
+            self.overflow,
+            self.round_mode,
+            self.use_hgq,
+            self.is_data,
+            granularity=self.granularity,
+            gamma=hgq_gamma,
         )
         self.is_pretraining = True
         self.hgq_gamma = hgq_gamma
@@ -156,11 +164,17 @@ class Quantizer(nn.Module):
         self.quantizer.set_bits(self.i, self.f)
 
 
-def create_quantizer(k, i, f, overflow, round_mode, is_heterogeneous, is_data, gamma=1e-8):
+def create_quantizer(k, i, f, overflow, round_mode, is_heterogeneous, is_data, granularity="per_weight", gamma=1e-8):
     if is_heterogeneous:
-        if is_data:
-            return HGQQuantizer(k0=k, i0=i, f0=f, overflow_mode=overflow, round_mode=round_mode, is_data=True, gamma=gamma)
-        else:
-            return HGQQuantizer(k0=k, i0=i, f0=f, overflow_mode=overflow, round_mode=round_mode, is_data=False, gamma=gamma)
+        return HGQQuantizer(
+            k0=k,
+            i0=i,
+            f0=f,
+            overflow_mode=overflow,
+            round_mode=round_mode,
+            is_data=is_data,
+            granularity=granularity,
+            gamma=gamma,
+        )
     else:
         return get_fixed_quantizer(round_mode=round_mode, overflow_mode=overflow)

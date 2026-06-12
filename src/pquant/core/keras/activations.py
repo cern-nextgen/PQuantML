@@ -102,6 +102,7 @@ class PQActivation(keras.layers.Layer):
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
                 dynamic_data=self.dynamic_data,
+                granularity=self.config.quantization_parameters.granularity,
             )
         if self.quantize_output:
             self.output_quantizer = Quantizer(
@@ -115,6 +116,7 @@ class PQActivation(keras.layers.Layer):
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
                 dynamic_data=self.dynamic_data,
+                granularity=self.config.quantization_parameters.granularity,
             )
 
         if self.use_multiplier:

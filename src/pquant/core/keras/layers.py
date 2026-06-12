@@ -43,6 +43,10 @@ class PQWeightBiasBase(keras.layers.Layer):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         enable_pruning=None,
         *args,
         **kwargs,
@@ -87,6 +91,10 @@ class PQWeightBiasBase(keras.layers.Layer):
         self.weight_quant_bits = weight_quant_bits
         self.bias_quant_bits = bias_quant_bits
         self.out_quant_bits = out_quant_bits
+        self.weight_quant_granularity = weight_quant_granularity
+        self.in_quant_granularity = in_quant_granularity
+        self.bias_quant_granularity = bias_quant_granularity
+        self.out_quant_granularity = out_quant_granularity
         self.pruning_first = config.training_parameters.pruning_first
         self.enable_quantization = config.quantization_parameters.enable_quantization
         self.round_mode = config.quantization_parameters.round_mode
@@ -107,6 +115,12 @@ class PQWeightBiasBase(keras.layers.Layer):
         self._is_finetuning = False
         self.config = config
 
+        # Each quantizer follows the config granularity unless its per-quantizer override is set.
+        weight_granularity = weight_quant_granularity if weight_quant_granularity is not None else self.granularity
+        bias_granularity = bias_quant_granularity if bias_quant_granularity is not None else self.granularity
+        in_granularity = in_quant_granularity if in_quant_granularity is not None else self.granularity
+        out_granularity = out_quant_granularity if out_quant_granularity is not None else self.granularity
+
         self.weight_quantizer = Quantizer(
             k=ops.convert_to_tensor(self.k_weight),
             i=ops.convert_to_tensor(self.i_weight),
@@ -115,7 +129,7 @@ class PQWeightBiasBase(keras.layers.Layer):
             round_mode=self.round_mode,
             is_heterogeneous=self.use_hgq,
             is_data=False,
-            granularity=self.granularity,
+            granularity=weight_granularity,
             hgq_gamma=self.hgq_gamma,
             place="weight",
         )
@@ -129,6 +143,7 @@ class PQWeightBiasBase(keras.layers.Layer):
             round_mode=self.round_mode,
             is_heterogeneous=self.use_hgq,
             is_data=False,
+            granularity=bias_granularity,
             hgq_gamma=self.hgq_gamma,
             place="bias",
         )
@@ -140,6 +155,7 @@ class PQWeightBiasBase(keras.layers.Layer):
             round_mode=self.round_mode,
             is_heterogeneous=self.use_hgq,
             is_data=True,
+            granularity=in_granularity,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.dynamic_data,
@@ -152,6 +168,7 @@ class PQWeightBiasBase(keras.layers.Layer):
             round_mode=self.round_mode,
             is_heterogeneous=self.use_hgq,
             is_data=True,
+            granularity=out_granularity,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.dynamic_data,
@@ -316,6 +333,10 @@ class PQWeightBiasBase(keras.layers.Layer):
                 "weight_quant_bits": self.weight_quant_bits,
                 "bias_quant_bits": self.bias_quant_bits,
                 "out_quant_bits": self.out_quant_bits,
+                "weight_quant_granularity": self.weight_quant_granularity,
+                "in_quant_granularity": self.in_quant_granularity,
+                "bias_quant_granularity": self.bias_quant_granularity,
+                "out_quant_granularity": self.out_quant_granularity,
                 "enable_pruning": self.enable_pruning,
                 "final_compression_done": self.final_compression_done,
             }
@@ -352,6 +373,10 @@ class PQDepthwiseConv2d(PQWeightBiasBase, keras.layers.DepthwiseConv2D):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         enable_pruning=None,
         **kwargs,
     ):
@@ -379,6 +404,10 @@ class PQDepthwiseConv2d(PQWeightBiasBase, keras.layers.DepthwiseConv2D):
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=weight_quant_granularity,
+            in_quant_granularity=in_quant_granularity,
+            bias_quant_granularity=bias_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             enable_pruning=enable_pruning,
             **kwargs,
         )
@@ -577,6 +606,10 @@ class PQConv2d(PQWeightBiasBase):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         enable_pruning=None,
         **kwargs,
     ):
@@ -589,6 +622,10 @@ class PQConv2d(PQWeightBiasBase):
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=weight_quant_granularity,
+            in_quant_granularity=in_quant_granularity,
+            bias_quant_granularity=bias_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             enable_pruning=enable_pruning,
             activity_regularizer=activity_regularizer,
             **kwargs,
@@ -890,6 +927,10 @@ class PQConv1d(PQWeightBiasBase):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         enable_pruning=None,
         strides=1,
         padding="valid",
@@ -916,6 +957,10 @@ class PQConv1d(PQWeightBiasBase):
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=weight_quant_granularity,
+            in_quant_granularity=in_quant_granularity,
+            bias_quant_granularity=bias_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             enable_pruning=enable_pruning,
             activity_regularizer=activity_regularizer,
             **kwargs,
@@ -1116,6 +1161,10 @@ class PQDense(PQWeightBiasBase):
         weight_quant_bits: Tuple[T, T, T] = None,
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        weight_quant_granularity=None,
+        in_quant_granularity=None,
+        bias_quant_granularity=None,
+        out_quant_granularity=None,
         enable_pruning=None,
         use_bias=True,
         kernel_initializer="glorot_uniform",
@@ -1135,6 +1184,10 @@ class PQDense(PQWeightBiasBase):
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=weight_quant_granularity,
+            in_quant_granularity=in_quant_granularity,
+            bias_quant_granularity=bias_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             enable_pruning=enable_pruning,
             **kwargs,
         )
@@ -1278,6 +1331,9 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
         synchronized=False,
         quantize_input=True,
         quantize_parameters=True,
+        in_quant_granularity=None,
+        weight_quant_granularity=None,
+        bias_quant_granularity=None,
         **kwargs,
     ):
         if isinstance(config, dict):
@@ -1311,6 +1367,9 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
         self.quantize_input = quantize_input
         self.quantize_parameters = quantize_parameters
         self.granularity = config.quantization_parameters.granularity
+        self.in_quant_granularity = in_quant_granularity
+        self.weight_quant_granularity = weight_quant_granularity
+        self.bias_quant_granularity = bias_quant_granularity
         self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
         self.config = config
         self.f_weight = self.f_bias = ops.convert_to_tensor(config.quantization_parameters.default_weight_fractional_bits)
@@ -1329,6 +1388,9 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
             trainable=False,
             dtype="float32",
         )
+        in_granularity = self.in_quant_granularity if self.in_quant_granularity is not None else self.granularity
+        weight_granularity = self.weight_quant_granularity if self.weight_quant_granularity is not None else self.granularity
+        bias_granularity = self.bias_quant_granularity if self.bias_quant_granularity is not None else self.granularity
         self.input_quantizer = Quantizer(
             k=1.0,
             i=self.i_input,
@@ -1340,6 +1402,7 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.dynamic_data,
+            granularity=in_granularity,
         )
         self.weight_quantizer = Quantizer(
             k=1.0,
@@ -1350,6 +1413,7 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
             is_data=False,
             is_heterogeneous=self.use_hgq,
             place="weight",
+            granularity=weight_granularity,
         )
         self.bias_quantizer = Quantizer(
             k=1.0,
@@ -1360,6 +1424,7 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
             is_data=False,
             is_heterogeneous=self.use_hgq,
             place="bias",
+            granularity=bias_granularity,
         )
         self.input_quantizer.build(input_shape)
         self.weight_quantizer.build(self.moving_variance.shape)
@@ -1480,6 +1545,9 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
                 "config": self.config.get_dict(),
                 "quantize_input": self.quantize_input,
                 "quantize_parameters": self.quantize_parameters,
+                "in_quant_granularity": self.in_quant_granularity,
+                "weight_quant_granularity": self.weight_quant_granularity,
+                "bias_quant_granularity": self.bias_quant_granularity,
                 "final_compression_done": self.final_compression_done,
             }
         )
@@ -1495,6 +1563,8 @@ class PQAvgPoolBase(keras.layers.Layer):
         quantize_output=False,
         in_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
         **kwargs,
     ):
 
@@ -1504,6 +1574,8 @@ class PQAvgPoolBase(keras.layers.Layer):
 
         self.in_quant_bits = in_quant_bits
         self.out_quant_bits = out_quant_bits
+        self.in_quant_granularity = in_quant_granularity
+        self.out_quant_granularity = out_quant_granularity
 
         if in_quant_bits is not None:
             self.k_input, self.i_input, self.f_input = in_quant_bits
@@ -1548,6 +1620,9 @@ class PQAvgPoolBase(keras.layers.Layer):
             trainable=False,
             dtype="float32",
         )
+        config_granularity = self.config.quantization_parameters.granularity
+        in_granularity = self.in_quant_granularity if self.in_quant_granularity is not None else config_granularity
+        out_granularity = self.out_quant_granularity if self.out_quant_granularity is not None else config_granularity
         self.input_quantizer = Quantizer(
             k=1.0,
             i=self.i_input,
@@ -1559,6 +1634,7 @@ class PQAvgPoolBase(keras.layers.Layer):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.dynamic_data,
+            granularity=in_granularity,
         )
         self.output_quantizer = Quantizer(
             k=1.0,
@@ -1571,6 +1647,7 @@ class PQAvgPoolBase(keras.layers.Layer):
             hgq_gamma=self.hgq_gamma,
             place="datalane",
             dynamic_data=self.dynamic_data,
+            granularity=out_granularity,
         )
         self.input_quantizer.build(input_shape)
         self.output_quantizer.build(self.compute_output_shape(input_shape))
@@ -1624,6 +1701,8 @@ class PQAvgPoolBase(keras.layers.Layer):
                 "quantize_output": self.quantize_output,
                 "in_quant_bits": self.in_quant_bits,
                 "out_quant_bits": self.out_quant_bits,
+                "in_quant_granularity": self.in_quant_granularity,
+                "out_quant_granularity": self.out_quant_granularity,
             }
         )
         return config
@@ -1639,6 +1718,8 @@ class PQAvgPool1d(PQAvgPoolBase, keras.layers.AveragePooling1D):
         quantize_output=False,
         in_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
         strides=None,
         padding="valid",
         data_format=None,
@@ -1656,6 +1737,8 @@ class PQAvgPool1d(PQAvgPoolBase, keras.layers.AveragePooling1D):
             quantize_output=quantize_output,
             in_quant_bits=in_quant_bits,
             out_quant_bits=out_quant_bits,
+            in_quant_granularity=in_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
             **kwargs,
         )
 
@@ -1681,6 +1764,8 @@ class PQAvgPool2d(PQAvgPoolBase, keras.layers.AveragePooling2D):
         quantize_output=False,
         in_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
         strides=None,
         padding="valid",
         data_format=None,
@@ -1698,6 +1783,8 @@ class PQAvgPool2d(PQAvgPoolBase, keras.layers.AveragePooling2D):
             quantize_output=quantize_output,
             in_quant_bits=in_quant_bits,
             out_quant_bits=out_quant_bits,
+            in_quant_granularity=in_quant_granularity,
+            out_quant_granularity=out_quant_granularity,
         )
 
     def call(self, x, training=None):
@@ -1768,6 +1855,9 @@ class PQMultiheadAttention(keras.layers.Layer):
         bias_quant_bits: Tuple[T, T, T] = None,
         out_quant_bits: Tuple[T, T, T] = None,
         attn_quant_bits: Tuple[T, T, T] = None,
+        in_quant_granularity=None,
+        out_quant_granularity=None,
+        param_quant_granularity=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1797,6 +1887,10 @@ class PQMultiheadAttention(keras.layers.Layer):
         self.out_quant_bits = out_quant_bits
         self.attn_quant_bits = attn_quant_bits
 
+        self.in_quant_granularity = in_quant_granularity
+        self.out_quant_granularity = out_quant_granularity
+        self.param_quant_granularity = param_quant_granularity
+
         self.softmax = PQSoftmax(config, -1, quantize_input=True, quantize_output=True, out_quant_bits=attn_quant_bits)
         proj_kwargs = dict(
             use_bias=bias,
@@ -1804,13 +1898,24 @@ class PQMultiheadAttention(keras.layers.Layer):
             weight_quant_bits=weight_quant_bits,
             bias_quant_bits=bias_quant_bits,
             out_quant_bits=out_quant_bits,
+            weight_quant_granularity=param_quant_granularity,
+            bias_quant_granularity=param_quant_granularity,
         )
 
-        qkv_kwargs = dict(quantize_input=quantize_input, quantize_output=True, **proj_kwargs)
+        qkv_kwargs = dict(
+            quantize_input=quantize_input, quantize_output=True, in_quant_granularity=in_quant_granularity, **proj_kwargs
+        )
         self.q_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.k_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
         self.v_proj = PQDense(config, embed_dim, enable_pruning=False, **qkv_kwargs)
-        self.out_proj = PQDense(config, embed_dim, quantize_input=True, quantize_output=quantize_output, **proj_kwargs)
+        self.out_proj = PQDense(
+            config,
+            embed_dim,
+            quantize_input=True,
+            quantize_output=quantize_output,
+            out_quant_granularity=out_quant_granularity,
+            **proj_kwargs,
+        )
 
         self.attn_dropout = keras.layers.Dropout(dropout) if dropout > 0.0 else None
 
@@ -1942,6 +2047,9 @@ class PQMultiheadAttention(keras.layers.Layer):
                 "bias_quant_bits": self.bias_quant_bits,
                 "out_quant_bits": self.out_quant_bits,
                 "attn_quant_bits": self.attn_quant_bits,
+                "in_quant_granularity": self.in_quant_granularity,
+                "out_quant_granularity": self.out_quant_granularity,
+                "param_quant_granularity": self.param_quant_granularity,
             }
         )
         return config

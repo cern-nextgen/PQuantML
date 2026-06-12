@@ -37,7 +37,15 @@ class Quantizer(keras.layers.Layer):
         self.place = place
         self.granularity = granularity.value if isinstance(granularity, Enum) else granularity
         self.quantizer = create_quantizer(
-            self.k_init, self.i_init, self.f_init, self.overflow, self.round_mode, self.use_hgq, self.is_data, place
+            self.k_init,
+            self.i_init,
+            self.f_init,
+            self.overflow,
+            self.round_mode,
+            self.use_hgq,
+            self.is_data,
+            place,
+            granularity=self.granularity,
         )
         self.is_pretraining = True
         self.hgq_gamma = hgq_gamma
@@ -205,14 +213,41 @@ class Quantizer(keras.layers.Layer):
         return config
 
 
-def create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, gamma=1e-8):
+def axis_kwargs_for_granularity(granularity, is_data):
+    """Translate a granularity into HGQ's (mutually exclusive) homogeneous/heterogeneous axis spec.
+
+    HGQ only supports per_tensor and per_weight from the granularity enum:
+    - per_tensor: nothing varies -> heterogeneous_axis=() (one bitwidth for the whole tensor)
+    - per_weight: every element varies. For data we keep the batch axis (0) homogeneous via
+      homogeneous_axis=(0,); for weights nothing is shared via homogeneous_axis=().
+
+    per_channel is intentionally NOT supported for HGQ (the channel axis is layout-dependent, so we
+    don't guess it).
+    """
+    if granularity == "per_tensor":
+        return {"heterogeneous_axis": ()}
+    if granularity == "per_weight":
+        return {"homogeneous_axis": (0,) if is_data else ()}
+    if granularity == "per_channel":
+        raise ValueError("per_channel granularity is not supported for HGQ. Use 'per_tensor' or 'per_weight'.")
+    raise ValueError(f"Unsupported granularity: {granularity}")
+
+
+def create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, axis_kwargs, gamma=1e-8):
     quantizer_config = QuantizerConfig(
-        q_type="kif", place=place, k0=k, i0=i, f0=f, overflow_mode=overflow, round_mode=round_mode, homogeneous_axis=()
+        q_type="kif",
+        place=place,
+        k0=k,
+        i0=i,
+        f0=f,
+        overflow_mode=overflow,
+        round_mode=round_mode,
+        **axis_kwargs,
     )
     return HGQQuantizer(config=quantizer_config)
 
 
-def create_hgq_data_quantizer(k, i, f, overflow, round_mode, gamma=1e-8):
+def create_hgq_data_quantizer(k, i, f, overflow, round_mode, axis_kwargs, gamma=1e-8):
     quantizer_config = QuantizerConfig(
         q_type="kif",
         place="datalane",
@@ -221,16 +256,19 @@ def create_hgq_data_quantizer(k, i, f, overflow, round_mode, gamma=1e-8):
         f0=f,
         overflow_mode=overflow,
         round_mode=round_mode,
-        homogeneous_axis=(0,),
+        **axis_kwargs,
     )
     return HGQQuantizer(config=quantizer_config)
 
 
-def create_quantizer(k, i, f, overflow, round_mode, is_heterogeneous, is_data, place="datalane", gamma=1e-8):
+def create_quantizer(
+    k, i, f, overflow, round_mode, is_heterogeneous, is_data, place="datalane", granularity="per_weight", gamma=1e-8
+):
     if is_heterogeneous:
+        axis_kwargs = axis_kwargs_for_granularity(granularity, is_data)
         if is_data:
-            return create_hgq_data_quantizer(k, i, f, overflow, round_mode, gamma=gamma)
+            return create_hgq_data_quantizer(k, i, f, overflow, round_mode, axis_kwargs, gamma=gamma)
         else:
-            return create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, gamma=gamma)
+            return create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, axis_kwargs, gamma=gamma)
     else:
         return get_fixed_quantizer(round_mode=round_mode, overflow_mode=overflow)
