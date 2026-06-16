@@ -91,7 +91,7 @@ class Quantizer(nn.Module):
         return self.calculate_bits_from_abs(abs_x)
 
     def compute_weight_dynamic_bits(self, x):
-        if self.granularity == "per_tensor":
+        if self.granularity == "per_tensor" or x.ndim == 1:
             _, i, f = self.get_quantization_bits()
             return i, f
         if self.granularity == "per_channel":
