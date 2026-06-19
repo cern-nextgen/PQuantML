@@ -134,6 +134,7 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
                 logging.info(f"Layer {n}: {m.get_input_quantization_bits()} bits")
 
     # Save the this model's state dict (i.e. uncompressed version)
+    trained_uncompressed_model(torch.randn(input_shape)[None, ...].to(device))
     trained_uncompressed_model_state_dict = trained_uncompressed_model.state_dict()
 
     logging.info("Starting FITcompress ...")
@@ -799,9 +800,9 @@ class FITcompress:
 
                     self.assign_parameters(self.model, params_quantized_unpruned)
 
-                    self.post_fitcompress_calibration(
-                        p_node.extract_config_from_node(self.layer_names)['quant_config'], config
-                    )
+                    # self.post_fitcompress_calibration(
+                    #    p_node.extract_config_from_node(self.layer_names)['quant_config'], config
+                    # )
 
                     return (
                         p_node,

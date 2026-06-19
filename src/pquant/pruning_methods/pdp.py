@@ -168,5 +168,5 @@ class PDP(keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config()
-        config.update({"config": self.config.get_dict(), "layer_type": self.layer_type, "mask": self.mask})
+        config.update({"config": self.config.get_dict(), "layer_type": self.layer_type})
         return config
