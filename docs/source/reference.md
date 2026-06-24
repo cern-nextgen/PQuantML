@@ -169,7 +169,7 @@ There are more details about every pruning method:
 | `pruning_method`   | str                   | `mdmm`                         | Selects this pruning schema.                                 |
 | `constraint_type`  | ConstraintType        | `"Equality"`               | Constraint form: equality / ≤ / ≥.                           |
 | `target_value`     | float                 | `0.0`                      | Target value for the chosen metric.                          |
-| `metric_type`      | MetricType            | `"UnstructuredSparsity"`   | Specifies which metric is constrained.                       |
+| `metric_type`      | MetricType            | `"UnstructuredSparsity"`   | Quantity the constraint acts on — see **MDMM metric types** below.                       |
 | `target_sparsity`  | float                 | `0.9`                      | Target sparsity when constraining sparsity.                  |
 | `rf`               | int                   | `1`                        | Regularization / frequency parameter.                        |
 | `epsilon`          | float                 | `1.0e-03`                  | Feasibility tolerance.                                       |
@@ -179,6 +179,43 @@ There are more details about every pruning method:
 | `l0_mode`          | `"coarse"` \| `"smooth"` | `"coarse"`              | L0 approximation mode.                                       |
 | `scale_mode`       | `"mean"` \| `"sum"`      | `"mean"`                 | Aggregation mode for penalties.                              |
 
+
+##### MDMM metric types
+
+The `metric_type` field selects which quantity the MDMM constraint drives. The first two are magnitude-based; the last two are hardware-aware and act on 4D convolution kernels.
+
+| **metric_type**        | **Constrains**                                                                |
+|------------------------|-------------------------------------------------------------------------------|
+| `UnstructuredSparsity` | Element-wise (L0/L1) sparsity toward `target_sparsity`.                        |
+| `StructuredSparsity`   | Fraction of all-zero weight groups of size `rf`.                              |
+| `FPGAAwareSparsity`    | Fraction of zero DSP/BRAM weight groups, modelling FPGA resource packing.      |
+| `PACAPatternSparsity`  | Mean distance of each conv kernel to a small set of dominant binary patterns.  |
+
+**`FPGAAwareSparsity` parameters** (used only when `metric_type: FPGAAwareSparsity`):
+
+| **Field**         | **Type**            | **Default** | **Description**                                                             |
+|-------------------|---------------------|-------------|-----------------------------------------------------------------------------|
+| `precision`       | int                 | `16`        | Weight bit-width used to derive BRAM packing.                               |
+| `target_resource` | `"DSP"` \| `"BRAM"` | `"DSP"`     | Hardware resource whose group-sparsity is measured.                         |
+| `bram_width`      | int                 | `36`        | BRAM word width; sets how many DSP groups pack into one BRAM (`BRAM` only).  |
+
+Weights are grouped into DSP blocks of size `rf`; for `target_resource: BRAM`, `c = bram_width // precision` (or `2*bram_width // precision` when not divisible) consecutive DSP groups pack into one BRAM block. The metric reports the fraction of such groups whose L2 norm is below `epsilon`.
+
+**`PACAPatternSparsity` parameters** (used only when `metric_type: PACAPatternSparsity`):
+
+| **Field**              | **Type**                                        | **Default**        | **Description**                                              |
+|------------------------|-------------------------------------------------|--------------------|--------------------------------------------------------------|
+| `num_patterns_to_keep` | int                                             | `16`               | Maximum number of dominant kernel patterns retained.        |
+| `beta`                 | float                                           | `0.75`             | Cumulative pattern-frequency coverage kept, in `[0, 1]`.    |
+| `distance_metric`      | `"hamming"` \| `"valued_hamming"` \| `"cosine"` | `"valued_hamming"` | Distance from each kernel to its closest dominant pattern.   |
+
+```{note}
+`PACAPatternSparsity` always pairs with an equality constraint at target `0` (driving every kernel onto a dominant pattern); the config model sets `constraint_type` and `target_value` for you. During fine-tuning the kernels are projected onto their closest dominant pattern.
+```
+
+```{note}
+The hardware-aware metrics operate on 4D convolution weights; for non-convolutional layers `PACAPatternSparsity` is a no-op. Ready-made configs are available via `mdmm_fpga_config()` and `mdmm_paca_config()`.
+```
 
 Optionally, there is also FITCompress method implemented for PyTorch:
 ### FitCompress method

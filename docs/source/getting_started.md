@@ -26,6 +26,25 @@ config.quantization_parameters.default_weight_fractional_bits = 3.
 config.quantization_parameters.use_relu_multiplier = False
 ```
 
+### MDMM pruning (constraint-based)
+
+MDMM (Modified Differential Method of Multipliers) prunes by enforcing a *constraint* on a chosen sparsity metric instead of adding a fixed penalty. The `metric_type` field picks what is constrained — including two hardware-aware options that target FPGA resources directly.
+
+```python
+from pquant import mdmm_config, mdmm_fpga_config, mdmm_paca_config
+
+config = mdmm_config()        # default: UnstructuredSparsity metric
+config = mdmm_fpga_config()   # hardware-aware: FPGAAwareSparsity (DSP/BRAM grouping)
+config = mdmm_paca_config()   # hardware-aware: PACAPatternSparsity (dominant conv-kernel patterns)
+
+# switch the constrained metric and its parameters
+config.pruning_parameters.metric_type = "FPGAAwareSparsity"
+config.pruning_parameters.target_resource = "DSP"   # or "BRAM"
+config.pruning_parameters.rf = 4
+```
+
+Training proceeds in three phases handled by the training loop: a warm-up where the constraint is inactive, an active phase where the constraint loss is applied and the prune mask is tracked, and fine-tuning where the mask is frozen and applied. The available `metric_type` options and their parameters are listed in the [Usage Reference](reference.md).
+
 ### Building a model
 PQuantML supports two ways of defining compressed models. Below we illustrate both approaches using a simple jet-tagging architecture.
 
