@@ -14,6 +14,8 @@ from pquant.core.keras.pruning_methods.constraint_functions import (
     LessThanOrEqualConstraint,
 )
 from pquant.core.keras.pruning_methods.metric_functions import (
+    FPGAAwareSparsityMetric,
+    PACAPatternMetric,
     StructuredSparsityMetric,
     UnstructuredSparsityMetric,
 )
@@ -21,6 +23,8 @@ from pquant.core.keras.pruning_methods.metric_functions import (
 METRIC_REGISTRY = {
     "UnstructuredSparsity": UnstructuredSparsityMetric,
     "StructuredSparsity": StructuredSparsityMetric,
+    "FPGAAwareSparsity": FPGAAwareSparsityMetric,
+    "PACAPatternSparsity": PACAPatternMetric,
 }
 
 CONSTRAINT_REGISTRY = {
@@ -67,6 +71,14 @@ class MDMM(keras.layers.Layer):
             "l0_mode": l0_mode,
             "scale_mode": scale_mode,
             "rf": pruning_parameters.rf,
+            # FPGAAwareSparsityMetric
+            "precision": pruning_parameters.precision,
+            "target_resource": pruning_parameters.target_resource,
+            "bram_width": pruning_parameters.bram_width,
+            # PACAPatternMetric
+            "num_patterns_to_keep": pruning_parameters.num_patterns_to_keep,
+            "beta": pruning_parameters.beta,
+            "distance_metric": pruning_parameters.distance_metric,
         }
 
         metric_cls = METRIC_REGISTRY.get(metric_type)
@@ -110,9 +122,18 @@ class MDMM(keras.layers.Layer):
         self.constraint_layer.build(input_shape)
         super().build(input_shape)
 
+    def _compute_hard_mask(self, weight, epsilon):
+        # During fine-tuning, a metric that defines its own projection (e.g. PACA pattern
+        # pruning) supplies the mask; otherwise use the magnitude threshold. The layer only
+        # checks for the capability, so it stays metric-agnostic (no metric-type branching).
+        metric_fn = getattr(self.constraint_layer, "metric_fn", None)
+        if self._is_finetuning and hasattr(metric_fn, "get_projection_mask"):
+            return ops.cast(metric_fn.get_projection_mask(weight), weight.dtype)
+        return ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+
     def call(self, weight):
         epsilon = self.config.pruning_parameters.epsilon
-        hard_mask = ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+        hard_mask = self._compute_hard_mask(weight, epsilon)
         not_active = ops.logical_or(self.is_pretraining, self.is_finetuning)
         self.mask.assign(ops.where(not_active, ops.convert_to_tensor(self.mask), hard_mask))
 
@@ -131,7 +152,10 @@ class MDMM(keras.layers.Layer):
         return ops.cast(ops.abs(weight) > epsilon, weight.dtype)
 
     def get_layer_sparsity(self, weight):
-        return ops.sum(self.get_hard_mask(weight)) / ops.size(weight)
+        # Cast size to the mask dtype: ops.sum(mask) is float but ops.size is int, and the
+        # TensorFlow backend rejects float/int division (the original float32/int32 bug).
+        mask = self.get_hard_mask(weight)
+        return ops.sum(mask) / ops.cast(ops.size(weight), mask.dtype)
 
     def calculate_additional_loss(self):
         # Loss is added via self.add_loss() in call() for model.fit.

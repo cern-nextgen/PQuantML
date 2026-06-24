@@ -1,0 +1,74 @@
+# file: /src/pquant/configs/config_mdmm_paca.yaml
+# MDMM pruning with the PACA pattern metric. PACA always pairs with an equality
+# constraint at target 0 (enforced by the config model); the values below are listed
+# for clarity.
+
+pruning_parameters:
+  pruning_method: mdmm
+  enable_pruning: true
+  disable_pruning_for_layers: [] # Disable pruning for these layers, even if enable_pruning is true
+  constraint_type: "Equality"    # Forced to Equality/0 for PACA by MDMMPruningModel.
+  target_value: 0.0
+  metric_type: "PACAPatternSparsity"
+  target_sparsity: 0.9
+  rf: 1
+  epsilon: 1.0e-03
+  scale: 1.0
+  damping: 1.0
+  use_grad: false
+  constraint_lr: 1.0e-3
+  # PACAPatternMetric-specific
+  num_patterns_to_keep: 16
+  beta: 0.85                 # cumulative pattern-frequency coverage kept (0..1)
+  distance_metric: "cosine"  # "hamming", "valued_hamming", or "cosine"
+
+quantization_parameters:
+  enable_quantization: true
+  default_weight_keep_negatives: 1.
+  default_weight_integer_bits: 0.
+  default_weight_fractional_bits: 7.
+  default_data_keep_negatives: 0.
+  default_data_integer_bits: 0.
+  default_data_fractional_bits: 7.
+  dynamic_data_quantization: false
+  granularity: "per_tensor"
+  quantize_input: true
+  quantize_output: false
+  hgq_beta: 1e-5
+  hgq_gamma: 0.0003
+  hgq_heterogeneous: True
+  layer_specific: {}
+  use_high_granularity_quantization: false
+  use_real_tanh: false
+  use_relu_multiplier: false
+  use_symmetric_quantization: false
+  overflow_mode_parameters: SAT
+  overflow_mode_data: SAT
+  round_mode: RND
+training_parameters:
+  epochs: 200
+  fine_tuning_epochs: 30
+  pretraining_epochs: 0
+  pruning_first: true
+  rewind: never
+  rounds: 1
+  save_weights_epoch: -1
+fitcompress_parameters:
+  enable_fitcompress : false
+  optimize_quantization : true
+  quantization_schedule : [7.,4.,3.,2]
+  pruning_schedule : {start : 0, end : -3, steps : 40}
+  compression_goal : 0.10
+  optimize_pruning : false
+  greedy_astar : true
+  approximate : true
+  f_lambda : 1
+hpo_parameters:
+    experiment_name: experiment_name
+    model_name: jet_tagger
+    num_trials: 1
+    sampler:
+      type: RandomSampler
+    hyperparameter_search:
+      numerical: {}
+      categorical: {}

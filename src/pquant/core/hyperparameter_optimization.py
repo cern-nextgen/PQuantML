@@ -450,6 +450,20 @@ def mdmm_config():
     return PQConfig.load_from_file(path)
 
 
+def mdmm_fpga_config():
+    yaml_name = "config_mdmm_fpga.yaml"
+    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(parent, "configs", yaml_name)
+    return PQConfig.load_from_file(path)
+
+
+def mdmm_paca_config():
+    yaml_name = "config_mdmm_paca.yaml"
+    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(parent, "configs", yaml_name)
+    return PQConfig.load_from_file(path)
+
+
 def pdp_config():
     yaml_name = "config_pdp.yaml"
     parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

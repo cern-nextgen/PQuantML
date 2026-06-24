@@ -9,6 +9,8 @@ from pquant.core.torch.pruning_methods.constraint_functions import (
     LessThanOrEqualConstraint,
 )
 from pquant.core.torch.pruning_methods.metric_functions import (
+    FPGAAwareSparsityMetric,
+    PACAPatternMetric,
     StructuredSparsityMetric,
     UnstructuredSparsityMetric,
 )
@@ -16,6 +18,8 @@ from pquant.core.torch.pruning_methods.metric_functions import (
 _METRIC_REGISTRY = {
     "UnstructuredSparsity": UnstructuredSparsityMetric,
     "StructuredSparsity": StructuredSparsityMetric,
+    "FPGAAwareSparsity": FPGAAwareSparsityMetric,
+    "PACAPatternSparsity": PACAPatternMetric,
 }
 
 _CONSTRAINT_REGISTRY = {
@@ -59,6 +63,14 @@ class MDMM(nn.Module):
             "l0_mode": l0_mode,
             "scale_mode": scale_mode,
             "rf": pruning_parameters.rf,
+            # FPGAAwareSparsityMetric
+            "precision": pruning_parameters.precision,
+            "target_resource": pruning_parameters.target_resource,
+            "bram_width": pruning_parameters.bram_width,
+            # PACAPatternMetric
+            "num_patterns_to_keep": pruning_parameters.num_patterns_to_keep,
+            "beta": pruning_parameters.beta,
+            "distance_metric": pruning_parameters.distance_metric,
         }
 
         metric_cls = _METRIC_REGISTRY.get(metric_type)
@@ -85,9 +97,18 @@ class MDMM(nn.Module):
         self.register_buffer("mask", torch.ones(tuple(input_shape)))
         self.built = True
 
+    def _compute_hard_mask(self, weight, epsilon):
+        # During fine-tuning, a metric that defines its own projection (e.g. PACA pattern
+        # pruning) supplies the mask; otherwise use the magnitude threshold. The layer only
+        # checks for the capability, so it stays metric-agnostic (no metric-type branching).
+        metric_fn = getattr(self.constraint_layer, "metric_fn", None)
+        if self._is_finetuning and hasattr(metric_fn, "get_projection_mask"):
+            return metric_fn.get_projection_mask(weight).to(weight.dtype)
+        return (weight.abs() > epsilon).to(weight.dtype)
+
     def forward(self, weight):
         epsilon = self.config.pruning_parameters.epsilon
-        hard_mask = (weight.abs() > epsilon).to(weight.dtype)
+        hard_mask = self._compute_hard_mask(weight, epsilon)
         not_active = self._is_pretraining or self._is_finetuning
 
         if not not_active:
