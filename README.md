@@ -37,14 +37,8 @@ Example notebook can be found [here](https://github.com/nroope/PQuant/tree/main/
   6. Direct layers usage and layers replacement approaches.
   7. Usage of fine-tuning platform.
 
-### Pruning methods
-A description of the pruning methods and their hyperparameters can be found [here](docs/pruning_methods.md).
 
-### Quantization parameters
-A description of the quantization parameters can be found [here](docs/quantization_parameters.md).
-
-
-For detailed documentation check this page: [PQuantML documentation](https://pquantml.readthedocs.io/en/latest/)
+#### For detailed documentation check this page: [PQuantML documentation](https://pquantml.readthedocs.io/en/latest/)
 
 
 ### Authors
