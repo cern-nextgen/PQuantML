@@ -71,14 +71,8 @@ ROUND_MODE_MAP = {
 
 
 def _quant_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT"):
-    """Build a QONNX Quant node. Returns ([node], output_name).
-
-    QONNX Quant is per-tensor only.  If i/f are per-channel or per-weight tensors
-    (non-scalar), collapse to the broadest range: min(f) / max(i) ensures no channel
-    overflows at the cost of slightly coarser quantization for small-value channels.
-    """
     k_val = int(k.item())
-    if hasattr(f, "numel") and f.numel() > 1:
+    if f.numel() > 1:
         i = i.reshape(-1).max()
         f = f.reshape(-1).min()
     i_val = float(i.item())
@@ -117,12 +111,6 @@ def _quant_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, o
 def _qdq_node(
     name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True
 ):  # noqa: ARG001
-    """Build QuantizeLinear+DequantizeLinear nodes, optionally preceded by a Clip.
-
-    Returns ([nodes], output_name). Set include_clip=False to skip the Clip node
-    (safe when values are guaranteed in-range at inference time, since
-    QuantizeLinear saturates naturally).
-    """
     k_val = int(k.item())
     i_val = float(i.item())
     f_val = float(f.item())
@@ -190,12 +178,12 @@ def _int_weight_node(name_prefix, weight_np, k, i, f, initializers):  # noqa: AR
 
     Returns ([node], output_name).
     """
-    k_val = int(k.item()) if hasattr(k, "item") else int(k)
+    k_val = int(k.item())
     dtype = np.int8 if k_val == 1 else np.uint8
     out_channels = weight_np.shape[0]
     out_name = f"{name_prefix}_dequantized"
 
-    f_t = f.detach().cpu() if hasattr(f, "detach") else torch.as_tensor(f)
+    f_t = f.detach().cpu()
 
     if f_t.numel() == 1:
         # per-tensor
@@ -238,34 +226,50 @@ def _torch_padding_to_onnx(padding, ndim):
     return list(padding) + list(padding)
 
 
+def _to_list(v, n):
+    """Normalize a scalar-or-sequence layer attribute (kernel/stride/...) to an n-length list."""
+    return list(v) if hasattr(v, "__iter__") else [v] * n
+
+
 def _maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn):
-    if (
-        getattr(module, "input_quantizer", None) is not None
-        and getattr(module, "quantize_input", True)
-        and getattr(module, "enable_quantization", True)
-    ):
+    # input_quantizer is created conditionally, so guard it; the bool flags are always present.
+    if getattr(module, "input_quantizer", None) is not None and module.quantize_input and module.enable_quantization:
         q = module.input_quantizer
         k, i, f = q.get_quantization_bits()
-        new_nodes, current = quant_fn(
-            f"{prefix}_in", current, q.round_mode, k, i, f, initializers, overflow_mode=getattr(q, "overflow", "SAT")
-        )
+        new_nodes, current = quant_fn(f"{prefix}_in", current, q.round_mode, k, i, f, initializers, overflow_mode=q.overflow)
         nodes.extend(new_nodes)
     return current
 
 
 def _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn):
-    if (
-        getattr(module, "output_quantizer", None) is not None
-        and getattr(module, "quantize_output", False)
-        and getattr(module, "enable_quantization", True)
-    ):
+    if getattr(module, "output_quantizer", None) is not None and module.quantize_output and module.enable_quantization:
         q = module.output_quantizer
         k, i, f = q.get_quantization_bits()
         new_nodes, current = quant_fn(
-            f"{prefix}_out", current, q.round_mode, k, i, f, initializers, overflow_mode=getattr(q, "overflow", "SAT")
+            f"{prefix}_out", current, q.round_mode, k, i, f, initializers, overflow_mode=q.overflow
         )
         nodes.extend(new_nodes)
     return current
+
+
+def _emit_param(prefix, name, arr, quantizer, nodes, initializers, use_qonnx, store_integer_weights):
+    if use_qonnx:
+        fp_name = f"{prefix}_{name}_fp"
+        initializers.append(onh.from_array(arr, name=fp_name))
+        k, i, f = quantizer.get_quantization_bits()
+        q_nodes, out = _quant_node(
+            f"{prefix}_{name}", fp_name, quantizer.round_mode, k, i, f, initializers, overflow_mode=quantizer.overflow
+        )
+        nodes.extend(q_nodes)
+        return out
+    if store_integer_weights:
+        k, i, f = quantizer.get_quantization_bits()
+        q_nodes, out = _int_weight_node(f"{prefix}_{name}", arr, k, i, f, initializers)
+        nodes.extend(q_nodes)
+        return out
+    out = f"{prefix}_{name}"
+    initializers.append(onh.from_array(arr, name=out))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -274,20 +278,7 @@ def _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn):
 
 
 def _add_dense_integer(module, prefix, current, nodes, initializers):
-    """Dense layer using MatMulInteger for true integer arithmetic.
-
-    Flow:
-        float → Clip+QuantizeLinear → int8 ─┐
-                                             ├─ MatMulInteger → int32
-        int8 weights (pre-transposed) ───────┘
-            → Add int32 bias
-            → DequantizeLinear(scale = s_x * s_w) → float
-
-    The inner product accumulates in int32; there is no float Gemm.
-    A single DequantizeLinear at the end converts back to float for activations.
-    Per-channel weights use axis=1 on the output DequantizeLinear.
-    """
-    if not (getattr(module, "input_quantizer", None) and getattr(module, "quantize_input", True)):
+    if getattr(module, "input_quantizer", None) is None or not module.quantize_input:
         raise ValueError(f"{prefix}: integer_ops requires quantize_input=True on the layer")
 
     # --- Input: Clip + QuantizeLinear → int8 (stop before DequantizeLinear) ---
@@ -323,11 +314,11 @@ def _add_dense_integer(module, prefix, current, nodes, initializers):
     # PyTorch weight shape: [out, in].  MatMulInteger(A, B) = A @ B, so we need [in, out].
     weight_np = module._weight.detach().cpu().numpy().astype(np.float32)
     k_w, _, f_w = module.weight_quantizer.get_quantization_bits()
-    k_w_val = int(k_w.item()) if hasattr(k_w, "item") else int(k_w)
+    k_w_val = int(k_w.item())  # get_quantization_bits() always returns tensors
     dtype_w = np.int8 if k_w_val == 1 else np.uint8
     out_ch = weight_np.shape[0]
 
-    f_w_t = f_w.detach().cpu() if hasattr(f_w, "detach") else torch.as_tensor(f_w)
+    f_w_t = f_w.detach().cpu()
     if f_w_t.numel() == 1:
         f_w_1d = np.array([float(f_w_t.item())])
         per_channel_w = False
@@ -406,41 +397,16 @@ def _add_dense_integer(module, prefix, current, nodes, initializers):
 
 
 def _add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
-    """Dense (linear) projection via MatMul, supporting input of any rank ≥ 2.
-
-    Identical logic to _add_dense but emits ``MatMul(input, W_T)`` instead of
-    ``Gemm(input, W, transB=1)`` so it accepts (B, T, E) inputs (e.g. from MHA
-    projections) as well as the usual 2-D (batch, features) inputs.
-    Weight is stored pre-transposed as [in, out] to avoid a runtime Transpose node.
-    """
     current = _maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     weight_np = module._weight.detach().cpu().numpy().astype(np.float32)  # [out, in]
-    if use_qonnx:
-        weight_fp_name = f"{prefix}_weight_fp"
-        initializers.append(onh.from_array(weight_np, name=weight_fp_name))
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        w_nodes, q_weight_raw = _quant_node(
-            f"{prefix}_weight",
-            weight_fp_name,
-            module.weight_quantizer.round_mode,
-            k_w,
-            i_w,
-            f_w,
-            initializers,
-            overflow_mode=getattr(module.weight_quantizer, "overflow", "SAT"),
+    if use_qonnx or store_integer_weights:
+        # Quantized/int-stored weight is emitted in native [out, in] layout, then transposed.
+        q_weight_native = _emit_param(
+            prefix, "weight", weight_np, module.weight_quantizer, nodes, initializers, use_qonnx, store_integer_weights
         )
-        nodes.extend(w_nodes)
-        q_weight_t = f"{prefix}_weight_T"
-        nodes.append(oh.make_node("Transpose", inputs=[q_weight_raw], outputs=[q_weight_t], perm=[1, 0]))
-        q_weight = q_weight_t
-    elif store_integer_weights:
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        w_nodes, q_weight_stored = _int_weight_node(f"{prefix}_weight", weight_np, k_w, i_w, f_w, initializers)
-        nodes.extend(w_nodes)
-        q_weight_t = f"{prefix}_weight_T"
-        nodes.append(oh.make_node("Transpose", inputs=[q_weight_stored], outputs=[q_weight_t], perm=[1, 0]))
-        q_weight = q_weight_t
+        q_weight = f"{prefix}_weight_T"
+        nodes.append(oh.make_node("Transpose", inputs=[q_weight_native], outputs=[q_weight], perm=[1, 0]))
     else:
         q_weight = f"{prefix}_weight_T"
         initializers.append(onh.from_array(weight_np.T, name=q_weight))  # pre-transposed [in, out]
@@ -451,28 +417,9 @@ def _add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qo
 
     if module._bias is not None:
         bias_np = module._bias.detach().cpu().numpy().astype(np.float32)
-        if use_qonnx:
-            bias_fp_name = f"{prefix}_bias_fp"
-            initializers.append(onh.from_array(bias_np, name=bias_fp_name))
-            k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _quant_node(
-                f"{prefix}_bias",
-                bias_fp_name,
-                module.bias_quantizer.round_mode,
-                k_b,
-                i_b,
-                f_b,
-                initializers,
-                overflow_mode=getattr(module.bias_quantizer, "overflow", "SAT"),
-            )
-            nodes.extend(b_nodes)
-        elif store_integer_weights:
-            k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _int_weight_node(f"{prefix}_bias", bias_np, k_b, i_b, f_b, initializers)
-            nodes.extend(b_nodes)
-        else:
-            q_bias = f"{prefix}_bias"
-            initializers.append(onh.from_array(bias_np, name=q_bias))
+        q_bias = _emit_param(
+            prefix, "bias", bias_np, module.bias_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+        )
         biased_out = f"{prefix}_biased"
         nodes.append(oh.make_node("Add", inputs=[matmul_out, q_bias], outputs=[biased_out]))
         current = biased_out
@@ -487,57 +434,17 @@ def _add_dense(module, prefix, current, nodes, initializers, quant_fn, use_qonnx
     current = _maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     weight_np = module._weight.detach().cpu().numpy().astype(np.float32)
-    if use_qonnx:
-        weight_fp_name = f"{prefix}_weight_fp"
-        initializers.append(onh.from_array(weight_np, name=weight_fp_name))
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        w_nodes, q_weight = _quant_node(
-            f"{prefix}_weight",
-            weight_fp_name,
-            module.weight_quantizer.round_mode,
-            k_w,
-            i_w,
-            f_w,
-            initializers,
-            overflow_mode=getattr(module.weight_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(w_nodes)
-    elif store_integer_weights:
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        w_nodes, q_weight = _int_weight_node(f"{prefix}_weight", weight_np, k_w, i_w, f_w, initializers)
-        nodes.extend(w_nodes)
-    else:
-        q_weight = f"{prefix}_weight"
-        initializers.append(onh.from_array(weight_np, name=q_weight))
+    q_weight = _emit_param(
+        prefix, "weight", weight_np, module.weight_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+    )
 
-    # Use Gemm with transB=1 — weight stays in its native [out, in] layout,
-    # no Transpose node needed.  Bias (if any) is fused as the third Gemm input.
     gemm_inputs = [current, q_weight]
 
     if module._bias is not None:
         bias_np = module._bias.detach().cpu().numpy().astype(np.float32)
-        if use_qonnx:
-            bias_fp_name = f"{prefix}_bias_fp"
-            initializers.append(onh.from_array(bias_np, name=bias_fp_name))
-            k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _quant_node(
-                f"{prefix}_bias",
-                bias_fp_name,
-                module.bias_quantizer.round_mode,
-                k_b,
-                i_b,
-                f_b,
-                initializers,
-                overflow_mode=getattr(module.bias_quantizer, "overflow", "SAT"),
-            )
-            nodes.extend(b_nodes)
-        elif store_integer_weights:
-            k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _int_weight_node(f"{prefix}_bias", bias_np, k_b, i_b, f_b, initializers)
-            nodes.extend(b_nodes)
-        else:
-            q_bias = f"{prefix}_bias"
-            initializers.append(onh.from_array(bias_np, name=q_bias))
+        q_bias = _emit_param(
+            prefix, "bias", bias_np, module.bias_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+        )
         gemm_inputs.append(q_bias)
 
     gemm_out = f"{prefix}_gemm"
@@ -552,55 +459,17 @@ def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_
     current = _maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     weight_np = module._weight.detach().cpu().numpy().astype(np.float32)
-    if use_qonnx:
-        weight_fp_name = f"{prefix}_weight_fp"
-        initializers.append(onh.from_array(weight_np, name=weight_fp_name))
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        w_nodes, q_weight = _quant_node(
-            f"{prefix}_weight",
-            weight_fp_name,
-            module.weight_quantizer.round_mode,
-            k_w,
-            i_w,
-            f_w,
-            initializers,
-            overflow_mode=getattr(module.weight_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(w_nodes)
-    elif store_integer_weights:
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        w_nodes, q_weight = _int_weight_node(f"{prefix}_weight", weight_np, k_w, i_w, f_w, initializers)
-        nodes.extend(w_nodes)
-    else:
-        q_weight = f"{prefix}_weight"
-        initializers.append(onh.from_array(weight_np, name=q_weight))
+    q_weight = _emit_param(
+        prefix, "weight", weight_np, module.weight_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+    )
 
     conv_inputs = [current, q_weight]
 
     if module._bias is not None:
         bias_np = module._bias.detach().cpu().numpy().astype(np.float32)
-        if use_qonnx:
-            bias_fp_name = f"{prefix}_bias_fp"
-            initializers.append(onh.from_array(bias_np, name=bias_fp_name))
-            k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _quant_node(
-                f"{prefix}_bias",
-                bias_fp_name,
-                module.bias_quantizer.round_mode,
-                k_b,
-                i_b,
-                f_b,
-                initializers,
-                overflow_mode=getattr(module.bias_quantizer, "overflow", "SAT"),
-            )
-            nodes.extend(b_nodes)
-        elif store_integer_weights:
-            k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _int_weight_node(f"{prefix}_bias", bias_np, k_b, i_b, f_b, initializers)
-            nodes.extend(b_nodes)
-        else:
-            q_bias = f"{prefix}_bias"
-            initializers.append(onh.from_array(bias_np, name=q_bias))
+        q_bias = _emit_param(
+            prefix, "bias", bias_np, module.bias_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+        )
         conv_inputs.append(q_bias)
 
     padding = module.padding
@@ -611,11 +480,10 @@ def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_
         auto_pad = "NOTSET"
         pads = _torch_padding_to_onnx(padding, ndim)
 
-    to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
     conv_attrs = dict(
-        kernel_shape=to_list(module.kernel_size, ndim),
-        strides=to_list(module.stride, ndim),
-        dilations=to_list(module.dilation, ndim),
+        kernel_shape=_to_list(module.kernel_size, ndim),
+        strides=_to_list(module.stride, ndim),
+        dilations=_to_list(module.dilation, ndim),
         group=module.groups,
         auto_pad=auto_pad,
     )
@@ -636,48 +504,12 @@ def _add_batchnorm(module, prefix, current, nodes, initializers, quant_fn, use_q
     gamma_np = module._weight.detach().cpu().numpy().astype(np.float32)
     beta_np = module._bias.detach().cpu().numpy().astype(np.float32)
 
-    if use_qonnx:
-        gamma_fp_name = f"{prefix}_gamma_fp"
-        initializers.append(onh.from_array(gamma_np, name=gamma_fp_name))
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        g_nodes, q_gamma = _quant_node(
-            f"{prefix}_gamma",
-            gamma_fp_name,
-            module.weight_quantizer.round_mode,
-            k_w,
-            i_w,
-            f_w,
-            initializers,
-            overflow_mode=getattr(module.weight_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(g_nodes)
-
-        beta_fp_name = f"{prefix}_beta_fp"
-        initializers.append(onh.from_array(beta_np, name=beta_fp_name))
-        k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-        b_nodes, q_beta = _quant_node(
-            f"{prefix}_beta",
-            beta_fp_name,
-            module.bias_quantizer.round_mode,
-            k_b,
-            i_b,
-            f_b,
-            initializers,
-            overflow_mode=getattr(module.bias_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(b_nodes)
-    elif store_integer_weights:
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        g_nodes, q_gamma = _int_weight_node(f"{prefix}_gamma", gamma_np, k_w, i_w, f_w, initializers)
-        nodes.extend(g_nodes)
-        k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-        b_nodes, q_beta = _int_weight_node(f"{prefix}_beta", beta_np, k_b, i_b, f_b, initializers)
-        nodes.extend(b_nodes)
-    else:
-        q_gamma = f"{prefix}_gamma"
-        q_beta = f"{prefix}_beta"
-        initializers.append(onh.from_array(gamma_np, name=q_gamma))
-        initializers.append(onh.from_array(beta_np, name=q_beta))
+    q_gamma = _emit_param(
+        prefix, "gamma", gamma_np, module.weight_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+    )
+    q_beta = _emit_param(
+        prefix, "beta", beta_np, module.bias_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+    )
 
     mean_name = f"{prefix}_running_mean"
     var_name = f"{prefix}_running_var"
@@ -697,7 +529,6 @@ def _add_batchnorm(module, prefix, current, nodes, initializers, quant_fn, use_q
 
 
 def _add_layernorm(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
-    """PQLayerNorm. Emits LayerNormalization (opset >= 17 required)."""
     current = _maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     ns = (
@@ -713,50 +544,29 @@ def _add_layernorm(module, prefix, current, nodes, initializers, quant_fn, use_q
     gamma_np = module._weight.detach().cpu().numpy().astype(np.float32) if has_weight else np.ones(ns, dtype=np.float32)
     beta_np = module._bias.detach().cpu().numpy().astype(np.float32) if has_bias else None
 
-    if use_qonnx and has_weight:
-        gamma_fp_name = f"{prefix}_gamma_fp"
-        initializers.append(onh.from_array(gamma_np, name=gamma_fp_name))
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        g_nodes, q_gamma = _quant_node(
-            f"{prefix}_gamma",
-            gamma_fp_name,
-            module.weight_quantizer.round_mode,
-            k_w,
-            i_w,
-            f_w,
+    qonnx_p = use_qonnx and has_weight
+    intstore_p = store_integer_weights and has_weight
+    q_gamma = _emit_param(
+        prefix,
+        "gamma",
+        gamma_np,
+        module.weight_quantizer if has_weight else None,
+        nodes,
+        initializers,
+        qonnx_p,
+        intstore_p,
+    )
+    if has_bias:
+        q_beta = _emit_param(
+            prefix,
+            "beta",
+            beta_np,
+            module.bias_quantizer if has_weight else None,
+            nodes,
             initializers,
-            overflow_mode=getattr(module.weight_quantizer, "overflow", "SAT"),
+            qonnx_p,
+            intstore_p,
         )
-        nodes.extend(g_nodes)
-        if has_bias:
-            beta_fp_name = f"{prefix}_beta_fp"
-            initializers.append(onh.from_array(beta_np, name=beta_fp_name))
-            k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-            b_nodes, q_beta = _quant_node(
-                f"{prefix}_beta",
-                beta_fp_name,
-                module.bias_quantizer.round_mode,
-                k_b,
-                i_b,
-                f_b,
-                initializers,
-                overflow_mode=getattr(module.bias_quantizer, "overflow", "SAT"),
-            )
-            nodes.extend(b_nodes)
-    elif store_integer_weights and has_weight:
-        k_w, i_w, f_w = module.weight_quantizer.get_quantization_bits()
-        g_nodes, q_gamma = _int_weight_node(f"{prefix}_gamma", gamma_np, k_w, i_w, f_w, initializers)
-        nodes.extend(g_nodes)
-        if has_bias:
-            k_b, i_b, f_b = module.bias_quantizer.get_quantization_bits()
-            b_nodes, q_beta = _int_weight_node(f"{prefix}_beta", beta_np, k_b, i_b, f_b, initializers)
-            nodes.extend(b_nodes)
-    else:
-        q_gamma = f"{prefix}_gamma"
-        initializers.append(onh.from_array(gamma_np, name=q_gamma))
-        if has_bias:
-            q_beta = f"{prefix}_beta"
-            initializers.append(onh.from_array(beta_np, name=q_beta))
 
     ln_inputs = [current, q_gamma]
     if has_bias:
@@ -779,15 +589,14 @@ def _add_layernorm(module, prefix, current, nodes, initializers, quant_fn, use_q
 def _add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
     current = _maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
-    to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
     pool_out = f"{prefix}_pool"
     nodes.append(
         oh.make_node(
             "AveragePool",
             inputs=[current],
             outputs=[pool_out],
-            kernel_shape=to_list(module.kernel_size, ndim),
-            strides=to_list(module.stride, ndim),
+            kernel_shape=_to_list(module.kernel_size, ndim),
+            strides=_to_list(module.stride, ndim),
             pads=_torch_padding_to_onnx(module.padding, ndim),
             ceil_mode=int(module.ceil_mode),
             count_include_pad=int(module.count_include_pad),
@@ -804,30 +613,92 @@ def _add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
 # ---------------------------------------------------------------------------
 
 
-def _add_mha(module, prefix, q_input, k_input, v_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
-    """Build ONNX nodes for PQMultiheadAttention.
+def _add_quantized_softmax(sm, prefix, current, nodes, initializers, quant_fn, kpm_mask=None):
+    enable = sm.enable_quantization
+    scaler = float(sm.input_scaler)
+    stable = bool(sm.stable)
+    eps = float(sm.epsilon)
 
-    Decomposes multi-head attention into primitive ONNX ops:
+    def qdq(q, pfx, x):
+        k, i, f = q.get_quantization_bits()
+        q_nodes, out = quant_fn(pfx, x, q.round_mode, k, i, f, initializers, overflow_mode=q.overflow)
+        nodes.extend(q_nodes)
+        return out
 
-      [optional transpose if not batch_first]
-      Q/K/V Gemm projections
-      Reshape (B, L, E) → (B, H, L, head_dim) + Transpose
-      MatMul(Q, K^T) * scale  →  optional Quant
-      Softmax  →  optional Quant
-      MatMul(attn_weights, V)  →  optional Quant
-      Transpose + Reshape (B, T, E)
-      out_proj Gemm
-      [optional transpose back if not batch_first]
+    if sm.quantize_input and enable:
+        current = qdq(sm.input_quantizer, f"{prefix}_sm_in_q", current)
 
-    Returns (out_name, avg_attn_weights_name): the projected output and the
-    attention weights averaged over heads (B, T, S).  Both names are valid ONNX
-    value names so downstream getitem(mha, 0) / getitem(mha, 1) work in the FX
-    converter.
+    if stable:
+        m_name = f"{prefix}_sm_max"
+        nodes.append(oh.make_node("ReduceMax", inputs=[current], outputs=[m_name], axes=[-1], keepdims=1))
+        exp_in = f"{prefix}_sm_sub"
+        nodes.append(oh.make_node("Sub", inputs=[m_name, current], outputs=[exp_in]))
+    else:
+        exp_in = current
 
-    Note: if ``approximate_softmax=True`` the module uses a polynomial
-    approximation in PyTorch, but ONNX has no equivalent standard op — a plain
-    ``Softmax`` node is emitted instead.
-    """
+    exp_t = sm.exp_table
+    if exp_t.quantize_input and enable:
+        exp_in = qdq(exp_t.input_quantizer, f"{prefix}_sm_exp_in_q", exp_in)
+    coeff = -scaler if stable else scaler
+    exp_arg = exp_in
+    if coeff != 1.0:
+        coeff_name = f"{prefix}_sm_exp_coeff"
+        initializers.append(onh.from_array(np.array(coeff, dtype=np.float32), name=coeff_name))
+        exp_arg = f"{prefix}_sm_exp_arg"
+        nodes.append(oh.make_node("Mul", inputs=[exp_in, coeff_name], outputs=[exp_arg]))
+    exp_inp = f"{prefix}_sm_exp"
+    nodes.append(oh.make_node("Exp", inputs=[exp_arg], outputs=[exp_inp]))
+    if exp_t.quantize_output and enable:
+        exp_inp = qdq(exp_t.output_quantizer, f"{prefix}_sm_exp_out_q", exp_inp)
+
+    if kpm_mask is not None:
+        kpm_f = f"{prefix}_sm_mask_f"
+        nodes.append(oh.make_node("Cast", inputs=[kpm_mask], outputs=[kpm_f], to=TensorProto.FLOAT))
+        masked = f"{prefix}_sm_masked"
+        nodes.append(oh.make_node("Mul", inputs=[kpm_f, exp_inp], outputs=[masked]))
+        exp_inp = masked
+
+    sum_axes = f"{prefix}_sm_sum_axes"
+    initializers.append(onh.from_array(np.array([-1], dtype=np.int64), name=sum_axes))
+    sums = f"{prefix}_sm_sum"
+    nodes.append(oh.make_node("ReduceSum", inputs=[exp_inp, sum_axes], outputs=[sums], keepdims=1))
+
+    inv_t = sm.inv_table
+    inv_in = sums
+    if inv_t.quantize_input and enable:
+        inv_in = qdq(inv_t.input_quantizer, f"{prefix}_sm_inv_in_q", inv_in)
+    eps_name = f"{prefix}_sm_eps"
+    initializers.append(onh.from_array(np.array(eps, dtype=np.float32), name=eps_name))
+    inv_add = f"{prefix}_sm_inv_add"
+    nodes.append(oh.make_node("Add", inputs=[inv_in, eps_name], outputs=[inv_add]))
+    divisor = f"{prefix}_sm_inv"
+    nodes.append(oh.make_node("Reciprocal", inputs=[inv_add], outputs=[divisor]))
+    if inv_t.quantize_output and enable:
+        divisor = qdq(inv_t.output_quantizer, f"{prefix}_sm_inv_out_q", divisor)
+
+    out = f"{prefix}_sm_out"
+    nodes.append(oh.make_node("Mul", inputs=[exp_inp, divisor], outputs=[out]))
+    current = out
+
+    if sm.quantize_output and enable:
+        current = qdq(sm.output_quantizer, f"{prefix}_sm_out_q", current)
+    return current
+
+
+def _add_mha(
+    module,
+    prefix,
+    q_input,
+    k_input,
+    v_input,
+    nodes,
+    initializers,
+    quant_fn,
+    use_qonnx,
+    store_integer_weights,
+    key_padding_mask=None,
+    attn_mask=None,
+):
     H = module.num_heads
     head_dim = module.head_dim
     E = module.embed_dim
@@ -907,50 +778,29 @@ def _add_mha(module, prefix, q_input, k_input, v_input, nodes, initializers, qua
     nodes.append(oh.make_node("Mul", inputs=[raw_scores, scale_cst], outputs=[scaled_scores]))
     current = scaled_scores
 
-    # --- Softmax input quantization (the MHA enables the softmax's input quantizer) ---
-    if module.softmax.quantize_input and getattr(module, "enable_quantization", True):
-        q = module.softmax.input_quantizer
-        k_q, i_q, f_q = q.get_quantization_bits()
-        q_nodes, current = quant_fn(
-            f"{prefix}_attn_score_q",
-            current,
-            q.round_mode,
-            k_q,
-            i_q,
-            f_q,
-            initializers,
-            overflow_mode=getattr(q, "overflow", "SAT"),
-        )
-        nodes.extend(q_nodes)
+    if attn_mask is not None:
+        masked_scores = f"{prefix}_scores_masked"
+        nodes.append(oh.make_node("Add", inputs=[current, attn_mask], outputs=[masked_scores]))
+        current = masked_scores
 
-    # --- Softmax (dim=-1); approximate_softmax falls back to standard Softmax in ONNX ---
-    attn_w_name = f"{prefix}_attn_weights"
-    nodes.append(oh.make_node("Softmax", inputs=[current], outputs=[attn_w_name], axis=-1))
-    current = attn_w_name
+    kpm_mult = None
+    if key_padding_mask is not None:
+        kpm_not = f"{prefix}_kpm_not"
+        nodes.append(oh.make_node("Not", inputs=[key_padding_mask], outputs=[kpm_not]))
+        kpm_axes = f"{prefix}_kpm_axes"
+        initializers.append(onh.from_array(np.array([1, 2], dtype=np.int64), name=kpm_axes))
+        kpm_mult = f"{prefix}_kpm_mask"  # (B, 1, 1, S) bool, cast to float inside the softmax
+        nodes.append(oh.make_node("Unsqueeze", inputs=[kpm_not, kpm_axes], outputs=[kpm_mult]))
 
-    # --- Softmax output quantization (the MHA enables the softmax's output quantizer) ---
-    if module.softmax.quantize_output and getattr(module, "enable_quantization", True):
-        q = module.softmax.output_quantizer
-        k_q, i_q, f_q = q.get_quantization_bits()
-        q_nodes, current = quant_fn(
-            f"{prefix}_attn_weight_q",
-            current,
-            q.round_mode,
-            k_q,
-            i_q,
-            f_q,
-            initializers,
-            overflow_mode=getattr(q, "overflow", "SAT"),
-        )
-        nodes.extend(q_nodes)
+    current = _add_quantized_softmax(
+        module.softmax, f"{prefix}_attn", current, nodes, initializers, quant_fn, kpm_mask=kpm_mult
+    )
+    attn_w_name = current  # softmax output = attention weights (also averaged over heads below)
 
-    # --- Context: (B, H, T, S) @ (B, H, S, head_dim) → (B, H, T, head_dim) ---
-    # No dedicated quantizer: out_proj's input quantizer (exported with the dense) covers it.
     ctx_raw = f"{prefix}_ctx_raw"
     nodes.append(oh.make_node("MatMul", inputs=[current, v_h], outputs=[ctx_raw]))
     current_ctx = ctx_raw
 
-    # --- Merge heads: (B, H, T, head_dim) → (B, T, E) using dynamic shapes ---
     ctx_t = f"{prefix}_ctx_t"  # after Transpose → (B, T, H, head_dim)
     ctx_shape = f"{prefix}_ctx_shape"
     ctx_b_sc = f"{prefix}_ctx_b_sc"
@@ -1205,9 +1055,7 @@ def _emit_module(
         # Standalone quantizer (e.g. an auto-inserted missing quantizer or a
         # constant-matrix quantizer): emit a single QDQ node from its k/i/f.
         k, i, f = module.get_quantization_bits()
-        new_nodes, out = quant_fn(
-            prefix, current, module.round_mode, k, i, f, initializers, overflow_mode=getattr(module, "overflow", "SAT")
-        )
+        new_nodes, out = quant_fn(prefix, current, module.round_mode, k, i, f, initializers, overflow_mode=module.overflow)
         nodes.extend(new_nodes)
         return out
     raise TypeError(f"Unsupported module type for ONNX export: {type(module).__name__}")
@@ -1259,47 +1107,23 @@ def convert_to_onnx(
 
     Returns:
         The constructed onnx.ModelProto.
+
+    Note:
+        This is a thin wrapper over convert_to_onnx_fx().  An ``nn.Sequential`` is a
+        plain linear chain, so torch.fx always traces it successfully; routing through
+        the FX converter keeps a single code path for both linear and branched models.
     """
-    model.eval()
-    quant_fn = _quant_node if use_qonnx else functools.partial(_qdq_node, include_clip=include_clip)
-
-    nodes: list[onnx.NodeProto] = []
-    initializers: list[onnx.TensorProto] = []
-    current = "input"
-
-    for layer_idx, module in enumerate(model):
-        prefix = f"layer{layer_idx}"
-        current = _emit_module(
-            module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops
-        )
-
-    with torch.no_grad():
-        dummy_out = model(torch.zeros(1, *input_shape))
-    batch_dim = batch_size  # None → dynamic, int → fixed
-    output_shape = [batch_dim] + list(dummy_out.shape[1:])
-
-    batch_dim_vi = oh.make_tensor_value_info("input", TensorProto.FLOAT, [batch_dim, *input_shape])
-    output_vi = oh.make_tensor_value_info(current, TensorProto.FLOAT, output_shape)
-
-    graph = oh.make_graph(
-        nodes=nodes,
-        name="pquant_onnx",
-        inputs=[batch_dim_vi],
-        outputs=[output_vi],
-        initializer=initializers,
+    return convert_to_onnx_fx(
+        model,
+        input_shape,
+        output_path=output_path,
+        opset=opset,
+        use_qonnx=use_qonnx,
+        store_integer_weights=store_integer_weights,
+        integer_ops=integer_ops,
+        include_clip=include_clip,
+        batch_size=batch_size,
     )
-
-    opset_imports = [oh.make_opsetid("", opset)]
-    if use_qonnx:
-        opset_imports.append(oh.make_opsetid("qonnx.custom_op.general", 1))
-    model_proto = oh.make_model(graph, opset_imports=opset_imports)
-    model_proto.ir_version = 6
-
-    onnx.checker.check_model(model_proto)
-    onnx.save(model_proto, output_path)
-    fmt = "QONNX" if use_qonnx else "ONNX (QDQ)"
-    logging.info("Saved %s model → %s", fmt, output_path)
-    return model_proto
 
 
 # ---------------------------------------------------------------------------
@@ -1321,38 +1145,6 @@ def export_qdq_layernorm(
     eps_q0: int = 1,
     opset: int = 17,
 ) -> onnx.ModelProto:
-    """Build and save a single-LayerNormalization ONNX graph using static QDQ quantization.
-
-    Graph layout::
-
-        int8 input -> DequantizeLinear -> LayerNormalization -> QuantizeLinear -> DequantizeLinear -> output
-
-    All quantization parameters are explicit float32 initializers (no dynamic
-    tensors).  Per-tensor quantization only; activation zero-points are 0.
-
-    Constraints (validated at build time, not in the graph):
-      * ``input_shape`` is rank-2 or rank-3 with no dynamic dims.
-      * Last dim ``D`` is a power of two AND a multiple of 32.
-      * ``gamma``/``beta`` are 1-D float arrays of length ``D``.
-      * ``gamma`` is exactly representable as int16 with scale ``2**-7``  (Q7).
-      * ``beta``  is exactly representable as int16 with scale ``2**-15`` (Q15).
-      * Input/output scales are exact powers of two, given as log2 exponents.
-      * ``epsilon = eps_q0 * input_scale**2`` with integer ``eps_q0 >= 1``.
-      * Normalization axis is the last axis.
-
-    Args:
-        output_path:        Where to save the .onnx file.
-        input_shape:        Static shape of the int8 graph input, e.g. ``(4, 64)`` or ``(1, 4, 64)``.
-        gamma:              Constant gamma initializer, shape ``(D,)``.
-        beta:               Constant beta initializer, shape ``(D,)``.
-        input_scale_log2:   Integer ``a`` with input scale ``= 2**a``.
-        output_scale_log2:  Integer ``b`` with output scale ``= 2**b``.
-        eps_q0:             Positive integer ``>= 1``; ``epsilon = eps_q0 * (2**a)**2``.
-        opset:              ONNX opset version (must be ``>= 17`` for LayerNormalization).
-
-    Returns:
-        The constructed ``onnx.ModelProto``.
-    """
     # ----- validate shape -----
     input_shape = tuple(int(d) for d in input_shape)
     if len(input_shape) not in (2, 3):
@@ -1479,8 +1271,6 @@ def export_qdq_layernorm(
 
 
 class _PQTracer(_fx.Tracer):
-    """Tracer that treats all PQuant layer types (and standard torch.nn leaves) as atomic."""
-
     _LEAF_TYPES = (
         PQDense,
         PQConv2d,
@@ -1499,6 +1289,48 @@ class _PQTracer(_fx.Tracer):
         return isinstance(m, self._LEAF_TYPES) or super().is_leaf_module(m, qualname)
 
 
+def _normalize_input_shapes(input_shape) -> list[tuple]:
+    seq = list(input_shape)
+    if len(seq) > 0 and all(isinstance(s, (list, tuple)) for s in seq):
+        return [tuple(int(d) for d in s) for s in seq]
+    return [tuple(int(d) for d in seq)]
+
+
+def _normalize_input_dtypes(input_dtypes, n: int):
+    torch_map = {
+        "float32": torch.float32,
+        "float": torch.float32,
+        "bool": torch.bool,
+        "int64": torch.int64,
+        "int32": torch.int32,
+    }
+    tp_map = {
+        torch.float32: TensorProto.FLOAT,
+        torch.bool: TensorProto.BOOL,
+        torch.int64: TensorProto.INT64,
+        torch.int32: TensorProto.INT32,
+    }
+
+    if input_dtypes is None:
+        items = [torch.float32] * n
+    elif isinstance(input_dtypes, (list, tuple)):
+        items = list(input_dtypes)
+    else:
+        items = [input_dtypes] * n
+
+    if len(items) != n:
+        raise ValueError(f"input_dtypes has {len(items)} entries but there are {n} input(s)")
+
+    torch_dtypes, tp_dtypes = [], []
+    for d in items:
+        td = torch_map[d] if isinstance(d, str) else d
+        if td not in tp_map:
+            raise ValueError(f"Unsupported input dtype {d!r}; expected one of {list(torch_map)}")
+        torch_dtypes.append(td)
+        tp_dtypes.append(tp_map[td])
+    return torch_dtypes, tp_dtypes
+
+
 def convert_to_onnx_fx(
     model: nn.Module,
     input_shape: tuple,
@@ -1508,6 +1340,9 @@ def convert_to_onnx_fx(
     store_integer_weights: bool = False,
     integer_ops: bool = False,
     include_clip: bool = True,
+    concrete_args: dict | None = None,
+    input_dtypes=None,
+    batch_size: int | None = None,
 ) -> onnx.ModelProto:
     """
     Convert any PQuant nn.Module to ONNX using torch.fx symbolic tracing.
@@ -1516,23 +1351,68 @@ def convert_to_onnx_fx(
     including residual/skip connections, branches, and concatenations.  It requires
     the model to be symbolically traceable (no data-dependent control flow).
 
-    Args match convert_to_onnx() exactly; see that function for parameter docs.
+    Multiple inputs are supported: pass a sequence of per-input shapes as
+    ``input_shape`` (e.g. ``[(3, 32, 32), (16,)]``) and the model's ``forward``
+    must take one tensor argument per shape, in the same order.  A single input
+    keeps the graph-input name ``"input"``; with multiple inputs each graph input
+    is named after its ``forward`` parameter.
+
+    Non-tensor inputs (bool flags, int sizes, ``None`` masks, ...) are not ONNX
+    graph inputs.  Specialize them to constants at trace time by passing
+    ``concrete_args={"flag": False, ...}``; only the remaining tensor arguments
+    become graph inputs (see ``concrete_args`` below).
+
+    Args:
+        concrete_args:  Forwarded to ``torch.fx.Tracer.trace`` to bake non-tensor
+                        ``forward`` arguments in as constants.  Keys are
+                        ``forward`` parameter names.  Specialized arguments are
+                        dropped from the ONNX graph inputs.
+        input_dtypes:   Optional dtype per input (single value or a list parallel
+                        to ``input_shape``).  Each is a torch.dtype or a string
+                        (``"float32"``, ``"bool"``, ``"int64"``, ``"int32"``).
+                        Defaults to float32.  Use ``"bool"`` for a runtime
+                        attention ``key_padding_mask`` input, for example.
+        batch_size:     If not None, fix the batch dimension of every graph input
+                        and output to this value.  If None (default), the batch
+                        dimension is left dynamic.
+
+    Remaining args match the per-layer quantization behaviour described in the module docstring.
     """
     model.eval()
     quant_fn = _quant_node if use_qonnx else functools.partial(_qdq_node, include_clip=include_clip)
 
-    graph = _PQTracer().trace(model)
+    input_shapes = _normalize_input_shapes(input_shape)
+    input_torch_dtypes, input_tp_dtypes = _normalize_input_dtypes(input_dtypes, len(input_shapes))
+
+    graph = _PQTracer().trace(model, concrete_args=concrete_args)
     gm = _fx.GraphModule(model, graph)
 
-    # ShapeProp populates node.meta["tensor_meta"], which transpose/permute
-    # need to expand torch's two-arg .transpose(d0, d1) into a full ONNX perm.
+    for n in reversed(list(gm.graph.find_nodes(op="call_function", target=torch._assert))):
+        gm.graph.erase_node(n)
+    for n in reversed(list(gm.graph.find_nodes(op="call_function", target=_operator.eq))):
+        if len(n.users) == 0:
+            gm.graph.erase_node(n)
+    for n in reversed(list(gm.graph.find_nodes(op="placeholder"))):
+        if len(n.users) == 0 and len(n.args) > 0:  # specialized: has a baked default, now unused
+            gm.graph.erase_node(n)
+    gm.recompile()
+
+    tensor_phs = list(gm.graph.find_nodes(op="placeholder"))
+    if len(tensor_phs) != len(input_shapes):
+        raise ValueError(
+            f"FX export: model.forward has {len(tensor_phs)} tensor input(s) but "
+            f"input_shape describes {len(input_shapes)}.  Specialize non-tensor "
+            f"arguments via concrete_args={{...}}."
+        )
+    input_names = ["input"] if len(tensor_phs) == 1 else [str(p.target) for p in tensor_phs]
+    ph_to_name = {p: n for p, n in zip(tensor_phs, input_names)}
+
     from torch.fx.passes.shape_prop import ShapeProp
 
-    # Build the probe tensor on the model's own device so ShapeProp doesn't hit a
-    # device mismatch when a default device (e.g. CUDA) is set via torch.set_default_device.
     device = next((p.device for p in model.parameters()), None)
+    probes = [torch.zeros(1, *shp, device=device, dtype=dt) for shp, dt in zip(input_shapes, input_torch_dtypes)]
     with torch.no_grad():
-        ShapeProp(gm).propagate(torch.zeros(1, *input_shape, device=device))
+        ShapeProp(gm).propagate(*probes)
 
     onnx_nodes: list[onnx.NodeProto] = []
     initializers: list[onnx.TensorProto] = []
@@ -1545,8 +1425,6 @@ def convert_to_onnx_fx(
         raise TypeError(f"Expected fx.Node, got {type(arg)}")
 
     def _binop_inputs(node: _fx.Node) -> list[str]:
-        # Like _res for both args, but lifts scalar literals (int/float/bool)
-        # to float32 initializers so patterns like ``x / 2.0`` work.
         names: list[str] = []
         for i, a in enumerate(node.args[:2]):
             if isinstance(a, _fx.Node):
@@ -1581,11 +1459,9 @@ def convert_to_onnx_fx(
 
     for node in gm.graph.nodes:
         if node.op == "placeholder":
-            node_to_name[node] = "input"
+            node_to_name[node] = ph_to_name[node]
 
         elif node.op == "get_attr":
-            # Constant tensor attributes — store as initializer on first use.
-            # Retrieve the actual tensor from the GraphModule.
             obj = gm
             for part in node.target.split("."):
                 obj = getattr(obj, part)
@@ -1598,10 +1474,21 @@ def convert_to_onnx_fx(
             mod = gm.get_submodule(node.target)
             mod_prefix = node.name.replace(".", "_")
             if isinstance(mod, PQMultiheadAttention):
-                # node.args = (query, key, value[, key_padding_mask, attn_mask, ...])
+                # forward(query, key, value, key_padding_mask=None, attn_mask=None, ...)
                 q_name = node_to_name[node.args[0]]
                 k_name = node_to_name[node.args[1]] if len(node.args) > 1 else q_name
                 v_name = node_to_name[node.args[2]] if len(node.args) > 2 else q_name
+
+                def _mask_name(pos, kw, node=node):
+                    arg = node.args[pos] if len(node.args) > pos else node.kwargs.get(kw)
+                    if arg is None:
+                        return None
+                    if not isinstance(arg, _fx.Node):
+                        raise TypeError(f"FX ONNX export: MHA {kw} must be a tensor (constant or input), got {type(arg)}")
+                    return node_to_name[arg]
+
+                kpm_name = _mask_name(3, "key_padding_mask")
+                attn_mask_name = _mask_name(4, "attn_mask")
                 out_name, avg_attn_name = _add_mha(
                     mod,
                     mod_prefix,
@@ -1613,6 +1500,8 @@ def convert_to_onnx_fx(
                     quant_fn,
                     use_qonnx,
                     store_integer_weights,
+                    key_padding_mask=kpm_name,
+                    attn_mask=attn_mask_name,
                 )
                 # Store tuple so operator.getitem(node, 0/1) resolves correctly.
                 node_to_name[node] = (out_name, avg_attn_name)
@@ -1632,6 +1521,9 @@ def convert_to_onnx_fx(
 
         elif node.op == "call_function":
             fn = node.target
+
+            if fn is torch._assert or getattr(fn, "__name__", "") == "_assert" or fn is _operator.eq:
+                continue
 
             if fn is _operator.getitem:
                 # Unpack a tuple output (e.g. from PQMultiheadAttention).
@@ -1767,20 +1659,31 @@ def convert_to_onnx_fx(
                 # MHA nodes store a tuple (out, avg_attn); expose the attention output.
                 output_names.append(val[0] if isinstance(val, tuple) else val)
 
+    graph_input_names = set(input_names)
+    for idx, nm in enumerate(output_names):
+        if nm in graph_input_names:
+            ident = f"{nm}_identity_out{idx}"
+            onnx_nodes.append(oh.make_node("Identity", inputs=[nm], outputs=[ident]))
+            output_names[idx] = ident
+
     with torch.no_grad():
-        dummy_out = model(torch.zeros(1, *input_shape, device=device))
+        dummy_out = model(*probes, **(concrete_args or {}))
     dummy_outs = list(dummy_out) if isinstance(dummy_out, (tuple, list)) else [dummy_out]
 
-    batch_dim = oh.make_tensor_value_info("input", TensorProto.FLOAT, [None, *input_shape])
+    batch_dim = batch_size  # None → dynamic, int → fixed
+    input_vis = [
+        oh.make_tensor_value_info(name, tp, [batch_dim, *shp])
+        for name, shp, tp in zip(input_names, input_shapes, input_tp_dtypes)
+    ]
     output_vis = [
-        oh.make_tensor_value_info(name, TensorProto.FLOAT, [None] + list(t.shape[1:]))
+        oh.make_tensor_value_info(name, TensorProto.FLOAT, [batch_dim] + list(t.shape[1:]))
         for name, t in zip(output_names, dummy_outs)
     ]
 
     onnx_graph = oh.make_graph(
         nodes=onnx_nodes,
         name="pquant_onnx_fx",
-        inputs=[batch_dim],
+        inputs=input_vis,
         outputs=output_vis,
         initializer=initializers,
     )
@@ -1796,64 +1699,3 @@ def convert_to_onnx_fx(
     fmt = "QONNX" if use_qonnx else "ONNX (QDQ)"
     logging.info("Saved %s model (FX) → %s", fmt, output_path)
     return model_proto
-
-
-# ---------------------------------------------------------------------------
-# usage example
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import onnxruntime as ort
-
-    import pquant
-
-    cfg = pquant.cs_config()
-    cfg.quantization_parameters.granularity = "per-channel"
-
-    model = nn.Sequential(
-        PQConv2d(cfg, in_channels=3, out_channels=16, kernel_size=3, padding=1),
-        PQBatchNorm2d(cfg, num_features=16),
-        nn.ReLU(),
-        PQAvgPool2d(cfg, kernel_size=2, stride=2),
-        nn.Flatten(),
-        PQDense(cfg, in_features=16 * 16 * 16, out_features=64),
-        nn.ReLU(),
-        PQDense(cfg, in_features=64, out_features=10),
-    )
-
-    x = torch.randn(4, 3, 32, 32)
-    with torch.no_grad():
-        model(x)
-
-    for module in model.modules():
-        if hasattr(module, "apply_final_compression"):
-            module.apply_final_compression()
-
-    model.eval()
-    with torch.no_grad():
-        torch_out = model(x).numpy()
-
-    qonnx_path = "model_qonnx.onnx"
-    onnx_path = "model_qdq.onnx"
-    convert_to_onnx(model, input_shape=(3, 32, 32), output_path=qonnx_path, use_qonnx=True)
-    convert_to_onnx(model, input_shape=(3, 32, 32), output_path=onnx_path, use_qonnx=False)
-
-    from qonnx.core.modelwrapper import ModelWrapper
-    from qonnx.core.onnx_exec import execute_onnx
-    from qonnx.transformation.infer_shapes import InferShapes
-
-    qmodel = ModelWrapper(qonnx_path)
-    qmodel.graph.input[0].type.tensor_type.shape.dim[0].dim_value = x.shape[0]
-    qmodel = qmodel.transform(InferShapes())
-    input_name = qmodel.graph.input[0].name
-    output_name = qmodel.graph.output[0].name
-    qonnx_out = execute_onnx(qmodel, {input_name: x.numpy()})[output_name]
-
-    sess = ort.InferenceSession(onnx_path)
-    onnx_out = sess.run(None, {sess.get_inputs()[0].name: x.numpy()})[0]
-
-    print(f"\n{'':=<55}")  # noqa: T201
-    print(f"  max |torch - qonnx| : {np.abs(torch_out - qonnx_out).max():.6f}")  # noqa: T201
-    print(f"  max |torch - onnx|  : {np.abs(torch_out - onnx_out).max():.6f}")  # noqa: T201
-    print(f"  max |qonnx - onnx|  : {np.abs(qonnx_out - onnx_out).max():.6f}")  # noqa: T201
-    print(f"{'':=<55}")  # noqa: T201

@@ -238,6 +238,18 @@ def _int_weight_node(name_prefix, weight_np, k, i, f, initializers):  # noqa: AR
 # ---------------------------------------------------------------------------
 
 
+def _keras_dtype_to_tp(dtype):
+    """Map a Keras/numpy dtype string to an ONNX TensorProto dtype (default float32)."""
+    return {
+        "float32": TensorProto.FLOAT,
+        "float64": TensorProto.DOUBLE,
+        "float16": TensorProto.FLOAT16,
+        "bool": TensorProto.BOOL,
+        "int64": TensorProto.INT64,
+        "int32": TensorProto.INT32,
+    }.get(str(dtype), TensorProto.FLOAT)
+
+
 def _np(tensor):
     """Convert a Keras tensor / variable / scalar to a float32 numpy array."""
     return np.array(tensor, dtype=np.float32)
@@ -275,12 +287,47 @@ def _bn_transpose_info(layer):
     return True, perm_fwd, perm_bwd
 
 
+def _to_list(v, n):
+    """Normalize a scalar-or-sequence layer attribute (kernel/stride/...) to an n-length list."""
+    return list(v) if hasattr(v, "__iter__") else [v] * n
+
+
+def _emit_param(prefix, name, arr, quantizer, nodes, initializers, use_qonnx, store_integer_weights, out_channels=None):
+    """Emit the ONNX value for a learnable parameter (kernel/bias/gamma/beta) and return its name"""
+    if use_qonnx:
+        fp_name = f"{prefix}_{name}_fp"
+        initializers.append(onh.from_array(arr, name=fp_name))
+        k, i, f = quantizer.get_quantization_bits()
+        q_nodes, out = _quant_node(
+            f"{prefix}_{name}",
+            fp_name,
+            quantizer.round_mode,
+            _np(k),
+            _np(i),
+            _np(f),
+            initializers,
+            overflow_mode=quantizer.overflow,
+        )
+        nodes.extend(q_nodes)
+        return out
+    if store_integer_weights:
+        k, i, f = quantizer.get_quantization_bits()
+        if out_channels is not None:
+            k_a = _weight_f_for_onnx(_np(k), out_channels)
+            i_a = _weight_f_for_onnx(_np(i), out_channels)
+            f_a = _weight_f_for_onnx(_np(f), out_channels)
+        else:
+            k_a, i_a, f_a = _np(k), _np(i), _np(f)
+        q_nodes, out = _int_weight_node(f"{prefix}_{name}", arr, k_a, i_a, f_a, initializers)
+        nodes.extend(q_nodes)
+        return out
+    out = f"{prefix}_{name}"
+    initializers.append(onh.from_array(arr, name=out))
+    return out
+
+
 def _maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn):
-    if (
-        getattr(layer, "input_quantizer", None) is not None
-        and getattr(layer, "quantize_input", True)
-        and getattr(layer, "enable_quantization", True)
-    ):
+    if getattr(layer, "input_quantizer", None) is not None and layer.quantize_input and layer.enable_quantization:
         q = layer.input_quantizer
         k, i, f = q.get_quantization_bits()
         new_nodes, current = quant_fn(
@@ -291,18 +338,14 @@ def _maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn):
             _np(i),
             _np(f),
             initializers,
-            overflow_mode=getattr(q, "overflow", "SAT"),
+            overflow_mode=q.overflow,
         )
         nodes.extend(new_nodes)
     return current
 
 
 def _maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn):
-    if (
-        getattr(layer, "output_quantizer", None) is not None
-        and getattr(layer, "quantize_output", False)
-        and getattr(layer, "enable_quantization", True)
-    ):
+    if getattr(layer, "output_quantizer", None) is not None and layer.quantize_output and layer.enable_quantization:
         q = layer.output_quantizer
         k, i, f = q.get_quantization_bits()
         new_nodes, current = quant_fn(
@@ -313,7 +356,7 @@ def _maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn):
             _np(i),
             _np(f),
             initializers,
-            overflow_mode=getattr(q, "overflow", "SAT"),
+            overflow_mode=q.overflow,
         )
         nodes.extend(new_nodes)
     return current
@@ -347,70 +390,22 @@ def _weight_f_for_onnx(f_np, out_channels):
 
 
 def _add_dense(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
-    """Dense / PQDense.  Keras kernel [in, out] stored as [out, in]; Gemm uses transB=1.
-
-    Storing the weight pre-transposed means axis=0 is always the output dimension,
-    which is required for per-channel DequantizeLinear and avoids a runtime Transpose.
-    """
     current = _maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
 
-    # Transpose kernel to [out, in]; Gemm will use transB=1 so Y = X @ W^T = X @ kernel.
     kernel_np = _np(layer._kernel).T  # [out, in]
     out_units = kernel_np.shape[0]
 
-    if use_qonnx:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        wfp_name = f"{prefix}_weight_fp"
-        initializers.append(onh.from_array(kernel_np, name=wfp_name))
-        w_nodes, q_weight = _quant_node(
-            f"{prefix}_weight",
-            wfp_name,
-            layer.weight_quantizer.round_mode,
-            _np(k_w),
-            _np(i_w),
-            _np(f_w),
-            initializers,
-            overflow_mode=getattr(layer.weight_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(w_nodes)
-    elif store_integer_weights:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        f_np_w = _np(f_w)
-        f_for_onnx = _weight_f_for_onnx(f_np_w, out_units)
-        k_for_onnx = _weight_f_for_onnx(_np(k_w), out_units)
-        i_for_onnx = _weight_f_for_onnx(_np(i_w), out_units)
-        w_nodes, q_weight = _int_weight_node(f"{prefix}_weight", kernel_np, k_for_onnx, i_for_onnx, f_for_onnx, initializers)
-        nodes.extend(w_nodes)
-    else:
-        q_weight = f"{prefix}_weight"
-        initializers.append(onh.from_array(kernel_np, name=q_weight))
+    q_weight = _emit_param(
+        prefix, "weight", kernel_np, layer.weight_quantizer, nodes, initializers, use_qonnx, store_integer_weights, out_units
+    )
 
     gemm_inputs = [current, q_weight]
 
     if layer._bias is not None:
         bias_np = _np(layer._bias)
-        if use_qonnx:
-            k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-            bfp_name = f"{prefix}_bias_fp"
-            initializers.append(onh.from_array(bias_np, name=bfp_name))
-            b_nodes, q_bias = _quant_node(
-                f"{prefix}_bias",
-                bfp_name,
-                layer.bias_quantizer.round_mode,
-                _np(k_b),
-                _np(i_b),
-                _np(f_b),
-                initializers,
-                overflow_mode=getattr(layer.bias_quantizer, "overflow", "SAT"),
-            )
-            nodes.extend(b_nodes)
-        elif store_integer_weights:
-            k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _int_weight_node(f"{prefix}_bias", bias_np, _np(k_b), _np(i_b), _np(f_b), initializers)
-            nodes.extend(b_nodes)
-        else:
-            q_bias = f"{prefix}_bias"
-            initializers.append(onh.from_array(bias_np, name=q_bias))
+        q_bias = _emit_param(
+            prefix, "bias", bias_np, layer.bias_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+        )
         gemm_inputs.append(q_bias)
 
     gemm_out = f"{prefix}_gemm"
@@ -422,7 +417,6 @@ def _add_dense(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx,
 
 
 def _add_conv(layer, prefix, current, nodes, initializers, ndim, quant_fn, use_qonnx, store_integer_weights):
-    """PQConv2d / PQConv1d.  Keras kernel: [*kernel, in/g, out] → ONNX [out, in/g, *kernel]."""
     cl = _channels_last(layer)
 
     if cl:
@@ -441,63 +435,27 @@ def _add_conv(layer, prefix, current, nodes, initializers, ndim, quant_fn, use_q
 
     out_channels = kernel_onnx.shape[0]
 
-    if use_qonnx:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        wfp_name = f"{prefix}_weight_fp"
-        initializers.append(onh.from_array(kernel_onnx, name=wfp_name))
-        w_nodes, q_weight = _quant_node(
-            f"{prefix}_weight",
-            wfp_name,
-            layer.weight_quantizer.round_mode,
-            _np(k_w),
-            _np(i_w),
-            _np(f_w),
-            initializers,
-            overflow_mode=getattr(layer.weight_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(w_nodes)
-    elif store_integer_weights:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        f_for_onnx = _weight_f_for_onnx(_np(f_w), out_channels)
-        k_for_onnx = _weight_f_for_onnx(_np(k_w), out_channels)
-        i_for_onnx = _weight_f_for_onnx(_np(i_w), out_channels)
-        w_nodes, q_weight = _int_weight_node(
-            f"{prefix}_weight", kernel_onnx, k_for_onnx, i_for_onnx, f_for_onnx, initializers
-        )
-        nodes.extend(w_nodes)
-    else:
-        q_weight = f"{prefix}_weight"
-        initializers.append(onh.from_array(kernel_onnx, name=q_weight))
+    q_weight = _emit_param(
+        prefix,
+        "weight",
+        kernel_onnx,
+        layer.weight_quantizer,
+        nodes,
+        initializers,
+        use_qonnx,
+        store_integer_weights,
+        out_channels,
+    )
 
     conv_inputs = [current, q_weight]
 
     if layer._bias is not None:
         bias_np = _np(layer._bias)
-        if use_qonnx:
-            k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-            bfp_name = f"{prefix}_bias_fp"
-            initializers.append(onh.from_array(bias_np, name=bfp_name))
-            b_nodes, q_bias = _quant_node(
-                f"{prefix}_bias",
-                bfp_name,
-                layer.bias_quantizer.round_mode,
-                _np(k_b),
-                _np(i_b),
-                _np(f_b),
-                initializers,
-                overflow_mode=getattr(layer.bias_quantizer, "overflow", "SAT"),
-            )
-            nodes.extend(b_nodes)
-        elif store_integer_weights:
-            k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _int_weight_node(f"{prefix}_bias", bias_np, _np(k_b), _np(i_b), _np(f_b), initializers)
-            nodes.extend(b_nodes)
-        else:
-            q_bias = f"{prefix}_bias"
-            initializers.append(onh.from_array(bias_np, name=q_bias))
+        q_bias = _emit_param(
+            prefix, "bias", bias_np, layer.bias_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+        )
         conv_inputs.append(q_bias)
 
-    # Padding
     padding = layer.padding
     if isinstance(padding, str):
         auto_pad = "SAME_UPPER" if padding == "same" else "VALID"
@@ -507,11 +465,10 @@ def _add_conv(layer, prefix, current, nodes, initializers, ndim, quant_fn, use_q
         pads = p + p  # ONNX format: [begin_0, begin_1, ..., end_0, end_1, ...]
         auto_pad = "NOTSET"
 
-    to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
     conv_attrs = dict(
-        kernel_shape=to_list(layer.kernel_size, ndim),
-        strides=to_list(layer.strides, ndim),
-        dilations=to_list(layer.dilation_rate, ndim),
+        kernel_shape=_to_list(layer.kernel_size, ndim),
+        strides=_to_list(layer.strides, ndim),
+        dilations=_to_list(layer.dilation_rate, ndim),
         group=getattr(layer, "groups", 1),
         auto_pad=auto_pad,
     )
@@ -544,65 +501,29 @@ def _add_depthwise_conv(layer, prefix, current, nodes, initializers, quant_fn, u
 
     kernel_np = _np(layer._kernel)  # [kH, kW, in, depth_mult]
     in_ch, depth_mult = kernel_np.shape[2], kernel_np.shape[3]
-    # Rearrange to [in*depth_mult, 1, kH, kW]
     kernel_onnx = np.transpose(kernel_np, (2, 3, 0, 1)).reshape(in_ch * depth_mult, 1, *kernel_np.shape[:2])
 
     out_channels = kernel_onnx.shape[0]
 
-    if use_qonnx:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        wfp_name = f"{prefix}_weight_fp"
-        initializers.append(onh.from_array(kernel_onnx, name=wfp_name))
-        w_nodes, q_weight = _quant_node(
-            f"{prefix}_weight",
-            wfp_name,
-            layer.weight_quantizer.round_mode,
-            _np(k_w),
-            _np(i_w),
-            _np(f_w),
-            initializers,
-            overflow_mode=getattr(layer.weight_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(w_nodes)
-    elif store_integer_weights:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        f_for_onnx = _weight_f_for_onnx(_np(f_w), out_channels)
-        k_for_onnx = _weight_f_for_onnx(_np(k_w), out_channels)
-        i_for_onnx = _weight_f_for_onnx(_np(i_w), out_channels)
-        w_nodes, q_weight = _int_weight_node(
-            f"{prefix}_weight", kernel_onnx, k_for_onnx, i_for_onnx, f_for_onnx, initializers
-        )
-        nodes.extend(w_nodes)
-    else:
-        q_weight = f"{prefix}_weight"
-        initializers.append(onh.from_array(kernel_onnx, name=q_weight))
+    q_weight = _emit_param(
+        prefix,
+        "weight",
+        kernel_onnx,
+        layer.weight_quantizer,
+        nodes,
+        initializers,
+        use_qonnx,
+        store_integer_weights,
+        out_channels,
+    )
 
     conv_inputs = [current, q_weight]
 
     if layer._bias is not None:
         bias_np = _np(layer._bias)
-        if use_qonnx:
-            k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-            bfp_name = f"{prefix}_bias_fp"
-            initializers.append(onh.from_array(bias_np, name=bfp_name))
-            b_nodes, q_bias = _quant_node(
-                f"{prefix}_bias",
-                bfp_name,
-                layer.bias_quantizer.round_mode,
-                _np(k_b),
-                _np(i_b),
-                _np(f_b),
-                initializers,
-                overflow_mode=getattr(layer.bias_quantizer, "overflow", "SAT"),
-            )
-            nodes.extend(b_nodes)
-        elif store_integer_weights:
-            k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _int_weight_node(f"{prefix}_bias", bias_np, _np(k_b), _np(i_b), _np(f_b), initializers)
-            nodes.extend(b_nodes)
-        else:
-            q_bias = f"{prefix}_bias"
-            initializers.append(onh.from_array(bias_np, name=q_bias))
+        q_bias = _emit_param(
+            prefix, "bias", bias_np, layer.bias_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+        )
         conv_inputs.append(q_bias)
 
     padding = layer.padding
@@ -614,11 +535,10 @@ def _add_depthwise_conv(layer, prefix, current, nodes, initializers, quant_fn, u
         pads = p + p
         auto_pad = "NOTSET"
 
-    to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
     conv_attrs = dict(
-        kernel_shape=to_list(layer.kernel_size, 2),
-        strides=to_list(layer.strides, 2),
-        dilations=to_list(layer.dilation_rate, 2),
+        kernel_shape=_to_list(layer.kernel_size, 2),
+        strides=_to_list(layer.strides, 2),
+        dilations=_to_list(layer.dilation_rate, 2),
         group=in_ch,
         auto_pad=auto_pad,
     )
@@ -659,48 +579,14 @@ def _add_batchnorm(layer, prefix, current, nodes, initializers, quant_fn, use_qo
         n_ch = _np(layer.moving_mean).shape[0]
         beta_np = np.zeros(n_ch, dtype=np.float32)
 
-    if is_pq and use_qonnx:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        gfp = f"{prefix}_gamma_fp"
-        initializers.append(onh.from_array(gamma_np, name=gfp))
-        g_nodes, q_gamma = _quant_node(
-            f"{prefix}_gamma",
-            gfp,
-            layer.weight_quantizer.round_mode,
-            _np(k_w),
-            _np(i_w),
-            _np(f_w),
-            initializers,
-            overflow_mode=getattr(layer.weight_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(g_nodes)
-
-        k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-        bfp = f"{prefix}_beta_fp"
-        initializers.append(onh.from_array(beta_np, name=bfp))
-        b_nodes, q_beta = _quant_node(
-            f"{prefix}_beta",
-            bfp,
-            layer.bias_quantizer.round_mode,
-            _np(k_b),
-            _np(i_b),
-            _np(f_b),
-            initializers,
-            overflow_mode=getattr(layer.bias_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(b_nodes)
-    elif is_pq and store_integer_weights:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        g_nodes, q_gamma = _int_weight_node(f"{prefix}_gamma", gamma_np, _np(k_w), _np(i_w), _np(f_w), initializers)
-        nodes.extend(g_nodes)
-        k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-        b_nodes, q_beta = _int_weight_node(f"{prefix}_beta", beta_np, _np(k_b), _np(i_b), _np(f_b), initializers)
-        nodes.extend(b_nodes)
-    else:
-        q_gamma = f"{prefix}_gamma"
-        q_beta = f"{prefix}_beta"
-        initializers.append(onh.from_array(gamma_np, name=q_gamma))
-        initializers.append(onh.from_array(beta_np, name=q_beta))
+    qonnx_p = use_qonnx and is_pq
+    intstore_p = store_integer_weights and is_pq
+    q_gamma = _emit_param(
+        prefix, "gamma", gamma_np, layer.weight_quantizer if is_pq else None, nodes, initializers, qonnx_p, intstore_p
+    )
+    q_beta = _emit_param(
+        prefix, "beta", beta_np, layer.bias_quantizer if is_pq else None, nodes, initializers, qonnx_p, intstore_p
+    )
 
     mean_name = f"{prefix}_running_mean"
     var_name = f"{prefix}_running_var"
@@ -724,43 +610,14 @@ def _add_batchnorm(layer, prefix, current, nodes, initializers, quant_fn, use_qo
 
 
 def _add_dense_nd(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
-    """PQDense for rank-3 inputs (B, T, E).
-
-    Uses MatMul + Add instead of Gemm so the op works for any rank ≥ 2.
-    The kernel is stored as [out, in] (same layout as _add_dense / _int_weight_node),
-    then transposed to [in, out] at runtime via a Transpose node so that
-    MatMul(input, kernel_t) broadcasts correctly over the sequence dimension.
-    """
     current = _maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
 
     kernel_np = _np(layer._kernel).T  # [out, in]
     out_units = kernel_np.shape[0]
 
-    if use_qonnx:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        wfp_name = f"{prefix}_weight_fp"
-        initializers.append(onh.from_array(kernel_np, name=wfp_name))
-        w_nodes, q_weight = _quant_node(
-            f"{prefix}_weight",
-            wfp_name,
-            layer.weight_quantizer.round_mode,
-            _np(k_w),
-            _np(i_w),
-            _np(f_w),
-            initializers,
-            overflow_mode=getattr(layer.weight_quantizer, "overflow", "SAT"),
-        )
-        nodes.extend(w_nodes)
-    elif store_integer_weights:
-        k_w, i_w, f_w = layer.weight_quantizer.get_quantization_bits()
-        f_for_onnx = _weight_f_for_onnx(_np(f_w), out_units)
-        k_for_onnx = _weight_f_for_onnx(_np(k_w), out_units)
-        i_for_onnx = _weight_f_for_onnx(_np(i_w), out_units)
-        w_nodes, q_weight = _int_weight_node(f"{prefix}_weight", kernel_np, k_for_onnx, i_for_onnx, f_for_onnx, initializers)
-        nodes.extend(w_nodes)
-    else:
-        q_weight = f"{prefix}_weight"
-        initializers.append(onh.from_array(kernel_np, name=q_weight))
+    q_weight = _emit_param(
+        prefix, "weight", kernel_np, layer.weight_quantizer, nodes, initializers, use_qonnx, store_integer_weights, out_units
+    )
 
     # Transpose [out, in] → [in, out] so MatMul(input[..., in], kernel_t[in, out]) works
     kernel_t_name = f"{prefix}_weight_t"
@@ -772,28 +629,9 @@ def _add_dense_nd(layer, prefix, current, nodes, initializers, quant_fn, use_qon
 
     if layer._bias is not None:
         bias_np = _np(layer._bias)
-        if use_qonnx:
-            k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-            bfp_name = f"{prefix}_bias_fp"
-            initializers.append(onh.from_array(bias_np, name=bfp_name))
-            b_nodes, q_bias = _quant_node(
-                f"{prefix}_bias",
-                bfp_name,
-                layer.bias_quantizer.round_mode,
-                _np(k_b),
-                _np(i_b),
-                _np(f_b),
-                initializers,
-                overflow_mode=getattr(layer.bias_quantizer, "overflow", "SAT"),
-            )
-            nodes.extend(b_nodes)
-        elif store_integer_weights:
-            k_b, i_b, f_b = layer.bias_quantizer.get_quantization_bits()
-            b_nodes, q_bias = _int_weight_node(f"{prefix}_bias", bias_np, _np(k_b), _np(i_b), _np(f_b), initializers)
-            nodes.extend(b_nodes)
-        else:
-            q_bias = f"{prefix}_bias"
-            initializers.append(onh.from_array(bias_np, name=q_bias))
+        q_bias = _emit_param(
+            prefix, "bias", bias_np, layer.bias_quantizer, nodes, initializers, use_qonnx, store_integer_weights
+        )
         add_out = f"{prefix}_bias_add"
         nodes.append(oh.make_node("Add", inputs=[current, q_bias], outputs=[add_out]))
         current = add_out
@@ -802,21 +640,101 @@ def _add_dense_nd(layer, prefix, current, nodes, initializers, quant_fn, use_qon
     return current
 
 
-def _add_mha(layer, prefix, q_input, k_input, v_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
-    """Build ONNX nodes for PQMultiheadAttention (Keras version, always batch-first).
+def _add_quantized_softmax(sm, prefix, current, nodes, initializers, quant_fn, kpm_mask=None):
+    enable = sm.enable_quantization
+    scaler = float(sm.input_scaler)
+    stable = bool(sm.stable)
+    eps = float(sm.epsilon)
 
-    Decomposes multi-head attention into primitive ONNX ops:
+    def qdq(q, pfx, x):
+        k, i, f = q.get_quantization_bits()
+        q_nodes, out = quant_fn(pfx, x, q.round_mode, _np(k), _np(i), _np(f), initializers, overflow_mode=q.overflow)
+        nodes.extend(q_nodes)
+        return out
 
-      Q/K/V MatMul projections  (rank-3 MatMul via _add_dense_nd)
-      Reshape (B, L, E) → (B, H, L, head_dim) + Transpose
-      MatMul(Q, K^T) * scale  →  optional Quant
-      Softmax  →  optional Quant
-      MatMul(attn_weights, V)  →  optional context Quant
-      Transpose + Reshape → (B, T, E)
-      out_proj MatMul
+    # 1) Softmax input quantizer.
+    if sm.quantize_input and enable:
+        current = qdq(sm.input_quantizer, f"{prefix}_sm_in_q", current)
 
-    Returns (out_name, avg_attn_weights_name).
-    """
+    # 2) Stable max-subtract over the last axis (ReduceMax keeps axes as an attribute).
+    if stable:
+        m_name = f"{prefix}_sm_max"
+        nodes.append(oh.make_node("ReduceMax", inputs=[current], outputs=[m_name], axes=[-1], keepdims=1))
+        exp_in = f"{prefix}_sm_sub"
+        nodes.append(oh.make_node("Sub", inputs=[m_name, current], outputs=[exp_in]))
+    else:
+        exp_in = current
+
+    # 3) Quantized exp table: optional input QDQ (only when quantize_input==stable),
+    #    Exp of (-scaler * x) for the stable branch (+scaler otherwise), output QDQ.
+    exp_t = sm.exp_table
+    if exp_t.quantize_input and enable:
+        exp_in = qdq(exp_t.input_quantizer, f"{prefix}_sm_exp_in_q", exp_in)
+    coeff = -scaler if stable else scaler
+    exp_arg = exp_in
+    if coeff != 1.0:
+        coeff_name = f"{prefix}_sm_exp_coeff"
+        initializers.append(onh.from_array(np.array(coeff, dtype=np.float32), name=coeff_name))
+        exp_arg = f"{prefix}_sm_exp_arg"
+        nodes.append(oh.make_node("Mul", inputs=[exp_in, coeff_name], outputs=[exp_arg]))
+    exp_inp = f"{prefix}_sm_exp"
+    nodes.append(oh.make_node("Exp", inputs=[exp_arg], outputs=[exp_inp]))
+    if exp_t.quantize_output and enable:
+        exp_inp = qdq(exp_t.output_quantizer, f"{prefix}_sm_exp_out_q", exp_inp)
+
+    # 3b) Optional key-padding mask: zero the exp-numerator at masked positions.
+    if kpm_mask is not None:
+        kpm_f = f"{prefix}_sm_mask_f"
+        nodes.append(oh.make_node("Cast", inputs=[kpm_mask], outputs=[kpm_f], to=TensorProto.FLOAT))
+        masked = f"{prefix}_sm_masked"
+        nodes.append(oh.make_node("Mul", inputs=[kpm_f, exp_inp], outputs=[masked]))
+        exp_inp = masked
+
+    # 4) Sum over the last axis (ReduceSum takes axes as an input from opset 13).
+    sum_axes = f"{prefix}_sm_sum_axes"
+    initializers.append(onh.from_array(np.array([-1], dtype=np.int64), name=sum_axes))
+    sums = f"{prefix}_sm_sum"
+    nodes.append(oh.make_node("ReduceSum", inputs=[exp_inp, sum_axes], outputs=[sums], keepdims=1))
+
+    # 5) Quantized reciprocal table: input QDQ, 1/(x+eps), output QDQ.
+    inv_t = sm.inv_table
+    inv_in = sums
+    if inv_t.quantize_input and enable:
+        inv_in = qdq(inv_t.input_quantizer, f"{prefix}_sm_inv_in_q", inv_in)
+    eps_name = f"{prefix}_sm_eps"
+    initializers.append(onh.from_array(np.array(eps, dtype=np.float32), name=eps_name))
+    inv_add = f"{prefix}_sm_inv_add"
+    nodes.append(oh.make_node("Add", inputs=[inv_in, eps_name], outputs=[inv_add]))
+    divisor = f"{prefix}_sm_inv"
+    nodes.append(oh.make_node("Reciprocal", inputs=[inv_add], outputs=[divisor]))
+    if inv_t.quantize_output and enable:
+        divisor = qdq(inv_t.output_quantizer, f"{prefix}_sm_inv_out_q", divisor)
+
+    # 6) Multiply numerator by reciprocal.
+    out = f"{prefix}_sm_out"
+    nodes.append(oh.make_node("Mul", inputs=[exp_inp, divisor], outputs=[out]))
+    current = out
+
+    # 7) Softmax output quantizer.
+    if sm.quantize_output and enable:
+        current = qdq(sm.output_quantizer, f"{prefix}_sm_out_q", current)
+    return current
+
+
+def _add_mha(
+    layer,
+    prefix,
+    q_input,
+    k_input,
+    v_input,
+    nodes,
+    initializers,
+    quant_fn,
+    use_qonnx,
+    store_integer_weights,
+    key_padding_mask=None,
+    attn_mask=None,
+):
     H = layer.num_heads
     head_dim = layer.head_dim
     E = layer.embed_dim
@@ -884,41 +802,24 @@ def _add_mha(layer, prefix, q_input, k_input, v_input, nodes, initializers, quan
     nodes.append(oh.make_node("Mul", inputs=[raw_scores, scale_cst], outputs=[scaled_scores]))
     current = scaled_scores
 
-    if layer.softmax.quantize_input and getattr(layer, "enable_quantization", True):
-        q = layer.softmax.input_quantizer
-        k_q, i_q, f_q = q.get_quantization_bits()
-        q_nodes, current = quant_fn(
-            f"{prefix}_attn_score_q",
-            current,
-            q.round_mode,
-            _np(k_q),
-            _np(i_q),
-            _np(f_q),
-            initializers,
-            overflow_mode=getattr(q, "overflow", "SAT"),
-        )
-        nodes.extend(q_nodes)
+    if attn_mask is not None:
+        masked_scores = f"{prefix}_scores_masked"
+        nodes.append(oh.make_node("Add", inputs=[current, attn_mask], outputs=[masked_scores]))
+        current = masked_scores
 
-    # --- Softmax (axis=-1); approximate_softmax falls back to standard Softmax in ONNX ---
-    attn_w_name = f"{prefix}_attn_weights"
-    nodes.append(oh.make_node("Softmax", inputs=[current], outputs=[attn_w_name], axis=-1))
-    current = attn_w_name
+    kpm_mult = None
+    if key_padding_mask is not None:
+        kpm_not = f"{prefix}_kpm_not"
+        nodes.append(oh.make_node("Not", inputs=[key_padding_mask], outputs=[kpm_not]))
+        kpm_axes = f"{prefix}_kpm_axes"
+        initializers.append(onh.from_array(np.array([1, 2], dtype=np.int64), name=kpm_axes))
+        kpm_mult = f"{prefix}_kpm_mask"  # (B, 1, 1, S) bool, cast to float inside the softmax
+        nodes.append(oh.make_node("Unsqueeze", inputs=[kpm_not, kpm_axes], outputs=[kpm_mult]))
 
-    # --- Softmax output quantization (the MHA enables the softmax's output quantizer) ---
-    if layer.softmax.quantize_output and getattr(layer, "enable_quantization", True):
-        q = layer.softmax.output_quantizer
-        k_q, i_q, f_q = q.get_quantization_bits()
-        q_nodes, current = quant_fn(
-            f"{prefix}_attn_weight_q",
-            current,
-            q.round_mode,
-            _np(k_q),
-            _np(i_q),
-            _np(f_q),
-            initializers,
-            overflow_mode=getattr(q, "overflow", "SAT"),
-        )
-        nodes.extend(q_nodes)
+    current = _add_quantized_softmax(
+        layer.softmax, f"{prefix}_attn", current, nodes, initializers, quant_fn, kpm_mask=kpm_mult
+    )
+    attn_w_name = current  # softmax output = attention weights (also averaged over heads below)
 
     ctx_raw = f"{prefix}_ctx_raw"
     nodes.append(oh.make_node("MatMul", inputs=[current, v_h], outputs=[ctx_raw]))
@@ -974,16 +875,14 @@ def _add_avgpool(layer, prefix, current, nodes, initializers, ndim, quant_fn):
 
     current = _maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
 
-    to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
-
     pool_out = f"{prefix}_pool"
     nodes.append(
         oh.make_node(
             "AveragePool",
             inputs=[current],
             outputs=[pool_out],
-            kernel_shape=to_list(layer.pool_size, ndim),
-            strides=to_list(layer.strides, ndim),
+            kernel_shape=_to_list(layer.pool_size, ndim),
+            strides=_to_list(layer.strides, ndim),
             pads=[0] * (ndim * 2),
             count_include_pad=0,
         )
@@ -1009,10 +908,6 @@ def _add_global_avgpool(layer, prefix, current, nodes, ndim):
     current = pool_out
 
     if cl:
-        # GlobalAveragePool returns [N, C, 1, 1]; emit Flatten to [N, C].
-        # Actually after GlobalAveragePool output is [N, C, 1, 1]; transpose back would give
-        # [N, 1, 1, C] which then needs squeezing — that's the same as just squeezing [N, C].
-        # Emit Flatten to [N, C] instead of bothering with transpose.
         flatten_name = f"{prefix}_flatten"
         nodes.append(oh.make_node("Flatten", inputs=[pool_out], outputs=[flatten_name], axis=1))
         current = flatten_name
@@ -1021,21 +916,9 @@ def _add_global_avgpool(layer, prefix, current, nodes, ndim):
 
 
 def _add_pq_activation(layer, prefix, current, nodes, initializers, quant_fn):
-    """PQActivation: [input QDQ] → [multiplier scale] → activation → [output QDQ].
-
-    Supported activations: relu, tanh, hard_tanh (= Clip(-1, 1)).
-
-    The optional relu multiplier is baked to a constant: 2^round(m).
-    """
-    # --- optional input quantization ---
     current = _maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
 
-    # --- optional learnable multiplier (relu only) ---
-    if (
-        getattr(layer, "use_multiplier", False)
-        and getattr(layer, "activation_name", "") == "relu"
-        and hasattr(layer, "multiplier")
-    ):
+    if layer.use_multiplier and layer.activation_name == "relu" and hasattr(layer, "multiplier"):
         m_val = float(np.array(layer.multiplier).ravel()[0])
         scale = float(2.0 ** round(m_val))
         scale_name = f"{prefix}_mul_scale"
@@ -1044,15 +927,13 @@ def _add_pq_activation(layer, prefix, current, nodes, initializers, quant_fn):
         nodes.append(oh.make_node("Mul", inputs=[current, scale_name], outputs=[scaled_out]))
         current = scaled_out
 
-    # --- activation ---
-    act = getattr(layer, "activation_name", "relu")
+    act = layer.activation_name
     act_out = f"{prefix}_act"
     if act == "relu":
         nodes.append(oh.make_node("Relu", inputs=[current], outputs=[act_out]))
     elif act == "tanh":
         nodes.append(oh.make_node("Tanh", inputs=[current], outputs=[act_out]))
     elif act == "hard_tanh":
-        # hard_tanh(x) = clip(x, -1, 1)
         cmin_name = f"{prefix}_htanh_min"
         cmax_name = f"{prefix}_htanh_max"
         initializers += [
@@ -1074,21 +955,64 @@ def _add_pq_activation(layer, prefix, current, nodes, initializers, quant_fn):
 # ---------------------------------------------------------------------------
 
 
+def _resolve_mask_arg(mask, prefix, kind, tensor_to_onnx, initializers):
+    """Resolve an MHA mask call-argument to an ONNX value name (or None).
+
+    A KerasTensor mask (e.g. a runtime keras.Input) maps through tensor_to_onnx; a
+    constant array mask (e.g. a fixed causal mask) becomes an initializer.
+    """
+    if mask is None:
+        return None
+    if tensor_to_onnx is not None and id(mask) in tensor_to_onnx:
+        return tensor_to_onnx[id(mask)]
+    arr = np.asarray(_np(mask))
+    name = f"{prefix}_{kind}_const"
+    initializers.append(onh.from_array(arr, name=name))
+    return name
+
+
 def _emit_layer(
-    layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, input_onnx_names=None
+    layer,
+    prefix,
+    current,
+    nodes,
+    initializers,
+    quant_fn,
+    use_qonnx,
+    store_integer_weights,
+    input_onnx_names=None,
+    tensor_to_onnx=None,
 ):
     """Emit ONNX nodes for a single Keras layer.  Returns the ONNX output name."""
 
     # --- PQuant layers ---
     if isinstance(layer, PQMultiheadAttention):
-        # input_onnx_names = [query, key, value] or [single_input] for self-attention
+        # input_onnx_names = [query, key, value] (+ any mask tensors, ignored here)
+        # or [single_input] for self-attention.  q/k/v are always the first three.
         if len(input_onnx_names) >= 3:
             q_in, k_in, v_in = input_onnx_names[0], input_onnx_names[1], input_onnx_names[2]
         elif len(input_onnx_names) == 2:
             q_in, k_in, v_in = input_onnx_names[0], input_onnx_names[1], input_onnx_names[1]
         else:
             q_in = k_in = v_in = input_onnx_names[0]
-        return _add_mha(layer, prefix, q_in, k_in, v_in, nodes, initializers, quant_fn, use_qonnx, store_integer_weights)
+        # Masks are passed as call kwargs on the layer's inbound node.
+        kwargs = layer._inbound_nodes[0].arguments.kwargs if layer._inbound_nodes else {}
+        kpm = _resolve_mask_arg(kwargs.get("key_padding_mask"), prefix, "kpm", tensor_to_onnx, initializers)
+        attn_mask = _resolve_mask_arg(kwargs.get("attn_mask"), prefix, "attn_mask", tensor_to_onnx, initializers)
+        return _add_mha(
+            layer,
+            prefix,
+            q_in,
+            k_in,
+            v_in,
+            nodes,
+            initializers,
+            quant_fn,
+            use_qonnx,
+            store_integer_weights,
+            key_padding_mask=kpm,
+            attn_mask=attn_mask,
+        )
 
     if isinstance(layer, PQActivation):
         return _add_pq_activation(layer, prefix, current, nodes, initializers, quant_fn)
@@ -1242,11 +1166,10 @@ def _add_conv_plain(layer, prefix, current, nodes, initializers):
 
     padding = layer.padding
     auto_pad = "SAME_UPPER" if padding == "same" else "VALID"
-    to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
     conv_attrs = dict(
-        kernel_shape=to_list(layer.kernel_size, 2),
-        strides=to_list(layer.strides, 2),
-        dilations=to_list(layer.dilation_rate, 2),
+        kernel_shape=_to_list(layer.kernel_size, 2),
+        strides=_to_list(layer.strides, 2),
+        dilations=_to_list(layer.dilation_rate, 2),
         group=layer.groups,
         auto_pad=auto_pad,
     )
@@ -1265,11 +1188,6 @@ def _add_conv_plain(layer, prefix, current, nodes, initializers):
 
 
 def _build_tensor_onnx_map(model):
-    """
-    Return a dict mapping id(KerasTensor) → ONNX tensor name for model.inputs.
-    Multi-input models are supported; inputs are named "input_0", "input_1", etc.
-    (or just "input" for single-input models).
-    """
     tensor_to_onnx = {}
     for i, inp in enumerate(model.inputs):
         name = "input" if len(model.inputs) == 1 else f"input_{i}"
@@ -1298,11 +1216,6 @@ def _inbound_input_names(layer, tensor_to_onnx):
 
 
 def _register_layer_output(layer, onnx_name, tensor_to_onnx):
-    """Register the ONNX output name for a layer's output tensor(s).
-
-    onnx_name may be a plain string (single-output layer) or a tuple of strings
-    (multi-output layer, e.g. PQMultiheadAttention returns (out, avg_attn_weights)).
-    """
     if not layer._inbound_nodes:
         return
     node = layer._inbound_nodes[0]
@@ -1393,6 +1306,7 @@ def convert_to_onnx(
             use_qonnx,
             store_integer_weights,
             input_onnx_names=input_onnx_names,
+            tensor_to_onnx=tensor_to_onnx,
         )
 
         _register_layer_output(layer, output_name, tensor_to_onnx)
@@ -1400,21 +1314,26 @@ def convert_to_onnx(
         # primary output as the graph's last output name.
         last_output_name = output_name[0] if isinstance(output_name, tuple) else output_name
 
-    # Determine output shape via a forward pass
-    dummy = np.zeros((1, *input_shape), dtype=np.float32)
-    dummy_out = model(dummy, training=False)
+    n_in = len(model.inputs)
+    if n_in == 1:
+        input_names = ["input"]
+        input_shapes = [tuple(input_shape)]
+    else:
+        input_names = [f"input_{i}" for i in range(n_in)]
+        input_shapes = [tuple(t.shape[1:]) for t in model.inputs]
+    np_dtypes = [np.dtype(str(t.dtype)) for t in model.inputs]
+    tp_dtypes = [_keras_dtype_to_tp(t.dtype) for t in model.inputs]
+
+    dummies = [np.zeros((1, *shp), dtype=dt) for shp, dt in zip(input_shapes, np_dtypes)]
+    dummy_out = model(dummies[0] if n_in == 1 else dummies, training=False)
     dummy_out_np = np.array(ops.convert_to_numpy(dummy_out))
     batch_dim = batch_size  # None → dynamic, int → fixed
     output_shape = [batch_dim] + list(dummy_out_np.shape[1:])
 
     # Build ONNX graph
-    if len(model.inputs) == 1:
-        input_vis = [oh.make_tensor_value_info("input", TensorProto.FLOAT, [batch_dim, *input_shape])]
-    else:
-        input_vis = [
-            oh.make_tensor_value_info(f"input_{i}", TensorProto.FLOAT, [batch_dim, *input_shape])
-            for i in range(len(model.inputs))
-        ]
+    input_vis = [
+        oh.make_tensor_value_info(name, tp, [batch_dim, *shp]) for name, shp, tp in zip(input_names, input_shapes, tp_dtypes)
+    ]
     output_vi = oh.make_tensor_value_info(last_output_name, TensorProto.FLOAT, output_shape)
 
     graph = oh.make_graph(
@@ -1431,10 +1350,6 @@ def convert_to_onnx(
     model_proto = oh.make_model(graph, opset_imports=opset_imports)
     model_proto.ir_version = 6
 
-    # ONNX opset >= 9: initializers are implicit constants and must NOT appear in
-    # graph.input — otherwise tools treat weight tensors as runtime inputs.
-    # Some onnx library versions add them automatically for backward compatibility;
-    # strip them here so only the actual data inputs remain.
     _init_names = {t.name for t in model_proto.graph.initializer}
     _data_inputs = [vi for vi in model_proto.graph.input if vi.name not in _init_names]
     del model_proto.graph.input[:]
@@ -1445,34 +1360,3 @@ def convert_to_onnx(
     fmt = "QONNX" if use_qonnx else "ONNX (QDQ)"
     logging.info("Saved %s Keras model → %s", fmt, output_path)
     return model_proto
-
-
-# ---------------------------------------------------------------------------
-# usage example
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import pquant
-    from pquant import apply_final_compression
-
-    cfg = pquant.pdp_config()
-
-    inp = keras.Input(shape=(3, 32, 32))
-    x = PQConv2d(cfg, filters=16, kernel_size=3, padding="same")(inp)
-    x = PQBatchNormalization(cfg)(x)
-    x = keras.layers.ReLU()(x)
-    x = PQConv2d(cfg, filters=32, kernel_size=3, padding="same")(x)
-    x = keras.layers.ReLU()(x)
-    x = keras.layers.Flatten()(x)
-    x = PQDense(cfg, units=10)(x)
-    model = keras.Model(inp, x)
-
-    apply_final_compression(model)
-
-    convert_to_onnx(model, input_shape=(3, 32, 32), output_path="model_keras.onnx")
-
-    import onnxruntime as ort
-
-    sess = ort.InferenceSession("model_keras.onnx")
-    out = sess.run(None, {"input": np.random.randn(2, 3, 32, 32).astype(np.float32)})
-    print("Output shape:", out[0].shape)  # noqa: T201
