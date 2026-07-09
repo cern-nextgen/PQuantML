@@ -7,60 +7,36 @@ from typing import Any
 
 import numpy as np
 import torch
-
-try:
-    from torch.fx._symbolic_trace import is_fx_symbolic_tracing
-except ImportError:  # torch < 2.8 exposes it as is_fx_tracing
-    from torch.fx._symbolic_trace import is_fx_tracing as is_fx_symbolic_tracing
-from alkaid.converter.builtin.torch.layers.functional import _functional_map
+from alkaid.converter.builtin.torch.layers.direct import torch_numpy_unary_map
+from alkaid.converter.builtin.torch.layers.functional import (
+    _functional_map,
+    conv_nd_replay,
+    replay_avg_pool,
+)
 from alkaid.converter.builtin.torch.layers.methods import _method_map
-from alkaid.converter.builtin.torch.layers.modules import ReplayModuleBase
+from alkaid.converter.builtin.torch.layers.modules import (
+    ReplayBatchNorm,
+    ReplayModuleBase,
+)
 from alkaid.trace import FVArray
 
 from pquant._alkaid_plugin._alkaid_common import (
     PQuantAlkaidError,
     replay_quantizer,
     replay_quantizer_if_enabled,
+    to_numpy,
 )
-from pquant.core.torch.activations import PQActivation
+from pquant.core.torch.activations import PQActivation, PQSoftmax
 from pquant.core.torch.layers import (
+    PQAvgPool1d,
+    PQAvgPool2d,
     PQBatchNorm1d,
     PQBatchNorm2d,
     PQConv1d,
     PQConv2d,
     PQDense,
-    PQSoftmax,
-    PQWeightBiasBase,
 )
 from pquant.core.torch.quantizer import Quantizer
-
-
-def _contains_fx_proxy(value: Any) -> bool:
-    from torch.fx.proxy import Proxy
-
-    if isinstance(value, Proxy):
-        return True
-    if isinstance(value, (tuple, list)):
-        return any(_contains_fx_proxy(v) for v in value)
-    if isinstance(value, dict):
-        return any(_contains_fx_proxy(v) for v in value.values())
-    return False
-
-
-def _patch_once(cls: type, name: str, wrapper_factory) -> None:
-    marker = f'__alkaid_pquant_patched_{name}__'
-    if getattr(cls, marker, False):
-        return
-    original = getattr(cls, name)
-    setattr(cls, f'__alkaid_pquant_original_{name}__', original)
-    setattr(cls, name, wrapper_factory(original))
-    setattr(cls, marker, True)
-
-
-def _module_parameter(module: torch.nn.Module, name: str) -> Any:
-    if name in module._parameters:
-        return module._parameters[name]
-    return getattr(module, name)
 
 
 def _module_bool(module: torch.nn.Module, name: str, default: bool = False) -> bool:
@@ -77,83 +53,19 @@ def _assert_final_compression(module: torch.nn.Module) -> None:
         )
 
 
-def _patch_weight_bias_properties() -> None:
-    for cls in (PQDense, PQConv1d, PQConv2d, PQBatchNorm1d, PQBatchNorm2d):
-        marker = '__alkaid_pquant_patched_weight_bias__'
-        if getattr(cls, marker, False):
-            continue
-        original_weight = cls.weight.fget
-        original_bias = cls.bias.fget
-
-        def weight(self, _original_weight=original_weight):
-            if not is_fx_symbolic_tracing():
-                return _original_weight(self)
-            _assert_final_compression(self)
-            return _module_parameter(self, '_weight')
-
-        def bias(self, _original_bias=original_bias):
-            if not is_fx_symbolic_tracing():
-                return _original_bias(self)
-            _assert_final_compression(self)
-            return _module_parameter(self, '_bias')
-
-        cls.weight = property(weight)
-        cls.bias = property(bias)
-        setattr(cls, marker, True)
+def _weight(layer: torch.nn.Module) -> np.ndarray:
+    """The layer's final (compressed) weight as numpy. Asserts compression was applied."""
+    _assert_final_compression(layer)
+    return to_numpy(layer._weight)
 
 
-def _patch_lazy_build_assertions() -> None:
-    def wrap_pre_forward(original):
-        @wraps(original)
-        def wrapped(self, x):
-            if not _contains_fx_proxy(x):
-                return original(self, x)
-            if self.quantize_input:
-                x = self.quantize(x, self.input_quantizer)
-            return x
-
-        return wrapped
-
-    _patch_once(PQWeightBiasBase, 'pre_forward', wrap_pre_forward)
-
-    def wrap_pre_activation(original):
-        @wraps(original)
-        def wrapped(self, x):
-            if not _contains_fx_proxy(x):
-                return original(self, x)
-            if not self.use_hgq and self.use_multiplier and self.activation_name == 'relu' and hasattr(self, 'multiplier'):
-                multiplier = _module_parameter(self, 'multiplier')
-                x = x * (2.0 ** torch.round(multiplier.detach()).item())
-            if self.quantize_input and self.enable_quantization:
-                x = self.input_quantizer(x)
-            return x
-
-        return wrapped
-
-    _patch_once(PQActivation, 'pre_activation', wrap_pre_activation)
-
-    def wrap_bn_forward(original):
-        @wraps(original)
-        def wrapped(self, input):
-            if not _contains_fx_proxy(input):
-                return original(self, input)
-            if self.quantize_input and self.enable_quantization:
-                input = self.input_quantizer(input)
-            return torch.nn.functional.batch_norm(
-                input,
-                self.running_mean,
-                self.running_var,
-                self.weight,
-                self.bias,
-                False,
-                self.momentum,
-                self.eps,
-            )
-
-        return wrapped
-
-    _patch_once(PQBatchNorm1d, 'forward', wrap_bn_forward)
-    _patch_once(PQBatchNorm2d, 'forward', wrap_bn_forward)
+def _bias(layer: torch.nn.Module) -> np.ndarray:
+    """The layer's final (compressed) bias as numpy, or ``np.array(0.0)`` when absent."""
+    _assert_final_compression(layer)
+    bias = getattr(layer, '_bias', None)
+    if bias is None:
+        return np.array(0.0)
+    return to_numpy(bias)
 
 
 class ReplayPQuantQuantizer(ReplayModuleBase):
@@ -161,6 +73,103 @@ class ReplayPQuantQuantizer(ReplayModuleBase):
 
     def call(self, input: FVArray) -> FVArray:
         return replay_quantizer(self.module, input)
+
+
+class ReplayPQuantDense(ReplayModuleBase):
+    handles = (PQDense,)
+
+    def call(self, input: FVArray) -> FVArray:
+        layer = self.module
+        input = replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        out = input @ _weight(layer).T
+        bias = _bias(layer)
+        if bias.shape != ():
+            out = out + bias
+        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+
+
+class ReplayPQuantConv(ReplayModuleBase):
+    handles = (PQConv1d, PQConv2d)
+
+    def call(self, input: FVArray) -> FVArray:
+        layer = self.module
+        input = replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        out = conv_nd_replay(
+            input,
+            _weight(layer),
+            _bias(layer),
+            stride=layer.stride,
+            padding=layer.padding,
+            dilation=layer.dilation,
+            groups=layer.groups,
+        )
+        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+
+
+class ReplayPQuantBatchNorm(ReplayBatchNorm):
+    handles = (PQBatchNorm1d, PQBatchNorm2d)
+
+    def fused_scale_offset(self) -> tuple[np.ndarray, np.ndarray]:
+        layer = self.module
+        _assert_final_compression(layer)
+        mean = to_numpy(layer.running_mean)
+        variance = to_numpy(layer.running_var)
+        gamma = to_numpy(layer._weight) if layer._weight is not None else np.ones_like(mean)
+        beta = to_numpy(layer._bias) if layer._bias is not None else np.zeros_like(mean)
+        scale = gamma / np.sqrt(variance + layer.eps)
+        offset = beta - mean * scale
+        return scale, offset
+
+    def call(self, input: FVArray) -> FVArray:
+        layer = self.module
+        input = replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        return super().call(input)
+
+
+class ReplayPQuantAvgPool(ReplayModuleBase):
+    handles = (PQAvgPool1d, PQAvgPool2d)
+
+    def call(self, input: FVArray) -> FVArray:
+        layer = self.module
+        input = replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        out = replay_avg_pool(
+            input,
+            layer.kernel_size,
+            layer.stride,
+            layer.padding,
+            layer.ceil_mode,
+            layer.count_include_pad,
+        )
+        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+
+
+def _activation_numpy_fn(layer: PQActivation):
+    """The numpy elementwise function for a named PQActivation (relu/tanh/gelu/...)."""
+    name = layer.activation_name
+    fn = torch_numpy_unary_map.get(name) or torch_numpy_unary_map.get(name.replace('_', ''))
+    if fn is not None:
+        return fn
+    if name == 'leaky_relu':
+        slope = float(getattr(layer.activation_function, 'negative_slope', 0.1015625))
+        return lambda x: np.where(x < 0, x * slope, x)  # type: ignore
+    raise PQuantAlkaidError(f'Unsupported PQuant activation for Alkaid conversion: {name!r}')
+
+
+class ReplayPQuantActivation(ReplayModuleBase):
+    handles = (PQActivation,)
+
+    def call(self, input: FVArray) -> FVArray:
+        layer = self.module
+        if (
+            not bool(getattr(layer, 'use_hgq', False))
+            and bool(getattr(layer, 'use_multiplier', False))
+            and layer.activation_name == 'relu'
+            and hasattr(layer, 'multiplier')
+        ):
+            input = input * (2.0 ** np.rint(to_numpy(layer.multiplier)))  # type: ignore
+        input = replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        out = _activation_numpy_fn(layer)(input)
+        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
 
 
 def _table_fn(table):
@@ -285,8 +294,6 @@ def _register_functional_helpers() -> None:
 
 def register() -> None:
     """Entry point for Alkaid's ``alkaid_torch`` second-level plugin group."""
-    _patch_lazy_build_assertions()
-    _patch_weight_bias_properties()
     _patch_root_quantizer_trace()
     _register_functional_helpers()
     try:
