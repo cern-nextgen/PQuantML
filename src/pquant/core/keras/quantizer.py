@@ -108,7 +108,7 @@ class Quantizer(keras.layers.Layer):
             self.i = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.i_init), trainable=False)
             self.f = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.f_init), trainable=False)
             self.b = self.add_weight(
-                shape=(), initializer=keras.initializers.Constant(self.k_init + self.f_init + self.f_init), trainable=False
+                shape=(), initializer=keras.initializers.Constant(self.k_init + self.i_init + self.f_init), trainable=False
             )
         else:
             i, _ = self.compute_dynamic_bits(keras.ops.ones(input_shape))
@@ -117,7 +117,7 @@ class Quantizer(keras.layers.Layer):
             self.f = self.add_weight(shape=i.shape, initializer=keras.initializers.Constant(self.f_init), trainable=False)
             self.b = self.add_weight(
                 shape=i.shape,
-                initializer=keras.initializers.Constant(self.k_init + self.f_init + self.f_init),
+                initializer=keras.initializers.Constant(self.k_init + self.i_init + self.f_init),
                 trainable=False,
             )
 
