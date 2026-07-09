@@ -15,34 +15,37 @@ import pytest
 import pquant
 from pquant.core.keras.convert_to_onnx import convert_to_onnx
 from pquant.core.keras.layers import (
+    PQActivation,
     PQBatchNormalization,
     PQConv1d,
     PQConv2d,
     PQDense,
     PQDepthwiseConv2d,
+    PQMultiheadAttention,
     apply_final_compression,
 )
 
 ort = pytest.importorskip("onnxruntime", reason="onnxruntime not installed")
 
 ATOL = 1e-4
+# When quantization is enabled, torch/keras fake-quant and ONNX QuantizeLinear can round
+# a few values to opposite sides of a 0.5 boundary (op/accumulation-order ULP differences),
+# so allow ~1 quantization level of slack for graphs that re-quantize intermediates.
+QUANT_ATOL = 5e-3
 
 
-# ---------------------------------------------------------------------------
-# fixtures
-# ---------------------------------------------------------------------------
+def _atol(cfg):
+    return QUANT_ATOL if cfg.quantization_parameters.enable_quantization else ATOL
 
 
-@pytest.fixture
-def cfg():
+@pytest.fixture(params=[False, True], ids=["float", "quant"])
+def cfg(request):
+    # Run every cfg-based test twice: float path and quantization-enabled, so the
+    # emitted Quantize/DequantizeLinear nodes are actually exercised against onnxruntime
+    # (they are skipped entirely when enable_quantization is False).
     c = pquant.cs_config()
-    c.quantization_parameters.enable_quantization = False
+    c.quantization_parameters.enable_quantization = request.param
     return c
-
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
 
 
 def _channels_first():
@@ -63,11 +66,6 @@ def _onnx_run(model, x: np.ndarray, input_shape: tuple, tmp_path) -> np.ndarray:
     return sess.run(None, {in_name: x})[0]
 
 
-# ---------------------------------------------------------------------------
-# PQDense
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("bias", [True, False])
 def test_dense_onnx(cfg, bias, tmp_path):
     IN, OUT = 16, 8
@@ -82,12 +80,7 @@ def test_dense_onnx(cfg, bias, tmp_path):
     x_np = np.random.randn(4, IN).astype(np.float32)
     keras_out = _keras_out(model, x_np)
     onnx_out = _onnx_run(model, x_np, input_shape=(IN,), tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=ATOL, err_msg=f"PQDense bias={bias}: keras vs ONNX mismatch")
-
-
-# ---------------------------------------------------------------------------
-# PQConv2d
-# ---------------------------------------------------------------------------
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg=f"PQDense bias={bias}: keras vs ONNX mismatch")
 
 
 @pytest.mark.parametrize("bias", [True, False])
@@ -110,12 +103,7 @@ def test_conv2d_onnx(cfg, bias, tmp_path):
 
     keras_out = _keras_out(model, x_np)
     onnx_out = _onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=ATOL, err_msg=f"PQConv2d bias={bias}: keras vs ONNX mismatch")
-
-
-# ---------------------------------------------------------------------------
-# PQConv1d
-# ---------------------------------------------------------------------------
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg=f"PQConv2d bias={bias}: keras vs ONNX mismatch")
 
 
 @pytest.mark.parametrize("bias", [True, False])
@@ -138,12 +126,7 @@ def test_conv1d_onnx(cfg, bias, tmp_path):
 
     keras_out = _keras_out(model, x_np)
     onnx_out = _onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=ATOL, err_msg=f"PQConv1d bias={bias}: keras vs ONNX mismatch")
-
-
-# ---------------------------------------------------------------------------
-# PQBatchNormalization
-# ---------------------------------------------------------------------------
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg=f"PQConv1d bias={bias}: keras vs ONNX mismatch")
 
 
 def test_batchnorm_onnx(cfg, tmp_path):
@@ -167,12 +150,7 @@ def test_batchnorm_onnx(cfg, tmp_path):
 
     keras_out = _keras_out(model, x_np)
     onnx_out = _onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=ATOL, err_msg="PQBatchNormalization: keras vs ONNX mismatch")
-
-
-# ---------------------------------------------------------------------------
-# PQDepthwiseConv2d
-# ---------------------------------------------------------------------------
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="PQBatchNormalization: keras vs ONNX mismatch")
 
 
 def test_depthwise_conv2d_onnx(cfg, tmp_path):
@@ -194,4 +172,136 @@ def test_depthwise_conv2d_onnx(cfg, tmp_path):
 
     keras_out = _keras_out(model, x_np)
     onnx_out = _onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=ATOL, err_msg="PQDepthwiseConv2d: keras vs ONNX mismatch")
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="PQDepthwiseConv2d: keras vs ONNX mismatch")
+
+
+@pytest.mark.parametrize("activation", ["relu", "tanh", "hard_tanh"])
+def test_pqactivation_onnx(cfg, activation, tmp_path):
+    DIM = 16
+    inputs = keras.Input(shape=(DIM,))
+    x = PQActivation(cfg, activation)(inputs)
+    model = keras.Model(inputs, x)
+
+    model(np.zeros((1, DIM), dtype=np.float32))
+    apply_final_compression(model)
+
+    x_np = np.random.randn(4, DIM).astype(np.float32)
+    keras_out = _keras_out(model, x_np)
+    onnx_out = _onnx_run(model, x_np, input_shape=(DIM,), tmp_path=tmp_path)
+    np.testing.assert_allclose(
+        keras_out, onnx_out, atol=_atol(cfg), err_msg=f"PQActivation {activation}: keras vs ONNX mismatch"
+    )
+
+
+def test_residual_concat_onnx(cfg, tmp_path):
+    DIM = 16
+    inputs = keras.Input(shape=(DIM,))
+    h = PQDense(cfg, units=DIM)(inputs)
+    h2 = PQDense(cfg, units=DIM)(h)
+    add = keras.layers.Add()([h, h2])  # residual / skip add
+    cat = keras.layers.Concatenate(axis=-1)([add, inputs])  # branch merge
+    out = PQDense(cfg, units=8)(cat)
+    model = keras.Model(inputs, out)
+
+    model(np.zeros((1, DIM), dtype=np.float32))
+    apply_final_compression(model)
+
+    x_np = np.random.randn(4, DIM).astype(np.float32)
+    keras_out = _keras_out(model, x_np)
+    onnx_out = _onnx_run(model, x_np, input_shape=(DIM,), tmp_path=tmp_path)
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="residual+concat: keras vs ONNX mismatch")
+
+
+def test_two_input_onnx(cfg, tmp_path):
+    IN_A, IN_B, OUT = 16, 4, 8
+    a = keras.Input(shape=(IN_A,))
+    b = keras.Input(shape=(IN_B,))
+    ha = PQDense(cfg, units=OUT)(a)
+    hb = PQDense(cfg, units=OUT)(b)
+    out = keras.layers.Add()([ha, hb])
+    model = keras.Model([a, b], out)
+
+    model([np.zeros((1, IN_A), np.float32), np.zeros((1, IN_B), np.float32)])
+    apply_final_compression(model)
+
+    xa = np.random.randn(3, IN_A).astype(np.float32)
+    xb = np.random.randn(3, IN_B).astype(np.float32)
+    keras_out = _keras_out(model, [xa, xb])
+
+    path = str(tmp_path / "two_input.onnx")
+    proto = convert_to_onnx(model, input_shape=[(IN_A,), (IN_B,)], output_path=path)
+    in_shapes = {i.name: [d.dim_value for d in i.type.tensor_type.shape.dim] for i in proto.graph.input}
+    assert in_shapes["input_0"] == [0, IN_A]  # dim_value 0 == dynamic batch
+    assert in_shapes["input_1"] == [0, IN_B]
+
+    sess = ort.InferenceSession(path)
+    names = [i.name for i in sess.get_inputs()]
+    onnx_out = sess.run(None, {names[0]: xa, names[1]: xb})[0]
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="two-input: keras vs ONNX mismatch")
+
+
+@pytest.mark.parametrize("bias", [True, False])
+def test_mha_onnx(cfg, bias, tmp_path):
+    E, H, T = 16, 4, 8
+    inputs = keras.Input(shape=(T, E))
+    mha = PQMultiheadAttention(cfg, embed_dim=E, num_heads=H, bias=bias)
+    out, _ = mha([inputs, inputs, inputs])
+    model = keras.Model(inputs, out)
+
+    model(np.zeros((1, T, E), dtype=np.float32))
+    apply_final_compression(model)
+
+    x_np = np.random.randn(2, T, E).astype(np.float32)
+    keras_out = _keras_out(model, x_np)
+    onnx_out = _onnx_run(model, x_np, input_shape=(T, E), tmp_path=tmp_path)
+    np.testing.assert_allclose(
+        keras_out, onnx_out, atol=_atol(cfg), err_msg=f"PQMultiheadAttention bias={bias}: keras vs ONNX mismatch"
+    )
+
+
+def test_mha_causal_attn_mask_onnx(cfg, tmp_path):
+    E, H, T = 16, 4, 8
+    inputs = keras.Input(shape=(T, E))
+    mha = PQMultiheadAttention(cfg, embed_dim=E, num_heads=H)
+    # (T, S) additive causal mask: 0 on/below the diagonal, large-negative above it.
+    attn_mask = np.triu(np.full((T, T), -1e4, dtype=np.float32), k=1)
+    out, _ = mha([inputs, inputs, inputs], attn_mask=attn_mask)
+    model = keras.Model(inputs, out)
+
+    model(np.zeros((1, T, E), dtype=np.float32))
+    apply_final_compression(model)
+
+    x_np = np.random.randn(2, T, E).astype(np.float32)
+    keras_out = _keras_out(model, x_np)
+    onnx_out = _onnx_run(model, x_np, input_shape=(T, E), tmp_path=tmp_path)
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="MHA causal attn_mask: keras vs ONNX mismatch")
+
+
+def test_mha_key_padding_mask_onnx(cfg, tmp_path):
+    import onnx
+
+    E, H, T = 16, 4, 8
+    inputs = keras.Input(shape=(T, E))
+    kpm = keras.Input(shape=(T,), dtype="bool")  # runtime bool padding mask, True == padding
+    mha = PQMultiheadAttention(cfg, embed_dim=E, num_heads=H)
+    out, _ = mha([inputs, inputs, inputs], key_padding_mask=kpm)
+    model = keras.Model([inputs, kpm], out)
+
+    model([np.zeros((1, T, E), np.float32), np.zeros((1, T), bool)])
+    apply_final_compression(model)
+
+    x_np = np.random.randn(2, T, E).astype(np.float32)
+    mask_np = np.zeros((2, T), dtype=bool)
+    mask_np[:, -2:] = True  # last two key positions are padding
+    keras_out = _keras_out(model, [x_np, mask_np])
+
+    path = str(tmp_path / "mha_kpm.onnx")
+    proto = convert_to_onnx(model, input_shape=[(T, E), (T,)], output_path=path)
+    # The padding mask must be a genuine bool graph input, not baked away.
+    kpm_vi = next(i for i in proto.graph.input if i.name == "input_1")
+    assert kpm_vi.type.tensor_type.elem_type == onnx.TensorProto.BOOL
+
+    sess = ort.InferenceSession(path)
+    names = [i.name for i in sess.get_inputs()]
+    onnx_out = sess.run(None, {names[0]: x_np, names[1]: mask_np})[0]
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="MHA key_padding_mask: keras vs ONNX mismatch")
