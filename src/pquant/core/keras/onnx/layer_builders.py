@@ -186,7 +186,8 @@ def add_depthwise_conv(layer, prefix, current, nodes, initializers, quant_fn, us
 
 
 def add_batchnorm(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
-    """PQBatchNormalization / standard BatchNormalization."""
+    """PQBatchNormalization (also handles plain keras BatchNormalization,
+    but emit_layer currently only dispatches the PQ variant here)."""
     need_tr, perm_to_nchw, perm_to_nhwx = bn_transpose_info(layer)
 
     if need_tr:

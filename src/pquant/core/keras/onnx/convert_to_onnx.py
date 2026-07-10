@@ -43,7 +43,7 @@ from pquant.core.keras.onnx.helpers import (
     quant_node,
     to_np,
 )
-from pquant.core.keras.onnx.layers import (
+from pquant.core.keras.onnx.layer_builders import (
     add_avgpool,
     add_batchnorm,
     add_conv,
@@ -143,8 +143,6 @@ def emit_layer(
     if isinstance(layer, PQBatchNormalization):
         return add_batchnorm(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights)
 
-    # --- Standard Keras layers (weightless/structural only; weighted layers
-    # must be PQ variants — plain Conv/Dense/BatchNorm are not supported) ---
     if type(layer).__name__ == "GetItem":
         # keras.ops GetItem operation recorded by ``x[...]`` KerasTensor syntax.
         node = layer._inbound_nodes[0]
@@ -241,11 +239,6 @@ def emit_layer(
     raise TypeError(f"Unsupported Keras layer type for ONNX export: {type(layer).__name__!r}")
 
 
-# ---------------------------------------------------------------------------
-# Keras functional model graph traversal
-# ---------------------------------------------------------------------------
-
-
 def build_tensor_onnx_map(model):
     tensor_to_onnx = {}
     for i, inp in enumerate(model.inputs):
@@ -286,11 +279,6 @@ def register_layer_output(layer, onnx_name, tensor_to_onnx):
             tensor_to_onnx[id(tensor)] = name
     else:
         tensor_to_onnx[id(out_tensors[0])] = onnx_name
-
-
-# ---------------------------------------------------------------------------
-# main conversion
-# ---------------------------------------------------------------------------
 
 
 def convert_to_onnx(
