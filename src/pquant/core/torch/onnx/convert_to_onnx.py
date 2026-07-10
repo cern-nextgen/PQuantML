@@ -45,7 +45,7 @@ from pquant.core.torch.onnx.helpers import (  # noqa: E402
     qdq_node,
     quant_node,
 )
-from pquant.core.torch.onnx.layers import (  # noqa: E402
+from pquant.core.torch.onnx.layer_builders import (  # noqa: E402
     add_avgpool,
     add_batchnorm,
     add_conv,
@@ -291,7 +291,6 @@ def export_qdq_layernorm(
     check_q_int16(gamma, GAMMA_F, "gamma")
     check_q_int16(beta, BETA_F, "beta")
 
-    # ----- validate quant params -----
     input_scale_log2 = int(input_scale_log2)
     output_scale_log2 = int(output_scale_log2)
     eps_q0 = int(eps_q0)
@@ -305,7 +304,6 @@ def export_qdq_layernorm(
     output_scale = float(2.0**output_scale_log2)
     epsilon = float(eps_q0) * input_scale * input_scale
 
-    # ----- build initializers -----
     initializers = [
         onh.from_array(np.array(input_scale, dtype=np.float32), name="input_scale"),
         onh.from_array(np.array(0, dtype=np.int8), name="input_zero_point"),
@@ -315,7 +313,6 @@ def export_qdq_layernorm(
         onh.from_array(beta.astype(np.float32), name="beta"),
     ]
 
-    # ----- build nodes -----
     nodes = [
         oh.make_node(
             "DequantizeLinear",
@@ -345,7 +342,6 @@ def export_qdq_layernorm(
         ),
     ]
 
-    # ----- build graph + model -----
     input_vi = oh.make_tensor_value_info("input_q", TensorProto.INT8, list(input_shape))
     output_vi = oh.make_tensor_value_info("output", TensorProto.FLOAT, list(input_shape))
 
@@ -360,7 +356,6 @@ def export_qdq_layernorm(
     model_proto = oh.make_model(graph, opset_imports=[oh.make_opsetid("", opset)])
     model_proto.ir_version = 8
 
-    # Strip any initializer names that the onnx library may have added to graph.input.
     _init_names = {t.name for t in model_proto.graph.initializer}
     _data_inputs = [vi for vi in model_proto.graph.input if vi.name not in _init_names]
     del model_proto.graph.input[:]

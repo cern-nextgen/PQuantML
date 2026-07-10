@@ -436,7 +436,6 @@ def add_mha(
     E = module.embed_dim
     scale_val = float(module.scale)
 
-    # --- Optional transpose for seq-first inputs (T, B, E) → (B, T, E) ---
     if not module.batch_first:
         q_t = f"{prefix}_q_in_t"
         k_t = f"{prefix}_k_in_t"
@@ -457,7 +456,6 @@ def add_mha(
         module.v_proj, f"{prefix}_v_proj", v_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
 
-    # --- Helper: (B, L, E) → (B, H, L, head_dim) using dynamic shapes ---
     def split_heads(x_name, pfx):
         shape_out = f"{pfx}_shape"
         b_scalar = f"{pfx}_b_sc"
@@ -497,11 +495,9 @@ def add_mha(
     k_h = split_heads(k_proj_out, f"{prefix}_k")
     v_h = split_heads(v_proj_out, f"{prefix}_v")
 
-    # --- k^T: (B, H, S, head_dim) → (B, H, head_dim, S) ---
     k_t_name = f"{prefix}_k_T"
     nodes.append(oh.make_node("Transpose", inputs=[k_h], outputs=[k_t_name], perm=[0, 1, 3, 2]))
 
-    # --- Scaled dot-product scores: (B, H, T, head_dim) @ (B, H, head_dim, S) → (B, H, T, S) ---
     raw_scores = f"{prefix}_scores_raw"
     scaled_scores = f"{prefix}_scores_scaled"
     scale_cst = f"{prefix}_attn_scale"
@@ -561,17 +557,12 @@ def add_mha(
     nodes.append(oh.make_node("Concat", inputs=[ctx_b_1d, ctx_t_1d, ctx_E_1d], outputs=[ctx_3d], axis=0))
     nodes.append(oh.make_node("Reshape", inputs=[ctx_t, ctx_3d], outputs=[ctx_merged]))
 
-    # --- Output projection (rank-3 input: (B, T, E)) ---
     out = add_dense_nd(
         module.out_proj, f"{prefix}_out_proj", ctx_merged, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
-
-    # --- Average attention weights over heads: (B, H, T, S) → (B, T, S) ---
-    # Emitted so that getitem(mha, 1) has a valid ONNX value name.
     avg_attn = f"{prefix}_avg_attn_weights"
     nodes.append(oh.make_node("ReduceMean", inputs=[attn_w_name], outputs=[avg_attn], axes=[1], keepdims=0))
 
-    # --- Optional transpose back for seq-first output ---
     if not module.batch_first:
         out_final = f"{prefix}_out_seq_first"
         nodes.append(oh.make_node("Transpose", inputs=[out], outputs=[out_final], perm=[1, 0, 2]))

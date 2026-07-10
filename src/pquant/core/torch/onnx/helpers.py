@@ -22,10 +22,6 @@ import numpy as np
 import onnx.helper as oh
 import onnx.numpy_helper as onh
 
-# ---------------------------------------------------------------------------
-# QONNX Quant node
-# ---------------------------------------------------------------------------
-
 ROUND_MODE_MAP = {
     "TRN": "FLOOR",
     "RND": "ROUND",

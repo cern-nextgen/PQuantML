@@ -205,13 +205,12 @@ def bn_transpose_info(layer):
     """
     Return (need_transpose, perm_fwd, perm_bwd) for a BatchNormalization layer.
 
-    ONNX BN (opset < 14) always normalises on axis 1 (NCHW).  If the Keras
-    layer uses axis=-1 (channels_last), we must insert Transpose nodes around
-    the BN op.  We infer ndim from the layer's stored input_shape.
+    ONNX BN always normalises on axis 1 (NCHW; true in every opset).  We assume Keras uses channels_last format,
+    so we must insert Transpose nodes around the BN op.
     """
     axis = getattr(layer, "axis", 1)
     stored = getattr(layer, "input_shape", None)
-    ndim = len(stored) if stored is not None else 4
+    ndim = len(stored) if stored is not None else len(layer.input.shape)
     eff_axis = axis if axis >= 0 else (ndim + axis)
 
     if eff_axis == 1 or ndim <= 2:
