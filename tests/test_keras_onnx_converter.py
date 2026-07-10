@@ -10,10 +10,10 @@ bias=True/False is tested via parametrize where applicable.
 
 import keras
 import numpy as np
+import onnxruntime as ort
 import pytest
 
 import pquant
-from pquant.core.keras.convert_to_onnx import convert_to_onnx
 from pquant.core.keras.layers import (
     PQActivation,
     PQBatchNormalization,
@@ -24,13 +24,9 @@ from pquant.core.keras.layers import (
     PQMultiheadAttention,
     apply_final_compression,
 )
-
-ort = pytest.importorskip("onnxruntime", reason="onnxruntime not installed")
+from pquant.core.keras.onnx import convert_to_onnx
 
 ATOL = 1e-4
-# When quantization is enabled, torch/keras fake-quant and ONNX QuantizeLinear can round
-# a few values to opposite sides of a 0.5 boundary (op/accumulation-order ULP differences),
-# so allow ~1 quantization level of slack for graphs that re-quantize intermediates.
 QUANT_ATOL = 5e-3
 
 
@@ -40,9 +36,6 @@ def _atol(cfg):
 
 @pytest.fixture(params=[False, True], ids=["float", "quant"])
 def cfg(request):
-    # Run every cfg-based test twice: float path and quantization-enabled, so the
-    # emitted Quantize/DequantizeLinear nodes are actually exercised against onnxruntime
-    # (they are skipped entirely when enable_quantization is False).
     c = pquant.cs_config()
     c.quantization_parameters.enable_quantization = request.param
     return c
@@ -66,113 +59,49 @@ def _onnx_run(model, x: np.ndarray, input_shape: tuple, tmp_path) -> np.ndarray:
     return sess.run(None, {in_name: x})[0]
 
 
-@pytest.mark.parametrize("bias", [True, False])
-def test_dense_onnx(cfg, bias, tmp_path):
-    IN, OUT = 16, 8
-    inputs = keras.Input(shape=(IN,))
-    x = PQDense(cfg, units=OUT, use_bias=bias)(inputs)
-    model = keras.Model(inputs, x)
+# (layer factory, channels, spatial dims, batch size, warm-up call kwargs)
+SINGLE_LAYER_CASES = [
+    pytest.param(lambda cfg: PQDense(cfg, units=8, use_bias=True), 16, (), 4, {}, id="dense-bias"),
+    pytest.param(lambda cfg: PQDense(cfg, units=8, use_bias=False), 16, (), 4, {}, id="dense-nobias"),
+    pytest.param(
+        lambda cfg: PQConv2d(cfg, 8, kernel_size=3, padding="same", use_bias=True), 3, (8, 8), 2, {}, id="conv2d-bias"
+    ),
+    pytest.param(
+        lambda cfg: PQConv2d(cfg, 8, kernel_size=3, padding="same", use_bias=False), 3, (8, 8), 2, {}, id="conv2d-nobias"
+    ),
+    pytest.param(
+        lambda cfg: PQConv1d(cfg, 8, kernel_size=3, padding="same", use_bias=True), 4, (16,), 2, {}, id="conv1d-bias"
+    ),
+    pytest.param(
+        lambda cfg: PQConv1d(cfg, 8, kernel_size=3, padding="same", use_bias=False), 4, (16,), 2, {}, id="conv1d-nobias"
+    ),
+    pytest.param(
+        lambda cfg: PQBatchNormalization(cfg, axis=1 if _channels_first() else -1),
+        8,
+        (4, 4),
+        4,
+        {"training": True},  # warm up running stats
+        id="batchnorm",
+    ),
+    pytest.param(lambda cfg: PQDepthwiseConv2d(cfg, kernel_size=3, padding="same"), 4, (8, 8), 2, {}, id="depthwise_conv2d"),
+]
 
-    dummy = np.zeros((1, IN), dtype=np.float32)
-    model(dummy)
-    apply_final_compression(model)
 
-    x_np = np.random.randn(4, IN).astype(np.float32)
-    keras_out = _keras_out(model, x_np)
-    onnx_out = _onnx_run(model, x_np, input_shape=(IN,), tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg=f"PQDense bias={bias}: keras vs ONNX mismatch")
-
-
-@pytest.mark.parametrize("bias", [True, False])
-def test_conv2d_onnx(cfg, bias, tmp_path):
-    IN_C, OUT_C, H, W = 3, 8, 8, 8
-    if _channels_first():
-        input_shape = (IN_C, H, W)
-        x_np = np.random.randn(2, IN_C, H, W).astype(np.float32)
-    else:
-        input_shape = (H, W, IN_C)
-        x_np = np.random.randn(2, H, W, IN_C).astype(np.float32)
+@pytest.mark.parametrize("make_layer,channels,spatial,batch,warmup_kwargs", SINGLE_LAYER_CASES)
+def test_single_layer_onnx(cfg, make_layer, channels, spatial, batch, warmup_kwargs, tmp_path):
+    input_shape = (channels, *spatial) if _channels_first() else (*spatial, channels)
+    x_np = np.random.randn(batch, *input_shape).astype(np.float32)
 
     inputs = keras.Input(shape=input_shape)
-    x = PQConv2d(cfg, OUT_C, kernel_size=3, padding="same", use_bias=bias)(inputs)
+    x = make_layer(cfg)(inputs)
     model = keras.Model(inputs, x)
 
-    dummy = np.zeros((1, *input_shape), dtype=np.float32)
-    model(dummy)
+    model(np.zeros((1, *input_shape), dtype=np.float32), **warmup_kwargs)
     apply_final_compression(model)
 
     keras_out = _keras_out(model, x_np)
     onnx_out = _onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg=f"PQConv2d bias={bias}: keras vs ONNX mismatch")
-
-
-@pytest.mark.parametrize("bias", [True, False])
-def test_conv1d_onnx(cfg, bias, tmp_path):
-    IN_C, OUT_C, L = 4, 8, 16
-    if _channels_first():
-        input_shape = (IN_C, L)
-        x_np = np.random.randn(2, IN_C, L).astype(np.float32)
-    else:
-        input_shape = (L, IN_C)
-        x_np = np.random.randn(2, L, IN_C).astype(np.float32)
-
-    inputs = keras.Input(shape=input_shape)
-    x = PQConv1d(cfg, OUT_C, kernel_size=3, padding="same", use_bias=bias)(inputs)
-    model = keras.Model(inputs, x)
-
-    dummy = np.zeros((1, *input_shape), dtype=np.float32)
-    model(dummy)
-    apply_final_compression(model)
-
-    keras_out = _keras_out(model, x_np)
-    onnx_out = _onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg=f"PQConv1d bias={bias}: keras vs ONNX mismatch")
-
-
-def test_batchnorm_onnx(cfg, tmp_path):
-    IN_C, H, W = 8, 4, 4
-    if _channels_first():
-        input_shape = (IN_C, H, W)
-        x_np = np.random.randn(4, IN_C, H, W).astype(np.float32)
-        bn_axis = 1
-    else:
-        input_shape = (H, W, IN_C)
-        x_np = np.random.randn(4, H, W, IN_C).astype(np.float32)
-        bn_axis = -1
-
-    inputs = keras.Input(shape=input_shape)
-    x = PQBatchNormalization(cfg, axis=bn_axis)(inputs)
-    model = keras.Model(inputs, x)
-
-    dummy = np.zeros((1, *input_shape), dtype=np.float32)
-    model(dummy, training=True)  # warm up running stats
-    apply_final_compression(model)
-
-    keras_out = _keras_out(model, x_np)
-    onnx_out = _onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="PQBatchNormalization: keras vs ONNX mismatch")
-
-
-def test_depthwise_conv2d_onnx(cfg, tmp_path):
-    IN_C, H, W = 4, 8, 8
-    if _channels_first():
-        input_shape = (IN_C, H, W)
-        x_np = np.random.randn(2, IN_C, H, W).astype(np.float32)
-    else:
-        input_shape = (H, W, IN_C)
-        x_np = np.random.randn(2, H, W, IN_C).astype(np.float32)
-
-    inputs = keras.Input(shape=input_shape)
-    x = PQDepthwiseConv2d(cfg, kernel_size=3, padding="same")(inputs)
-    model = keras.Model(inputs, x)
-
-    dummy = np.zeros((1, *input_shape), dtype=np.float32)
-    model(dummy)
-    apply_final_compression(model)
-
-    keras_out = _keras_out(model, x_np)
-    onnx_out = _onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
-    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="PQDepthwiseConv2d: keras vs ONNX mismatch")
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="keras vs ONNX mismatch")
 
 
 @pytest.mark.parametrize("activation", ["relu", "tanh", "hard_tanh"])
@@ -305,3 +234,58 @@ def test_mha_key_padding_mask_onnx(cfg, tmp_path):
     names = [i.name for i in sess.get_inputs()]
     onnx_out = sess.run(None, {names[0]: x_np, names[1]: mask_np})[0]
     np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="MHA key_padding_mask: keras vs ONNX mismatch")
+
+
+@pytest.mark.parametrize(
+    "slicer",
+    [
+        lambda y: y[:, 2:6],
+        lambda y: y[:, 0],
+        lambda y: y[..., 1:8:2],
+        lambda y: y[:, -1],
+    ],
+    ids=["range", "int_squeeze", "ellipsis_step", "neg_int"],
+)
+def test_tensor_slicing_onnx(cfg, slicer, tmp_path):
+    """KerasTensor slicing (GetItem ops) must export as ONNX Slice (+ Squeeze)."""
+    IN, OUT = 16, 8
+    inputs = keras.Input(shape=(IN,))
+    y = PQDense(cfg, units=OUT)(inputs)
+    model = keras.Model(inputs, slicer(y))
+
+    dummy = np.zeros((1, IN), dtype=np.float32)
+    model(dummy)
+    apply_final_compression(model)
+
+    x_np = np.random.randn(4, IN).astype(np.float32)
+    keras_out = _keras_out(model, x_np)
+    onnx_out = _onnx_run(model, x_np, input_shape=(IN,), tmp_path=tmp_path)
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="tensor slicing: keras vs ONNX mismatch")
+
+
+@pytest.mark.parametrize(
+    "reshaper",
+    [
+        lambda y: keras.ops.expand_dims(y, 1),
+        lambda y: keras.ops.expand_dims(y, -1),
+        lambda y: keras.ops.squeeze(keras.ops.expand_dims(y, 2), 2),
+        lambda y: keras.ops.squeeze(keras.ops.expand_dims(y, 1)),
+    ],
+    ids=["expand_dims", "expand_dims_neg", "roundtrip", "squeeze_all"],
+)
+def test_squeeze_unsqueeze_onnx(cfg, reshaper, tmp_path):
+    """keras.ops.squeeze / expand_dims must export as ONNX Squeeze/Unsqueeze."""
+    IN, OUT = 16, 8
+    inputs = keras.Input(shape=(IN,))
+    y = PQDense(cfg, units=OUT)(inputs)
+    model = keras.Model(inputs, reshaper(y))
+
+    dummy = np.zeros((1, IN), dtype=np.float32)
+    model(dummy)
+    apply_final_compression(model)
+
+    x_np = np.random.randn(4, IN).astype(np.float32)
+    keras_out = _keras_out(model, x_np)
+    onnx_out = _onnx_run(model, x_np, input_shape=(IN,), tmp_path=tmp_path)
+    assert keras_out.shape == onnx_out.shape
+    np.testing.assert_allclose(keras_out, onnx_out, atol=_atol(cfg), err_msg="squeeze/expand_dims: keras vs ONNX mismatch")

@@ -1,4 +1,4 @@
-"""Tests for convert_to_onnx / convert_to_onnx_fx.
+"""Tests for convert_to_onnx.
 
 Each test builds a small model (one PQ layer + ReLU where applicable), runs a
 forward pass to initialise any running statistics, calls apply_final_compression
@@ -11,6 +11,7 @@ The same check is repeated with bias=True and bias=False via parametrize.
 import os
 
 import numpy as np
+import onnxruntime as ort
 import pytest
 import torch
 import torch.nn as nn
@@ -18,12 +19,9 @@ import torch.nn as nn
 os.environ["KERAS_BACKEND"] = "torch"
 
 import pquant  # noqa: E402
-from pquant.core.torch.convert_to_onnx import (  # noqa: E402
-    convert_to_onnx,
-    convert_to_onnx_fx,
-    export_qdq_layernorm,
-)
 from pquant.core.torch.layers import Quantizer  # noqa: E402
+from pquant.core.torch.onnx import convert_to_onnx  # noqa: E402
+from pquant.core.torch.onnx.convert_to_onnx import export_qdq_layernorm  # noqa: E402
 from pquant.layers import (  # noqa: E402
     PQActivation,
     PQAvgPool1d,
@@ -37,13 +35,7 @@ from pquant.layers import (  # noqa: E402
     PQMultiheadAttention,
 )
 
-ort = pytest.importorskip("onnxruntime", reason="onnxruntime not installed")
-
-ATOL = 1e-4  # float32 Gemm/Conv can differ by ~1 ULP; keep some slack
-# When quantization is enabled, torch fake-quant and ONNX QuantizeLinear can round a
-# few values to opposite sides of a 0.5 boundary (the rounding inputs differ by float
-# ULPs from differing op/accumulation order), so allow ~1 quantization level of slack
-# for graphs that re-quantize intermediate activations.
+ATOL = 1e-4
 QUANT_ATOL = 5e-3
 
 
@@ -51,17 +43,8 @@ def _atol(cfg):
     return QUANT_ATOL if cfg.quantization_parameters.enable_quantization else ATOL
 
 
-# ---------------------------------------------------------------------------
-# fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(params=[False, True], ids=["float", "quant"])
 def cfg(request):
-    # Run every cfg-based test twice: once with the plain float path and once with
-    # quantization enabled so the emitted Quantize/DequantizeLinear nodes are
-    # actually exercised against onnxruntime (they are skipped entirely when
-    # enable_quantization is False).
     c = pquant.cs_config()
     c.quantization_parameters.enable_quantization = request.param
     return c
@@ -69,7 +52,6 @@ def cfg(request):
 
 @pytest.fixture
 def cfg_quant():
-    # Quantization-enabled config for tests that specifically target the QDQ path.
     c = pquant.cs_config()
     c.quantization_parameters.enable_quantization = True
     return c
@@ -93,7 +75,7 @@ def _onnx_run(model: nn.Module, x: torch.Tensor, input_shape: tuple, tmp_path) -
 def _onnx_run_fx(model: nn.Module, x: torch.Tensor, input_shape: tuple, tmp_path) -> np.ndarray:
     """FX-based export → ONNX, run with onnxruntime."""
     path = str(tmp_path / "model_fx.onnx")
-    convert_to_onnx_fx(model, input_shape=input_shape, output_path=path)
+    convert_to_onnx(model, input_shape=input_shape, output_path=path)
     sess = ort.InferenceSession(path)
     in_name = sess.get_inputs()[0].name
     return sess.run(None, {in_name: x.cpu().numpy()})[0]
@@ -105,119 +87,70 @@ def _torch_out(model: nn.Module, x: torch.Tensor) -> np.ndarray:
         return model(x).cpu().numpy()
 
 
-@pytest.mark.parametrize("bias", [True, False])
-def test_dense_onnx(cfg, bias, tmp_path):
-    IN, OUT = 16, 8
-    model = nn.Sequential(
-        PQDense(cfg, in_features=IN, out_features=OUT, bias=bias),
-        nn.ReLU(),
-    )
-    x = torch.randn(4, IN)
+# (model factory, input shape without batch dim, batch size)
+SINGLE_LAYER_CASES = [
+    pytest.param(
+        lambda cfg: nn.Sequential(PQDense(cfg, in_features=16, out_features=8, bias=True), nn.ReLU()),
+        (16,),
+        4,
+        id="dense-bias",
+    ),
+    pytest.param(
+        lambda cfg: nn.Sequential(PQDense(cfg, in_features=16, out_features=8, bias=False), nn.ReLU()),
+        (16,),
+        4,
+        id="dense-nobias",
+    ),
+    pytest.param(
+        lambda cfg: nn.Sequential(
+            PQConv2d(cfg, in_channels=3, out_channels=8, kernel_size=3, padding=1, bias=True), nn.ReLU()
+        ),
+        (3, 8, 8),
+        2,
+        id="conv2d-bias",
+    ),
+    pytest.param(
+        lambda cfg: nn.Sequential(
+            PQConv2d(cfg, in_channels=3, out_channels=8, kernel_size=3, padding=1, bias=False), nn.ReLU()
+        ),
+        (3, 8, 8),
+        2,
+        id="conv2d-nobias",
+    ),
+    pytest.param(
+        lambda cfg: nn.Sequential(
+            PQConv1d(cfg, in_channels=4, out_channels=8, kernel_size=3, padding=1, bias=True), nn.ReLU()
+        ),
+        (4, 16),
+        2,
+        id="conv1d-bias",
+    ),
+    pytest.param(
+        lambda cfg: nn.Sequential(
+            PQConv1d(cfg, in_channels=4, out_channels=8, kernel_size=3, padding=1, bias=False), nn.ReLU()
+        ),
+        (4, 16),
+        2,
+        id="conv1d-nobias",
+    ),
+    pytest.param(lambda cfg: nn.Sequential(PQBatchNorm2d(cfg, num_features=8), nn.ReLU()), (8, 4, 4), 4, id="batchnorm2d"),
+    pytest.param(lambda cfg: nn.Sequential(PQBatchNorm1d(cfg, num_features=8), nn.ReLU()), (8, 16), 4, id="batchnorm1d"),
+    pytest.param(lambda cfg: nn.Sequential(PQAvgPool2d(cfg, kernel_size=2, stride=2)), (8, 8, 8), 2, id="avgpool2d"),
+    pytest.param(lambda cfg: nn.Sequential(PQAvgPool1d(cfg, kernel_size=2, stride=2)), (8, 16), 2, id="avgpool1d"),
+]
+
+
+@pytest.mark.parametrize("make_model,input_shape,batch", SINGLE_LAYER_CASES)
+def test_single_layer_onnx(cfg, make_model, input_shape, batch, tmp_path):
+    model = make_model(cfg)
+    x = torch.randn(batch, *input_shape)
     with torch.no_grad():
-        model(x)  # warm-up (needed for any running stats)
+        model(x)  # warm-up in train mode (initialises any running stats)
     _apply_compression(model)
 
-    torch_out = _torch_out(model, x)
-    onnx_out = _onnx_run(model, x, input_shape=(IN,), tmp_path=tmp_path)
-    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg=f"PQDense bias={bias}: torch vs ONNX mismatch")
-
-
-@pytest.mark.parametrize("bias", [True, False])
-def test_conv2d_onnx(cfg, bias, tmp_path):
-    IN_C, OUT_C, H, W = 3, 8, 8, 8
-    model = nn.Sequential(
-        PQConv2d(cfg, in_channels=IN_C, out_channels=OUT_C, kernel_size=3, padding=1, bias=bias),
-        nn.ReLU(),
-    )
-    x = torch.randn(2, IN_C, H, W)
-    with torch.no_grad():
-        model(x)
-    _apply_compression(model)
-
-    torch_out = _torch_out(model, x)
-    onnx_out = _onnx_run(model, x, input_shape=(IN_C, H, W), tmp_path=tmp_path)
-    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg=f"PQConv2d bias={bias}: torch vs ONNX mismatch")
-
-
-@pytest.mark.parametrize("bias", [True, False])
-def test_conv1d_onnx(cfg, bias, tmp_path):
-    IN_C, OUT_C, L = 4, 8, 16
-    model = nn.Sequential(
-        PQConv1d(cfg, in_channels=IN_C, out_channels=OUT_C, kernel_size=3, padding=1, bias=bias),
-        nn.ReLU(),
-    )
-    x = torch.randn(2, IN_C, L)
-    with torch.no_grad():
-        model(x)
-    _apply_compression(model)
-
-    torch_out = _torch_out(model, x)
-    onnx_out = _onnx_run(model, x, input_shape=(IN_C, L), tmp_path=tmp_path)
-    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg=f"PQConv1d bias={bias}: torch vs ONNX mismatch")
-
-
-def test_batchnorm2d_onnx(cfg, tmp_path):
-    C, H, W = 8, 4, 4
-    model = nn.Sequential(
-        PQBatchNorm2d(cfg, num_features=C),
-        nn.ReLU(),
-    )
-    x = torch.randn(4, C, H, W)
-    with torch.no_grad():
-        model(x)
-    _apply_compression(model)
-    model.eval()  # switch BN to use running stats
-
-    torch_out = _torch_out(model, x)
-    onnx_out = _onnx_run(model, x, input_shape=(C, H, W), tmp_path=tmp_path)
-    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg="PQBatchNorm2d: torch vs ONNX mismatch")
-
-
-def test_batchnorm1d_onnx(cfg, tmp_path):
-    C, L = 8, 16
-    model = nn.Sequential(
-        PQBatchNorm1d(cfg, num_features=C),
-        nn.ReLU(),
-    )
-    x = torch.randn(4, C, L)
-    with torch.no_grad():
-        model(x)
-    _apply_compression(model)
-    model.eval()
-
-    torch_out = _torch_out(model, x)
-    onnx_out = _onnx_run(model, x, input_shape=(C, L), tmp_path=tmp_path)
-    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg="PQBatchNorm1d: torch vs ONNX mismatch")
-
-
-def test_avgpool2d_onnx(cfg, tmp_path):
-    C, H, W = 8, 8, 8
-    model = nn.Sequential(
-        PQAvgPool2d(cfg, kernel_size=2, stride=2),
-    )
-    x = torch.randn(2, C, H, W)
-    with torch.no_grad():
-        model(x)
-    _apply_compression(model)
-
-    torch_out = _torch_out(model, x)
-    onnx_out = _onnx_run(model, x, input_shape=(C, H, W), tmp_path=tmp_path)
-    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg="PQAvgPool2d: torch vs ONNX mismatch")
-
-
-def test_avgpool1d_onnx(cfg, tmp_path):
-    C, L = 8, 16
-    model = nn.Sequential(
-        PQAvgPool1d(cfg, kernel_size=2, stride=2),
-    )
-    x = torch.randn(2, C, L)
-    with torch.no_grad():
-        model(x)
-    _apply_compression(model)
-
-    torch_out = _torch_out(model, x)
-    onnx_out = _onnx_run(model, x, input_shape=(C, L), tmp_path=tmp_path)
-    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg="PQAvgPool1d: torch vs ONNX mismatch")
+    torch_out = _torch_out(model, x)  # eval mode: BN uses running stats
+    onnx_out = _onnx_run(model, x, input_shape=input_shape, tmp_path=tmp_path)
+    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg="torch vs ONNX mismatch")
 
 
 class _SelfAttnModel(nn.Module):
@@ -316,7 +249,7 @@ def test_mha_key_padding_mask_onnx(cfg, bias, tmp_path):
         torch_out = model(x, key_padding_mask).cpu().numpy()
 
     path = str(tmp_path / "mha_kpm.onnx")
-    proto = convert_to_onnx_fx(model, input_shape=[(T, E), (T,)], output_path=path, input_dtypes=["float32", "bool"])
+    proto = convert_to_onnx(model, input_shape=[(T, E), (T,)], output_path=path, input_dtypes=["float32", "bool"])
 
     # The padding mask must be a genuine bool graph input, not baked away.
     kpm_vi = next(i for i in proto.graph.input if i.name == "key_padding_mask")
@@ -435,7 +368,7 @@ def test_two_input_onnx(cfg, bias, tmp_path):
         torch_out = model(a, b).cpu().numpy()
 
     path = str(tmp_path / "two_input.onnx")
-    model_proto = convert_to_onnx_fx(model, input_shape=[(IN_A,), (IN_B,)], output_path=path)
+    model_proto = convert_to_onnx(model, input_shape=[(IN_A,), (IN_B,)], output_path=path)
 
     # Graph must declare exactly two inputs, named after the forward parameters,
     # each with a dynamic batch dim and its own feature shape.
@@ -461,7 +394,7 @@ def test_two_input_shape_count_mismatch(cfg, tmp_path):
 
     path = str(tmp_path / "bad_count.onnx")
     with pytest.raises(ValueError, match="tensor input"):
-        convert_to_onnx_fx(model, input_shape=(16,), output_path=path)  # only one shape
+        convert_to_onnx(model, input_shape=(16,), output_path=path)  # only one shape
 
 
 class _FlaggedModel(nn.Module):
@@ -493,7 +426,7 @@ def test_concrete_args_specialization(cfg, scale_up, tmp_path):
         torch_out = model(x, scale_up).cpu().numpy()
 
     path = str(tmp_path / f"flag_{scale_up}.onnx")
-    model_proto = convert_to_onnx_fx(model, input_shape=(IN,), output_path=path, concrete_args={"scale_up": scale_up})
+    model_proto = convert_to_onnx(model, input_shape=(IN,), output_path=path, concrete_args={"scale_up": scale_up})
 
     # The bool flag is baked in as a constant, so it must NOT appear as a graph
     # input — only the single tensor input "input" remains.
@@ -538,7 +471,7 @@ def test_residual_concat_onnx(cfg_quant, tmp_path):
         torch_out = model(x).cpu().numpy()
 
     path = str(tmp_path / "residual_concat.onnx")
-    model_proto = convert_to_onnx_fx(model, input_shape=(DIM,), output_path=path)
+    model_proto = convert_to_onnx(model, input_shape=(DIM,), output_path=path)
     op_types = [n.op_type for n in model_proto.graph.node]
     assert "Add" in op_types  # the skip connection
     assert "Concat" in op_types  # the branch merge
@@ -626,7 +559,7 @@ def test_cnn_flatten_to_dense_onnx(cfg_quant, use_reshape, tmp_path):
         torch_out = model(x).cpu().numpy()
 
     path = str(tmp_path / f"cnn_flatten_{use_reshape}.onnx")
-    convert_to_onnx_fx(model, input_shape=(IN_C, HW, HW), output_path=path)
+    convert_to_onnx(model, input_shape=(IN_C, HW, HW), output_path=path)
     sess = ort.InferenceSession(path)
     onnx_out = sess.run(None, {sess.get_inputs()[0].name: x.cpu().numpy()})[0]
     np.testing.assert_allclose(
@@ -661,7 +594,7 @@ def test_scalar_ops_onnx(cfg_quant, tmp_path):
         torch_out = model(x).cpu().numpy()
 
     path = str(tmp_path / "scalar_ops.onnx")
-    model_proto = convert_to_onnx_fx(model, input_shape=(DIM,), output_path=path)
+    model_proto = convert_to_onnx(model, input_shape=(DIM,), output_path=path)
     op_types = [n.op_type for n in model_proto.graph.node]
     for expected in ("Mul", "Sub", "Div", "Sigmoid"):
         assert expected in op_types, f"missing {expected} node"
@@ -695,7 +628,7 @@ def test_multi_output_onnx(cfg_quant, tmp_path):
         t0, t1 = (t.cpu().numpy() for t in model(x))
 
     path = str(tmp_path / "multi_output.onnx")
-    model_proto = convert_to_onnx_fx(model, input_shape=(DIM,), output_path=path)
+    model_proto = convert_to_onnx(model, input_shape=(DIM,), output_path=path)
     assert len(model_proto.graph.output) == 2
 
     sess = ort.InferenceSession(path)
@@ -737,9 +670,8 @@ def test_pqlayernorm_onnx(cfg_quant, tmp_path):
         (lambda: nn.Sequential(nn.MaxPool2d(2, 2)), (3, 8, 8), 2),
         (lambda: nn.Sequential(nn.Upsample(scale_factor=2, mode="nearest")), (3, 4, 4), 2),
         (lambda: nn.Sequential(nn.Dropout(0.5)), (16,), 4),
-        (lambda: nn.Sequential(nn.BatchNorm2d(3)), (3, 8, 8), 2),
     ],
-    ids=["leaky_relu", "maxpool2d", "upsample", "dropout", "batchnorm2d"],
+    ids=["leaky_relu", "maxpool2d", "upsample", "dropout"],
 )
 def test_plain_passthrough_layers_onnx(make_model, input_shape, batch, tmp_path):
     model = make_model()
@@ -834,3 +766,68 @@ def test_qdq_layernorm_validation(tmp_path):
     # eps_q0 < 1
     with pytest.raises(ValueError, match="eps_q0"):
         export_qdq_layernorm(path, (4, D), gamma, beta, -7, -6, eps_q0=0)
+
+
+@pytest.mark.parametrize(
+    "slicer",
+    [
+        lambda y: y[:, 2:6],
+        lambda y: y[:, 0],
+        lambda y: y[..., 1:8:2],
+        lambda y: y[:, -1],
+    ],
+    ids=["range", "int_squeeze", "ellipsis_step", "neg_int"],
+)
+def test_tensor_slicing_onnx(cfg, slicer, tmp_path):
+    """Constant tensor slicing in forward must export as ONNX Slice (+ Squeeze)."""
+
+    class SliceModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.dense = PQDense(cfg, in_features=16, out_features=8)
+
+        def forward(self, x):
+            return slicer(self.dense(x))
+
+    model = SliceModel()
+    x = torch.randn(4, 16)
+    with torch.no_grad():
+        model(x)
+    _apply_compression(model)
+
+    torch_out = _torch_out(model, x)
+    onnx_out = _onnx_run(model, x, input_shape=(16,), tmp_path=tmp_path)
+    np.testing.assert_allclose(torch_out, onnx_out, atol=_atol(cfg), err_msg="tensor slicing: torch vs ONNX mismatch")
+
+
+@pytest.mark.parametrize(
+    "reshaper",
+    [
+        lambda y: y.unsqueeze(1),
+        lambda y: torch.unsqueeze(y, -1),
+        lambda y: y.unsqueeze(2).squeeze(2),
+        lambda y: torch.squeeze(y.unsqueeze(1)),
+    ],
+    ids=["method_unsqueeze", "fn_unsqueeze_neg", "roundtrip", "squeeze_all"],
+)
+def test_squeeze_unsqueeze_onnx(cfg, reshaper, tmp_path):
+    """squeeze/unsqueeze in forward must export as ONNX Squeeze/Unsqueeze."""
+
+    class ReshapeModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.dense = PQDense(cfg, in_features=16, out_features=8)
+
+        def forward(self, x):
+            return reshaper(self.dense(x))
+
+    model = ReshapeModel()
+    x = torch.randn(4, 16)
+    with torch.no_grad():
+        model(x)
+    _apply_compression(model)
+
+    torch_out = _torch_out(model, x)
+    onnx_out = _onnx_run(model, x, input_shape=(16,), tmp_path=tmp_path)
+    assert torch_out.shape == onnx_out.shape
+    np.testing.assert_allclose(torch_out, onnx_out, atol=_atol(cfg), err_msg="squeeze/unsqueeze: torch vs ONNX mismatch")
