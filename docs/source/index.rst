@@ -55,6 +55,7 @@ Contents
    getting_started
    reference
    faq
+   changelog
 
 
 Indices and tables
