@@ -38,10 +38,10 @@ Example notebook can be found [here](https://github.com/cern-nextgen/PQuantML/tr
   7. Usage of fine-tuning platform.
 
 ### Pruning methods
-A description of the pruning methods and their hyperparameters can be found [here](docs/pruning_methods.md).
+A description of the pruning methods and their hyperparameters can be found [here](docs/source/reference.md#pruning-methods).
 
 ### Quantization parameters
-A description of the quantization parameters can be found [here](docs/quantization_parameters.md).
+A description of the quantization parameters can be found [here](docs/source/reference.md#quantization-parameters).
 
 
 For detailed documentation check this page: [PQuantML documentation](https://pquantml.readthedocs.io/en/latest/)
