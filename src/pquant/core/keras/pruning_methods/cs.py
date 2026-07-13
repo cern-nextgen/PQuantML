@@ -62,7 +62,7 @@ class ContinuousSparsification(keras.layers.Layer):
         if hasattr(self, "is_pretraining"):
             self.is_pretraining.assign(False)
 
-    def pre_epoch_function(self, epoch, total_epochs):  # noqa: ARG002
+    def pre_epoch_function(self, epoch, total_epochs):
         pass
 
     def post_epoch_function(self, epoch, total_epochs):  # noqa: ARG002

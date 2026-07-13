@@ -1473,4 +1473,4 @@ if __name__ == "__main__":
 
     sess = ort.InferenceSession("model_keras.onnx")
     out = sess.run(None, {"input": np.random.randn(2, 3, 32, 32).astype(np.float32)})
-    print("Output shape:", out[0].shape)  # noqa: T201
+    print("Output shape:", out[0].shape)

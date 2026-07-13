@@ -11,15 +11,15 @@ def get_pruning_layer(config, layer_type):
     pruning_method = config.pruning_parameters.pruning_method
     if pruning_method == "dst":
         return DST(config, layer_type)
-    elif pruning_method == "autosparse":
+    if pruning_method == "autosparse":
         return AutoSparse(config, layer_type)
-    elif pruning_method == "cs":
+    if pruning_method == "cs":
         return ContinuousSparsification(config, layer_type)
-    elif pruning_method == "pdp":
+    if pruning_method == "pdp":
         return PDP(config, layer_type)
-    elif pruning_method == "activation_pruning":
+    if pruning_method == "activation_pruning":
         return ActivationPruning(config, layer_type)
-    elif pruning_method == "wanda":
+    if pruning_method == "wanda":
         return Wanda(config, layer_type)
-    elif pruning_method == "mdmm":
+    if pruning_method == "mdmm":
         return MDMM(config, layer_type)

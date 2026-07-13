@@ -6,8 +6,8 @@ gradients on the fractional-bit parameter `f`, and should follow a similar
 training trajectory when fed the same data with the same initial state.
 """
 
-import pytest  # noqa: E402
-import torch  # noqa: E402
+import pytest
+import torch
 
 hgq = pytest.importorskip("hgq")
 from hgq.quantizer import Quantizer as KerasHGQQuantizer  # noqa: E402

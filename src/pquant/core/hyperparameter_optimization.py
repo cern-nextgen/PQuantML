@@ -2,7 +2,8 @@ import copy
 import json
 import logging
 import os
-from typing import Annotated, Callable, Dict, Optional, Union
+from collections.abc import Callable
+from typing import Annotated
 
 import keras
 import optuna
@@ -46,10 +47,9 @@ def log_model_by_backend(model, name, backend, signature=None, registered_model_
     }
     if backend == constants.TORCH_BACKEND:
         return mlflow.pytorch.log_model(model, **kwargs)
-    elif backend == constants.TF_BACKEND:
+    if backend == constants.TF_BACKEND:
         return mlflow.tensorflow.log_model(model, **kwargs)
-    else:
-        raise ValueError(f"Unsupported backend: {backend}")
+    raise ValueError(f"Unsupported backend: {backend}")
 
 
 class MetricFunction(BaseModel):
@@ -66,16 +66,7 @@ class MetricFunction(BaseModel):
 class PQConfig(BaseModel):
     hpo_parameters: BaseHyperparameterOptimizationModel
     pruning_parameters: Annotated[
-        Union[
-            CSPruningModel,
-            DSTPruningModel,
-            FITCompressPruningModel,
-            PDPPruningModel,
-            WandaPruningModel,
-            AutoSparsePruningModel,
-            ActivationPruningModel,
-            MDMMPruningModel,
-        ],
+        CSPruningModel | DSTPruningModel | FITCompressPruningModel | PDPPruningModel | WandaPruningModel | AutoSparsePruningModel | ActivationPruningModel | MDMMPruningModel,
         Field(discriminator="pruning_method"),
     ]
     quantization_parameters: BaseQuantizationModel
@@ -121,7 +112,7 @@ class BackendAdapter:
     def clone_model(self, model):
         if self.backend == constants.TORCH_BACKEND:
             return copy.deepcopy(model)
-        elif self.backend == constants.TF_BACKEND:
+        if self.backend == constants.TF_BACKEND:
             new_model = keras.models.clone_model(model)
             new_model.set_weights(model.get_weights())
             return new_model
@@ -135,10 +126,9 @@ class BackendAdapter:
     def _detect_backend(self, model):
         if hasattr(model, "parameters"):
             return constants.TORCH_BACKEND
-        elif isinstance(model, keras.Model):
+        if isinstance(model, keras.Model):
             return constants.TF_BACKEND
-        else:
-            raise ValueError("Unsupported model type")
+        raise ValueError("Unsupported model type")
 
     def move_to_device(self, model):
         if self.backend == constants.TORCH_BACKEND:
@@ -154,14 +144,14 @@ class BackendAdapter:
     def tensor_to_numpy(self, tensor):
         if self.backend == constants.TORCH_BACKEND:
             return tensor.detach().cpu().numpy()
-        elif self.backend == constants.TF_BACKEND:
+        if self.backend == constants.TF_BACKEND:
             return tensor.numpy()
 
     def forward(self, model, x):
         if self.backend == constants.TORCH_BACKEND:
             x = x.to(self.device)
             return model(x)
-        elif self.backend == constants.TF_BACKEND:
+        if self.backend == constants.TF_BACKEND:
             return model(x, training=False)
 
 
@@ -169,11 +159,11 @@ class TuningTask:
     def __init__(self, config: PQConfig):
         self.config = config
         self.hyperparameters = {}
-        self.objectives: Dict[str, MetricFunction] = {}
-        self._training_function: Optional[Callable] = None
-        self._validation_function: Optional[Callable] = None
-        self._optimizer_function: Optional[Callable] = None
-        self._scheduler_function: Optional[Callable] = None
+        self.objectives: dict[str, MetricFunction] = {}
+        self._training_function: Callable | None = None
+        self._validation_function: Callable | None = None
+        self._optimizer_function: Callable | None = None
+        self._scheduler_function: Callable | None = None
         self.enable_mlflow = False
         self.tracking_uri = None
         self.storage_db = None
@@ -404,8 +394,7 @@ class TuningTask:
         )
         if len(self.objectives.keys()) == 1:
             return study.best_params
-        else:
-            return study.best_trials
+        return study.best_trials
 
 
 def ap_config():

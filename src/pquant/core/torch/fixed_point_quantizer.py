@@ -197,8 +197,7 @@ class FixedPointQuantizer:
             assert seed_gen is not None, "Seed generator must be provided for stochastic rounding."
         if self.overflow_mode != "WRAP_SM":
             return self.forward(x, k, i, f, training)
-        else:
-            return self.forward_wrap_sm(x, k, i, f, training)
+        return self.forward_wrap_sm(x, k, i, f, training)
 
 
 def get_fixed_quantizer(round_mode: str = "TRN", overflow_mode: str = "WRAP"):

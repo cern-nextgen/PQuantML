@@ -6,9 +6,9 @@ from keras import ops
 def get_threshold_size(config, weight_shape):
     if config.pruning_parameters.threshold_type == "layerwise":
         return (1, 1)
-    elif config.pruning_parameters.threshold_type == "channelwise":
+    if config.pruning_parameters.threshold_type == "channelwise":
         return (weight_shape[0], 1)
-    elif config.pruning_parameters.threshold_type == "weightwise":
+    if config.pruning_parameters.threshold_type == "weightwise":
         return (weight_shape[0], np.prod(weight_shape[1:]))
 
 

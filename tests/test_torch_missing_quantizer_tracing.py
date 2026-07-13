@@ -6,11 +6,12 @@ from torch import nn
 
 os.environ["KERAS_BACKEND"] = "torch"
 
-from pquant.activations import PQActivation  # noqa: E402
-from pquant.core.hyperparameter_optimization import PQConfig  # noqa: E402
-from pquant.core.torch.quantizer import Quantizer  # noqa: E402
-from pquant.core.torch.tracing import check_quantization  # noqa: E402
-from pquant.layers import PQDense  # noqa: E402
+from pquant.activations import PQActivation
+from pquant.layers import PQDense
+
+from pquant.core.hyperparameter_optimization import PQConfig
+from pquant.core.torch.quantizer import Quantizer
+from pquant.core.torch.tracing import check_quantization
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32

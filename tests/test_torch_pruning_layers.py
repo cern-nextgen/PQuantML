@@ -15,49 +15,49 @@ import os
 # routed through ``ops.custom_gradient``) exercise their intended backend.
 os.environ.setdefault("KERAS_BACKEND", "tensorflow")
 
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-import torch  # noqa: E402
-from keras import ops  # noqa: E402
+import numpy as np
+import pytest
+import torch
+from keras import ops
 
-from pquant.core.keras.pruning_methods.activation_pruning import (  # noqa: E402
+from pquant.core.keras.pruning_methods.activation_pruning import (
     ActivationPruning as KActivationPruning,
 )
-from pquant.core.keras.pruning_methods.autosparse import (  # noqa: E402
+from pquant.core.keras.pruning_methods.autosparse import (
     AutoSparse as KAutoSparse,
 )
-from pquant.core.keras.pruning_methods.cs import (  # noqa: E402
+from pquant.core.keras.pruning_methods.cs import (
     ContinuousSparsification as KCS,
 )
-from pquant.core.keras.pruning_methods.dst import DST as KDST  # noqa: E402
-from pquant.core.keras.pruning_methods.mdmm import MDMM as KMDMM  # noqa: E402
-from pquant.core.keras.pruning_methods.metric_functions import (  # noqa: E402
+from pquant.core.keras.pruning_methods.dst import DST as KDST
+from pquant.core.keras.pruning_methods.mdmm import MDMM as KMDMM
+from pquant.core.keras.pruning_methods.metric_functions import (
     StructuredSparsityMetric as KStructuredSparsityMetric,
 )
-from pquant.core.keras.pruning_methods.metric_functions import (  # noqa: E402
+from pquant.core.keras.pruning_methods.metric_functions import (
     UnstructuredSparsityMetric as KUnstructuredSparsityMetric,
 )
-from pquant.core.keras.pruning_methods.pdp import PDP as KPDP  # noqa: E402
-from pquant.core.keras.pruning_methods.wanda import Wanda as KWanda  # noqa: E402
-from pquant.core.torch.pruning_methods.activation_pruning import (  # noqa: E402
+from pquant.core.keras.pruning_methods.pdp import PDP as KPDP
+from pquant.core.keras.pruning_methods.wanda import Wanda as KWanda
+from pquant.core.torch.pruning_methods.activation_pruning import (
     ActivationPruning as TActivationPruning,
 )
-from pquant.core.torch.pruning_methods.autosparse import (  # noqa: E402
+from pquant.core.torch.pruning_methods.autosparse import (
     AutoSparse as TAutoSparse,
 )
-from pquant.core.torch.pruning_methods.cs import (  # noqa: E402
+from pquant.core.torch.pruning_methods.cs import (
     ContinuousSparsification as TCS,
 )
-from pquant.core.torch.pruning_methods.dst import DST as TDST  # noqa: E402
-from pquant.core.torch.pruning_methods.mdmm import MDMM as TMDMM  # noqa: E402
-from pquant.core.torch.pruning_methods.metric_functions import (  # noqa: E402
+from pquant.core.torch.pruning_methods.dst import DST as TDST
+from pquant.core.torch.pruning_methods.mdmm import MDMM as TMDMM
+from pquant.core.torch.pruning_methods.metric_functions import (
     StructuredSparsityMetric as TStructuredSparsityMetric,
 )
-from pquant.core.torch.pruning_methods.metric_functions import (  # noqa: E402
+from pquant.core.torch.pruning_methods.metric_functions import (
     UnstructuredSparsityMetric as TUnstructuredSparsityMetric,
 )
-from pquant.core.torch.pruning_methods.pdp import PDP as TPDP  # noqa: E402
-from pquant.core.torch.pruning_methods.wanda import Wanda as TWanda  # noqa: E402
+from pquant.core.torch.pruning_methods.pdp import PDP as TPDP
+from pquant.core.torch.pruning_methods.wanda import Wanda as TWanda
 
 ATOL = 1e-5
 RTOL = 1e-4

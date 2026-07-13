@@ -25,9 +25,9 @@ def cosine_sigmoid_decay(i, T):
 def get_threshold_size(config, weight_shape):
     if config.pruning_parameters.threshold_type == "layerwise":
         return (1, 1)
-    elif config.pruning_parameters.threshold_type == "channelwise":
+    if config.pruning_parameters.threshold_type == "channelwise":
         return (weight_shape[0], 1)
-    elif config.pruning_parameters.threshold_type == "weightwise":
+    if config.pruning_parameters.threshold_type == "weightwise":
         return (weight_shape[0], int(np.prod(weight_shape[1:])))
 
 

@@ -56,15 +56,13 @@ class Quantizer(nn.Module):
     def get_quantization_bits(self):
         if self.use_hgq:
             return self.quantizer.k, self.quantizer.i, self.quantizer.f
-        else:
-            return self.k, self.i, self.f
+        return self.k, self.i, self.f
 
     def get_total_bits(self, shape):
         if self.use_hgq:
             return self.quantizer.bits_(shape)
-        else:
-            b = self.i + self.f + self.k
-            return torch.ones(shape).to(b.device) * b
+        b = self.i + self.f + self.k
+        return torch.ones(shape).to(b.device) * b
 
     def set_quantization_bits(self, i, f):
         if self.use_hgq:
@@ -118,12 +116,11 @@ class Quantizer(nn.Module):
             _, i, f = self.get_quantization_bits()
             self.initialize_quantization_parameters(i, f)
             return x
-        else:
-            i, f = self.compute_dynamic_bits(x)
-            self.initialize_quantization_parameters(i, f)
-            self.i.data = i
-            self.f.data = f
-            _, i, f = self.get_quantization_bits()
+        i, f = self.compute_dynamic_bits(x)
+        self.initialize_quantization_parameters(i, f)
+        self.i.data = i
+        self.f.data = f
+        _, i, f = self.get_quantization_bits()
         x = self.quantizer(x, k=self.k, i=i, f=f, training=self.training)
         return x
 
@@ -176,5 +173,4 @@ def create_quantizer(k, i, f, overflow, round_mode, is_heterogeneous, is_data, g
             granularity=granularity,
             gamma=gamma,
         )
-    else:
-        return get_fixed_quantizer(round_mode=round_mode, overflow_mode=overflow)
+    return get_fixed_quantizer(round_mode=round_mode, overflow_mode=overflow)

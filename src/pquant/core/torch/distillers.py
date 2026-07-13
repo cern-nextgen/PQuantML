@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 import torch
 import torch.nn as nn
@@ -530,10 +530,10 @@ class ModelDistiller:
     ) -> torch.Tensor:
         if self.loss_fn == "kl_ce":
             return self.loss_kl_ce(student_logits, teacher_logits, labels)
-        elif self.loss_fn == "kl":
+        if self.loss_fn == "kl":
             return self.loss_kl(student_logits, teacher_logits)
-        else:  # mse
-            return self.loss_mse(student_logits, teacher_logits)
+        # mse
+        return self.loss_mse(student_logits, teacher_logits)
 
     def run_val_epoch(
         self,

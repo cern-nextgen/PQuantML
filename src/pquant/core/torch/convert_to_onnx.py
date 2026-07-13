@@ -41,8 +41,8 @@ from onnx import TensorProto
 
 os.environ["KERAS_BACKEND"] = "torch"  # must be set before any keras/pquant import
 
-from pquant.core.torch.activations import PQActivation  # noqa: E402
-from pquant.core.torch.layers import (  # noqa: E402
+from pquant.core.torch.activations import PQActivation
+from pquant.core.torch.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
     PQBatchNorm1d,
@@ -53,7 +53,7 @@ from pquant.core.torch.layers import (  # noqa: E402
     PQLayerNorm,
     PQMultiheadAttention,
 )
-from pquant.core.torch.quantizer import Quantizer  # noqa: E402
+from pquant.core.torch.quantizer import Quantizer
 
 # ---------------------------------------------------------------------------
 # QONNX Quant node
@@ -1850,8 +1850,8 @@ if __name__ == "__main__":
     sess = ort.InferenceSession(onnx_path)
     onnx_out = sess.run(None, {sess.get_inputs()[0].name: x.numpy()})[0]
 
-    print(f"\n{'':=<55}")  # noqa: T201
-    print(f"  max |torch - qonnx| : {np.abs(torch_out - qonnx_out).max():.6f}")  # noqa: T201
-    print(f"  max |torch - onnx|  : {np.abs(torch_out - onnx_out).max():.6f}")  # noqa: T201
-    print(f"  max |qonnx - onnx|  : {np.abs(qonnx_out - onnx_out).max():.6f}")  # noqa: T201
-    print(f"{'':=<55}")  # noqa: T201
+    print(f"\n{'':=<55}")
+    print(f"  max |torch - qonnx| : {np.abs(torch_out - qonnx_out).max():.6f}")
+    print(f"  max |torch - onnx|  : {np.abs(torch_out - onnx_out).max():.6f}")
+    print(f"  max |qonnx - onnx|  : {np.abs(qonnx_out - onnx_out).max():.6f}")
+    print(f"{'':=<55}")

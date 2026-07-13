@@ -292,4 +292,4 @@ def register() -> None:
         _plugin_loader._LOADED.add(("pquant", "keras"))
     except Exception:
         pass
-    return None
+    return

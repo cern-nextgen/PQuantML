@@ -4,13 +4,16 @@ import numpy as np
 import pytest
 import torch
 import torch.nn as nn
-from alkaid.codegen import RTLModel  # noqa: E402
+from alkaid.codegen import RTLModel
 from alkaid.converter import trace_model
-from alkaid.trace import trace  # noqa: E402
-from alkaid.trace import FVArray, HWConfig  # noqa: E402
+from alkaid.trace import (
+    FVArray,
+    HWConfig,
+    trace,
+)
 
 from pquant import pdp_config
-from pquant._alkaid_plugin import _alkaid_torch_plugin  # noqa: E402
+from pquant._alkaid_plugin import _alkaid_torch_plugin
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.layers import (
     PQAvgPool1d,
@@ -223,7 +226,7 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
             torch.tensor(rng.standard_normal((4, IN_FEATURES, ALL_LIN)), dtype=torch.float32, device=device),
         )
 
-    assert ALL_TORCH_LAYER_TYPES <= {type(m).__name__ for m in model.modules()}
+    assert {type(m).__name__ for m in model.modules()} >= ALL_TORCH_LAYER_TYPES
 
     with torch.no_grad():
         for layer in [m for m in model.modules() if getattr(m, "pruning_layer", None) is not None]:

@@ -15,18 +15,7 @@ from keras.layers import (
     ReLU,
     SeparableConv2D,
 )
-
-from pquant import (
-    ap_config,
-    autosparse_config,
-    cs_config,
-    dst_config,
-    mdmm_config,
-    pdp_config,
-    wanda_config,
-)
 from pquant.activations import PQActivation
-from pquant.core.hyperparameter_optimization import PQConfig
 from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
@@ -42,6 +31,17 @@ from pquant.layers import (
     post_pretrain_functions,
     pre_finetune_functions,
 )
+
+from pquant import (
+    ap_config,
+    autosparse_config,
+    cs_config,
+    dst_config,
+    mdmm_config,
+    pdp_config,
+    wanda_config,
+)
+from pquant.core.hyperparameter_optimization import PQConfig
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32
@@ -1561,10 +1561,7 @@ def test_set_activation_custom_bits_quantizer(config_pdp, conv2d_input):
         elif isinstance(m, PQActivation) and m.activation_name == "tanh":
             assert m.i_input == 0.0
             assert m.f_input == 3.0
-        elif isinstance(m, PQActivation) and m.activation_name == "relu":
-            assert m.i_input == 1.0
-            assert m.f_input == 3.0
-        elif isinstance(m, (PQAvgPool2d)):
+        elif (isinstance(m, PQActivation) and m.activation_name == "relu") or isinstance(m, (PQAvgPool2d)):
             assert m.i_input == 1.0
             assert m.f_input == 3.0
 

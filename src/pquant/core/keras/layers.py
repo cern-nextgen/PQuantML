@@ -1,5 +1,5 @@
 from math import prod
-from typing import Tuple, TypeVar
+from typing import TypeVar
 
 import keras
 from keras import constraints, initializers, ops, regularizers
@@ -39,10 +39,10 @@ class PQWeightBiasBase(keras.layers.Layer):
         layer_type,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -369,10 +369,10 @@ class PQDepthwiseConv2d(PQWeightBiasBase, keras.layers.DepthwiseConv2D):
         bias: bool = True,
         device=None,
         dtype=None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -485,11 +485,10 @@ class PQDepthwiseConv2d(PQWeightBiasBase, keras.layers.DepthwiseConv2D):
             if self.enable_quantization:
                 weight = self.weight_quantizer(weight)
             return weight
-        else:
-            weight = self._kernel
-            if self.enable_quantization:
-                weight = self.weight_quantizer(weight)
-            return self.prune(weight)
+        weight = self._kernel
+        if self.enable_quantization:
+            weight = self.weight_quantizer(weight)
+        return self.prune(weight)
 
     @kernel.setter
     def kernel(self, kernel):
@@ -530,13 +529,13 @@ class PQDepthwiseConv2d(PQWeightBiasBase, keras.layers.DepthwiseConv2D):
                 )
             )
         else:
-            reduce_axis_kernel = tuple(range(0, 3))
+            reduce_axis_kernel = tuple(range(3))
             if self.data_format == "channels_last":  # Is channels last
                 reduce_axis_input = reduce_axis_kernel
             else:
                 reduce_axis_input = (0,) + tuple(range(2, 4))
             bw_inp = ops.max(bw_inp, axis=reduce_axis_input)
-            reduce_axis_kernel = tuple(range(0, 2))
+            reduce_axis_kernel = tuple(range(2))
             bw_ker = ops.sum(bw_ker, axis=reduce_axis_kernel)
             ebops = ops.sum(bw_inp[:, None] * bw_ker)
         if self.use_bias:
@@ -602,10 +601,10 @@ class PQConv2d(PQWeightBiasBase):
         activity_regularizer=None,
         kernel_constraint=None,
         bias_constraint=None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -700,11 +699,10 @@ class PQConv2d(PQWeightBiasBase):
             if self.enable_quantization:
                 weight = self.weight_quantizer(weight)
             return weight
-        else:
-            weight = self._kernel
-            if self.enable_quantization:
-                weight = self.weight_quantizer(weight)
-            return self.prune(weight)
+        weight = self._kernel
+        if self.enable_quantization:
+            weight = self.weight_quantizer(weight)
+        return self.prune(weight)
 
     @property
     def bias(self):
@@ -741,13 +739,13 @@ class PQConv2d(PQWeightBiasBase):
                 )
             )
         else:
-            reduce_axis_kernel = tuple(range(0, 3))
+            reduce_axis_kernel = tuple(range(3))
             if self.do_transpose_data:  # Is channels last
                 reduce_axis_input = reduce_axis_kernel
             else:
                 reduce_axis_input = (0,) + tuple(range(2, 4))
             bw_inp = ops.max(bw_inp, axis=reduce_axis_input)
-            reduce_axis_kernel = tuple(range(0, 2))
+            reduce_axis_kernel = tuple(range(2))
             bw_ker = ops.sum(bw_ker, axis=reduce_axis_kernel)
 
             ebops = ops.sum(bw_inp[:, None] * bw_ker)
@@ -923,10 +921,10 @@ class PQConv1d(PQWeightBiasBase):
         kernel_size,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -1035,11 +1033,10 @@ class PQConv1d(PQWeightBiasBase):
             if self.enable_quantization:
                 weight = self.weight_quantizer(weight)
             return weight
-        else:
-            weight = self._kernel
-            if self.enable_quantization:
-                weight = self.weight_quantizer(weight)
-            return self.prune(weight)
+        weight = self._kernel
+        if self.enable_quantization:
+            weight = self.weight_quantizer(weight)
+        return self.prune(weight)
 
     @property
     def bias(self):
@@ -1076,13 +1073,13 @@ class PQConv1d(PQWeightBiasBase):
                 )
             )
         else:
-            reduce_axis_kernel = tuple(range(0, 2))
+            reduce_axis_kernel = tuple(range(2))
             if self.do_transpose_data:  # Is channels last
                 reduce_axis_input = reduce_axis_kernel
             else:
                 reduce_axis_input = (0,) + tuple(range(2, 3))
             bw_inp = ops.max(bw_inp, axis=reduce_axis_input)
-            reduce_axis_kernel = tuple(range(0, 1))
+            reduce_axis_kernel = tuple(range(1))
             bw_ker = ops.sum(bw_ker, axis=reduce_axis_kernel)
             ebops = ops.sum(bw_inp[:, None] * bw_ker)
         if self.use_bias:
@@ -1157,10 +1154,10 @@ class PQDense(PQWeightBiasBase):
         units,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -1248,11 +1245,10 @@ class PQDense(PQWeightBiasBase):
             if self.enable_quantization:
                 weight = self.weight_quantizer(weight)
             return weight
-        else:
-            weight = self._kernel
-            if self.enable_quantization:
-                weight = self.weight_quantizer(weight)
-            return self.prune(weight)
+        weight = self._kernel
+        if self.enable_quantization:
+            weight = self.weight_quantizer(weight)
+        return self.prune(weight)
 
     @property
     def bias(self):
@@ -1561,8 +1557,8 @@ class PQAvgPoolBase(keras.layers.Layer):
         config,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -1716,8 +1712,8 @@ class PQAvgPool1d(PQAvgPoolBase, keras.layers.AveragePooling1D):
         pool_size,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         strides=None,
@@ -1762,8 +1758,8 @@ class PQAvgPool2d(PQAvgPoolBase, keras.layers.AveragePooling2D):
         pool_size,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         strides=None,
@@ -1850,11 +1846,11 @@ class PQMultiheadAttention(keras.layers.Layer):
         quantize_input: bool = True,
         quantize_output: bool = False,
         approximate_softmax: bool = False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
-        attn_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
+        attn_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         param_quant_granularity=None,
@@ -2067,9 +2063,7 @@ class PQMultiheadAttention(keras.layers.Layer):
 
 def call_post_round_functions(model, rewind, rounds, r):
     last_round = r == rounds - 1
-    if rewind == "every-round":
-        rewind_weights_functions(model)
-    elif rewind == "post-training-stage" and last_round:
+    if rewind == "every-round" or (rewind == "post-training-stage" and last_round):
         rewind_weights_functions(model)
     elif not last_round:
         post_round_functions(model)
@@ -2818,10 +2812,9 @@ def get_enable_pruning(layer, config):
         if layer.name + "_pointwise" in config.pruning_parameters.disable_pruning_for_layers:
             enable_pruning_pointwise = False
         return enable_pruning_depthwise, enable_pruning_pointwise
-    else:
-        if layer.name in config.pruning_parameters.disable_pruning_for_layers:
-            enable_pruning = False
-        return enable_pruning
+    if layer.name in config.pruning_parameters.disable_pruning_for_layers:
+        enable_pruning = False
+    return enable_pruning
 
 
 def populate_config_with_all_layers(model, config):

@@ -16,13 +16,10 @@ from torch.nn import (
 
 os.environ["KERAS_BACKEND"] = "torch"
 
-import keras  # noqa: E402
-from keras import ops  # noqa: E402
-
-from pquant import post_training_prune  # noqa: E402
-from pquant.activations import PQActivation  # noqa: E402
-from pquant.core.hyperparameter_optimization import PQConfig  # noqa: E402
-from pquant.layers import (  # noqa: E402
+import keras
+from keras import ops
+from pquant.activations import PQActivation
+from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
     PQBatchNorm2d,
@@ -37,6 +34,9 @@ from pquant.layers import (  # noqa: E402
     post_pretrain_functions,
     pre_finetune_functions,
 )
+
+from pquant import post_training_prune
+from pquant.core.hyperparameter_optimization import PQConfig
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32

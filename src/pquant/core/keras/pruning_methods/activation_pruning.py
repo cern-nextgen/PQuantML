@@ -116,7 +116,7 @@ class ActivationPruning(keras.layers.Layer):
         if hasattr(self, "is_pretraining"):
             self.is_pretraining.assign(False)
 
-    def pre_epoch_function(self, epoch, total_epochs, **kwargs):  # noqa: ARG002
+    def pre_epoch_function(self, epoch, total_epochs, **kwargs):
         pass
 
     def post_round_function(self):

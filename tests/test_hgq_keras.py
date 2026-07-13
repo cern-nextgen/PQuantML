@@ -15,9 +15,6 @@ import keras
 import numpy as np
 import pytest
 from keras import ops
-
-from pquant import pdp_config
-from pquant.core.keras.quantizer import Quantizer
 from pquant.layers import (
     PQAvgPool1d,
     PQBatchNormalization,
@@ -26,6 +23,9 @@ from pquant.layers import (
     PQDense,
     PQMultiheadAttention,
 )
+
+from pquant import pdp_config
+from pquant.core.keras.quantizer import Quantizer
 
 BATCH_SIZE = 4
 IN_FEATURES = 16

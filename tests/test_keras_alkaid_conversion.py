@@ -3,14 +3,10 @@
 import keras
 import numpy as np
 import pytest
-from alkaid.codegen import RTLModel  # noqa: E402
+from alkaid.codegen import RTLModel
 from alkaid.converter import trace_model
-from alkaid.trace import trace  # noqa: E402
-
-from pquant import pdp_config
-from pquant._alkaid_plugin import _alkaid_keras_plugin  # noqa: E402
+from alkaid.trace import trace
 from pquant.activations import PQActivation
-from pquant.core.keras.quantizer import Quantizer
 from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
@@ -24,6 +20,10 @@ from pquant.layers import (
     PQSoftmax,
     apply_final_compression,
 )
+
+from pquant import pdp_config
+from pquant._alkaid_plugin import _alkaid_keras_plugin
+from pquant.core.keras.quantizer import Quantizer
 
 _alkaid_keras_plugin.register()
 
@@ -219,7 +219,7 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
         ]
     )
 
-    assert ALL_KERAS_LAYER_TYPES <= {type(layer).__name__ for layer in model.layers}
+    assert {type(layer).__name__ for layer in model.layers} >= ALL_KERAS_LAYER_TYPES
 
     for layer in _all_prunable_layers(model):
         layer._kernel.assign(rng.standard_normal(layer._kernel.shape).astype("float32"))

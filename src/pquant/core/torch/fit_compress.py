@@ -58,8 +58,8 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
                 model - current model with quantization enabled
 
         """
-        from pquant.activations import PQActivation  # noqa: F811
-        from pquant.layers import PQAvgPoolBase, PQWeightBiasBase  # noqa: F811
+        from pquant.activations import PQActivation
+        from pquant.layers import PQAvgPoolBase, PQWeightBiasBase
 
         for m in model.modules():
             if isinstance(m, PQWeightBiasBase):
@@ -93,8 +93,8 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
 
         """
 
-        from pquant.core.torch.activations import PQActivation  # noqa: F401, F811
-        from pquant.core.torch.layers import (  # noqa: F401, F811
+        from pquant.core.torch.activations import PQActivation  # noqa: F401
+        from pquant.core.torch.layers import (  # noqa: F401
             PQAvgPoolBase,
             PQBatchNorm2d,
             PQConv2d,
@@ -119,8 +119,8 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
         model - current model
 
         """
-        from pquant.core.torch.activations import PQActivation  # noqa: F811
-        from pquant.core.torch.layers import (  # noqa: F811
+        from pquant.core.torch.activations import PQActivation
+        from pquant.core.torch.layers import (
             PQAvgPoolBase,
             PQConv1d,
             PQConv2d,
@@ -444,7 +444,7 @@ class FITcompress:
                 this is not done in the original code.
         """
         i = 0
-        from pquant.layers import PQConv2d, PQDense  # noqa: F811
+        from pquant.layers import PQConv2d, PQDense
 
         for _, module in model.named_modules():
             if isinstance(module, (PQDense, PQConv2d)):
@@ -714,8 +714,8 @@ class FITcompress:
                         pool_int_bits: Integer bits for the (single) pooling layer (res20).
                         pool_frac_bits: Fractional bits for the (single) pooling layer (res20).
         """
-        from pquant.core.torch.activations import PQActivation  # noqa: F811
-        from pquant.core.torch.layers import (  # noqa: F811
+        from pquant.core.torch.activations import PQActivation
+        from pquant.core.torch.layers import (
             PQAvgPoolBase,
             PQWeightBiasBase,
         )
@@ -724,9 +724,7 @@ class FITcompress:
         # Store input data, as we also need to quantize input (which is currently done in resnet.py of pquant-dev)
         data_input = []
         for m in self.model.modules():
-            if isinstance(m, (PQAvgPoolBase, PQWeightBiasBase)):
-                m.post_fitcompress_calibration = True
-            elif m.__class__ == PQActivation and m.activation_name == "relu":
+            if isinstance(m, (PQAvgPoolBase, PQWeightBiasBase)) or (m.__class__ == PQActivation and m.activation_name == "relu"):
                 m.post_fitcompress_calibration = True
 
         # Trigger forward pass through model
@@ -742,13 +740,7 @@ class FITcompress:
                 counter += 1
 
         for m in self.model.modules():
-            if isinstance(m, PQAvgPoolBase):
-                m.post_fitcompress_calibration = False
-                self.set_activation_bits(m)
-            elif m.__class__ == PQActivation and m.activation_name == "relu":
-                m.post_fitcompress_calibration = False
-                self.set_activation_bits(m)
-            elif isinstance(m, PQWeightBiasBase):
+            if isinstance(m, PQAvgPoolBase) or (m.__class__ == PQActivation and m.activation_name == "relu") or isinstance(m, PQWeightBiasBase):
                 m.post_fitcompress_calibration = False
                 self.set_activation_bits(m)
 
@@ -1201,7 +1193,7 @@ class FIT:
                 matrices_params_sizes_layerwise (list): A list of sizes of the weight matrices for each layer of interest.
                 layer_names (list): A list of the names of the layers of interest.
         """
-        from pquant.layers import PQConv2d, PQDense  # noqa: F811
+        from pquant.layers import PQConv2d, PQDense
 
         matrices_params_layerwise = []
         layer_names = []
@@ -1237,7 +1229,7 @@ class FIT:
         Args :
                 model (torch.nn.Module): The model to hook the layers of.
         """
-        from pquant.layers import PQConv2d, PQDense  # noqa: F811
+        from pquant.layers import PQConv2d, PQDense
 
         def hook_inp(module, inp, outp):
             """
@@ -1665,17 +1657,16 @@ class FIT:
 
             return curr_FIT
 
-        else:
-            FIT_layerwise = []
+        FIT_layerwise = []
 
-            # Taken from generate_FIT_pruning_importance()
-            for theta_after, layer_FeM in zip(params_after, FeM):
-                curr_FIT_layer = layer_FeM * (theta_after.detach().cpu() ** 2)
-                FIT_layerwise.append(curr_FIT_layer)
+        # Taken from generate_FIT_pruning_importance()
+        for theta_after, layer_FeM in zip(params_after, FeM):
+            curr_FIT_layer = layer_FeM * (theta_after.detach().cpu() ** 2)
+            FIT_layerwise.append(curr_FIT_layer)
 
-            # Taken from renorm_heuristic()
-            final_FIT = torch.sum(torch.cat([FIT_score.view(-1) for FIT_score in FIT_layerwise])).detach().cpu().numpy()
+        # Taken from renorm_heuristic()
+        final_FIT = torch.sum(torch.cat([FIT_score.view(-1) for FIT_score in FIT_layerwise])).detach().cpu().numpy()
 
-            curr_FIT += final_FIT
+        curr_FIT += final_FIT
 
-            return curr_FIT, FIT_layerwise
+        return curr_FIT, FIT_layerwise
