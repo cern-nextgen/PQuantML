@@ -1,7 +1,7 @@
 [build-system]
 build-backend = "setuptools.build_meta"
 
-requires = [ "setuptools>=46.1", "setuptools-scm[toml]>=5" ]
+requires = [ "setuptools>=64", "setuptools-scm[toml]>=5", "wheel" ]
 
 [project]
 name = "pquant-ml"
@@ -24,19 +24,110 @@ classifiers = [
 ]
 dynamic = [ "version" ]
 dependencies = [ "hgq2", "keras>=3", "optuna", "pydantic>=2", "pyyaml>=6.0.1", "quantizers>=1.1" ]
-optional-dependencies.all = [ "pytest>=8.4", "tensorflow>=2.17,<=2.20", "torch>=2.1" ]
-optional-dependencies.tensorflow = [ "tensorflow>=2.17,<=2.20" ]
-optional-dependencies.test = [ "pytest>=8.4" ]
-optional-dependencies.torch = [ "torch>=2.1" ]
-urls.repository = "https://github.com/cern-nextgen/PQuantML"
 
-entry-points."alkaid_keras".pquant = "pquant._alkaid_plugin._alkaid_keras_plugin:register"
-entry-points."alkaid_torch".pquant = "pquant._alkaid_plugin._alkaid_torch_plugin:register"
+[project.urls]
+repository = "https://github.com/cern-nextgen/PQuantML"
+
+[project.optional-dependencies]
+all = [ "pytest-cov", "pytest>=8.4", "tensorflow>=2.17,<=2.20", "torch>=2.1" ]
+docs = [ "furo", "myst-parser", "sphinx", "sphinx-autodoc-typehints", "sphinx_rtd_theme" ]
+dev = [
+  "bandit[toml]",
+  "furo",
+  "ipykernel",
+  "mypy",
+  "myst-parser",
+  "nbmake",
+  "pre-commit",
+  "pytest-cov",
+  "pytest>=8.4",
+  "ruff",
+  "sphinx",
+  "sphinx-autodoc-typehints",
+  "sphinx_rtd_theme",
+]
+tensorflow = [ "tensorflow>=2.17,<=2.20" ]
+test = [ "pytest-cov", "pytest>=8.4" ]
+torch = [ "torch>=2.1" ]
+
+[project.entry-points."alkaid_keras"]
+pquant = "pquant._alkaid_plugin._alkaid_keras_plugin:register"
+
+[project.entry-points."alkaid_torch"]
+pquant = "pquant._alkaid_plugin._alkaid_torch_plugin:register"
 
 [tool.setuptools]
-packages = [ "pquant" ]
 include-package-data = true
 package-dir = { "" = "src" }
 
+[tool.setuptools.packages.find]
+where = [ "src" ]
+
+[tool.setuptools.package-data]
+pquant = [ "configs/*.yaml", "configs/finetuning.yaml" ]
+
 [tool.setuptools_scm]
 write_to = "src/pquant/_version.py"
+
+[tool.ruff]
+line-length = 125
+src = [ "src", "tests" ]
+target-version = "py310"
+
+[tool.ruff.lint]
+ignore = [ "D100", "D104", "E501", "N803", "N806" ]
+select = [
+  "A",
+  "ARG",
+  "B",
+  "BLE",
+  "C4",
+  "E",
+  "ERA",
+  "F",
+  "I",
+  "ICN",
+  "N",
+  "NPY",
+  "PERF",
+  "PIE",
+  "PT",
+  "PTH",
+  "Q",
+  "RET",
+  "RSE",
+  "RUF",
+  "SIM",
+  "TCH",
+  "UP",
+  "W",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = [ "F401" ]
+"docs/source/conf.py" = [ "A001" ]
+"tests/**" = [ "ARG", "D" ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+check_untyped_defs = true
+files = [ "src", "tests" ]
+ignore_missing_imports = true
+strict_optional = false
+
+[tool.bandit]
+exclude_dirs = [ "tests", "build", "docs" ]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = [ "tests" ]
+
+[tool.coverage.run]
+branch = true
+source = [ "src" ]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true
