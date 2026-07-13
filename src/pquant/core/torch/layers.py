@@ -1625,8 +1625,7 @@ class PQMultiheadAttention(nn.Module):
 
     def extra_repr(self) -> str:
         return (
-            f"embed_dim={self.embed_dim}, num_heads={self.num_heads}, "
-            f"dropout={self.dropout}, batch_first={self.batch_first}"
+            f"embed_dim={self.embed_dim}, num_heads={self.num_heads}, dropout={self.dropout}, batch_first={self.batch_first}"
         )
 
 

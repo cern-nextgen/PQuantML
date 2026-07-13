@@ -114,9 +114,7 @@ def _quant_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, o
 # ---------------------------------------------------------------------------
 
 
-def _qdq_node(
-    name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True
-):  # noqa: ARG001
+def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True):  # noqa: ARG001
     """Build QuantizeLinear+DequantizeLinear nodes, optionally preceded by a Clip.
 
     Returns ([nodes], output_name).  Set include_clip=False to skip the Clip node

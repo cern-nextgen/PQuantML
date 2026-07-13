@@ -4,17 +4,17 @@ import torch
 class UnstructuredSparsityMetric:
     """L0-L1 based metric — torch port of the keras version."""
 
-    def __init__(self, l0_mode='coarse', scale_mode="mean", epsilon=1e-3, target_sparsity=0.8, alpha=100.0):
-        assert l0_mode in ['coarse', 'smooth'], "Mode must be 'coarse' or 'smooth'"
-        assert scale_mode in ['sum', 'mean'], "Scale mode must be 'sum' or 'mean'"
+    def __init__(self, l0_mode="coarse", scale_mode="mean", epsilon=1e-3, target_sparsity=0.8, alpha=100.0):
+        assert l0_mode in ["coarse", "smooth"], "Mode must be 'coarse' or 'smooth'"
+        assert scale_mode in ["sum", "mean"], "Scale mode must be 'sum' or 'mean'"
         assert 0 <= target_sparsity <= 1, "target_sparsity must be between 0 and 1"
         self.l0_mode = l0_mode
         self.scale_mode = scale_mode
         self.target_sparsity = float(target_sparsity)
         self.epsilon = float(epsilon)
         self.alpha = float(alpha)
-        self.l0_fn = self._coarse_l0 if l0_mode == 'coarse' else self._smooth_l0
-        self._scaling = self._mean_scaling if scale_mode == 'mean' else self._sum_scaling
+        self.l0_fn = self._coarse_l0 if l0_mode == "coarse" else self._smooth_l0
+        self._scaling = self._mean_scaling if scale_mode == "mean" else self._sum_scaling
 
     def _sum_scaling(self, fn_value, num):
         return fn_value

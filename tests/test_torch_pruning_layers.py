@@ -237,7 +237,7 @@ def test_pdp_matches_keras(layer_type, shape, structured):
     t_mask_np = _to_numpy(t.mask)
     actual_sparsity = float((t_mask_np < 0.5).sum()) / t_mask_np.size
     assert actual_sparsity == pytest.approx(target_sparsity, abs=1e-6), (
-        f"PDP {layer_type} (structured={structured}) mask sparsity " f"{actual_sparsity} != target {target_sparsity}"
+        f"PDP {layer_type} (structured={structured}) mask sparsity {actual_sparsity} != target {target_sparsity}"
     )
 
 
@@ -421,9 +421,9 @@ def test_wanda_matches_keras(layer_type, shape, N, M):
     target_sparsity = (N / M) if (N is not None and M is not None) else cfg["pruning_parameters"]["sparsity"]
     mask_np = _to_numpy(t.mask)
     pruned_fraction = float((mask_np == 0).sum()) / mask_np.size
-    assert pruned_fraction == pytest.approx(
-        target_sparsity
-    ), f"Wanda {layer_type} (N={N}, M={M}) pruned fraction {pruned_fraction} != target {target_sparsity}"
+    assert pruned_fraction == pytest.approx(target_sparsity), (
+        f"Wanda {layer_type} (N={N}, M={M}) pruned fraction {pruned_fraction} != target {target_sparsity}"
+    )
 
     k_out = k(_keras_tensor(w_np))
     t_out = t(_torch_tensor(w_np))

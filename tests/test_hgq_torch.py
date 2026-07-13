@@ -89,7 +89,7 @@ def test_forward_matches_keras(overflow, round_mode, is_data):
 
     assert out_torch.shape == out_keras.shape, f"shape mismatch: {out_torch.shape} vs {out_keras.shape}"
     assert torch.allclose(out_torch, out_keras, rtol=RTOL, atol=ATOL), (
-        f"[{overflow}/{round_mode}/is_data={is_data}] " f"max diff = {(out_torch - out_keras).abs().max().item():.6g}"
+        f"[{overflow}/{round_mode}/is_data={is_data}] max diff = {(out_torch - out_keras).abs().max().item():.6g}"
     )
 
 
@@ -103,7 +103,7 @@ def test_forward_matches_keras_training_sat():
     out_keras = _as_torch(keras_q(x, training=True)).detach()
 
     assert torch.allclose(out_torch, out_keras, rtol=RTOL, atol=ATOL), (
-        f"training forward diverged, max diff = " f"{(out_torch - out_keras).abs().max().item():.6g}"
+        f"training forward diverged, max diff = {(out_torch - out_keras).abs().max().item():.6g}"
     )
 
 
@@ -139,7 +139,7 @@ def test_backward_f_gradient_sat():
     assert grad_f_torch.shape == grad_f_keras.shape, f"grad f shape mismatch: {grad_f_torch.shape} vs {grad_f_keras.shape}"
     # Gradient direction/magnitude should match up to STE discretisation noise.
     assert torch.allclose(grad_f_torch, grad_f_keras, rtol=1e-3, atol=1e-5), (
-        f"grad f mismatch, max diff = " f"{(grad_f_torch - grad_f_keras).abs().max().item():.6g}"
+        f"grad f mismatch, max diff = {(grad_f_torch - grad_f_keras).abs().max().item():.6g}"
     )
 
 
@@ -154,7 +154,7 @@ def test_backward_input_gradient_ste():
 
     assert x.grad is not None
     assert torch.allclose(x.grad, torch.ones_like(x), atol=1e-5), (
-        f"STE grad should be ~1 inside sat range, got max deviation " f"{(x.grad - 1).abs().max().item():.6g}"
+        f"STE grad should be ~1 inside sat range, got max deviation {(x.grad - 1).abs().max().item():.6g}"
     )
 
 

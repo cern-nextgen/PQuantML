@@ -56,7 +56,7 @@ class MetricFunction(BaseModel):
     function_name: Callable
     direction: str
 
-    @field_validator('direction')
+    @field_validator("direction")
     def validate_direction(cls, direction):
         if direction not in constants.FINETUNING_DIRECTION:
             raise ValueError("Direction must be 'maximize' or 'minimize'")
@@ -84,10 +84,10 @@ class PQConfig(BaseModel):
 
     @classmethod
     def load_from_file(cls, path_to_config_file):
-        if path_to_config_file.endswith(('.yaml', '.yml')):
+        if path_to_config_file.endswith((".yaml", ".yml")):
             with open(path_to_config_file) as f:
                 config_data = yaml.safe_load(f)
-        elif path_to_config_file.endswith('.json'):
+        elif path_to_config_file.endswith(".json"):
             with open(path_to_config_file) as f:
                 config_data = json.load(f)
         else:
@@ -293,7 +293,7 @@ class TuningTask:
 
     def objective(self, trial, model, train_func, valid_func, **kwargs):
         from pquant import add_compression_layers, train_model
-        
+
         config_copy = copy.deepcopy(self.config)
         applied_parameters = {}
         for param_name, (optuna_func, func_args, func_kwargs) in self.hyperparameters.items():
@@ -315,15 +315,15 @@ class TuningTask:
             if not applied:
                 logging.error(f"'{param_name}' not found in config: value not applied.")
 
-        trainloader = kwargs['trainloader']
+        trainloader = kwargs["trainloader"]
         raw_input_batch = next(iter(trainloader))
-        
+
         sample_input = raw_input_batch[0]
         model_copy = self.adapter.clone_model(model)
         model_copy = self.adapter.move_to_device(model_copy)
         sample_output = self.adapter.forward(model_copy, sample_input)
         input_shape = sample_input.shape
-        
+
         compressed_model = add_compression_layers(model_copy, config_copy, input_shape)
         optimizer_func = self.get_optimizer_function()
         optimizer = optimizer_func(config_copy, compressed_model)

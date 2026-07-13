@@ -17,7 +17,7 @@ class Quantizer(nn.Module):
         round_mode,
         is_heterogeneous,
         is_data=False,
-        granularity='per_tensor',
+        granularity="per_tensor",
         hgq_gamma=0,
         place="datalane",
         dynamic_data=True,
@@ -50,7 +50,7 @@ class Quantizer(nn.Module):
         self.is_pretraining = True
         self.hgq_gamma = hgq_gamma
         self.final_compression_done = nn.Parameter(torch.tensor(False), requires_grad=False)
-        if self.granularity == 'per_tensor':
+        if self.granularity == "per_tensor":
             self.initialize_quantization_parameters(self.i_init, self.f_init)
 
     def get_quantization_bits(self):

@@ -20,20 +20,20 @@ class pAdam(torch.optim.AdamW):
         # Store the old params
         old_params = []
         for group in self.param_groups:
-            old_params.append({param: param.data.clone() for param in group['params'] if param.grad is not None})
+            old_params.append({param: param.data.clone() for param in group["params"] if param.grad is not None})
         # Perform the standard AdamW step
         loss = super().step(closure)
         # Perform the pWD step
         for group, old_group in zip(self.param_groups, old_params):
-            lambda_p_group = group.get('lambda_p', self.lambda_p)  # support prams groups
+            lambda_p_group = group.get("lambda_p", self.lambda_p)  # support prams groups
             if lambda_p_group > 0:  # Apply regularization only for lambda_p > 0
-                for param in group['params']:
+                for param in group["params"]:
                     if param.grad is None:
                         continue
                     # Use old parameters in the decay factor
                     param_old = old_group[param]
                     X = param_old.abs() ** (2 - self.p_norm)
-                    update_term = X / (X + self.p_norm * group['lr'] * lambda_p_group)
+                    update_term = X / (X + self.p_norm * group["lr"] * lambda_p_group)
                     # pWD step
                     param.data.mul_(update_term)
         return loss
@@ -50,20 +50,20 @@ class pSGD(torch.optim.SGD):
         # Store the old params
         old_params = []
         for group in self.param_groups:
-            old_params.append({param: param.data.clone() for param in group['params'] if param.grad is not None})
+            old_params.append({param: param.data.clone() for param in group["params"] if param.grad is not None})
         # Perform the standard SGD step
         loss = super().step(closure)
         # Perform the pWD step
         for group, old_group in zip(self.param_groups, old_params):
-            lambda_p_group = group.get('lambda_p', self.lambda_p)  # support prams groups
+            lambda_p_group = group.get("lambda_p", self.lambda_p)  # support prams groups
             if lambda_p_group > 0:  # Apply regularization only for lambda_p > 0
-                for param in group['params']:
+                for param in group["params"]:
                     if param.grad is None:
                         continue
                     # Use old parameters in the decay factor
                     param_old = old_group[param]
                     X = param_old.abs() ** (2 - self.p_norm)
-                    update_term = X / (X + self.p_norm * group['lr'] * lambda_p_group)
+                    update_term = X / (X + self.p_norm * group["lr"] * lambda_p_group)
                     # pWD step
                     param.data.mul_(update_term)
         return loss

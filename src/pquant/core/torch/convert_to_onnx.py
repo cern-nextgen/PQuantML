@@ -114,9 +114,7 @@ def _quant_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, o
 # ---------------------------------------------------------------------------
 
 
-def _qdq_node(
-    name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True
-):  # noqa: ARG001
+def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True):  # noqa: ARG001
     """Build QuantizeLinear+DequantizeLinear nodes, optionally preceded by a Clip.
 
     Returns ([nodes], output_name). Set include_clip=False to skip the Clip node
@@ -1388,7 +1386,7 @@ def export_qdq_layernorm(
                 f"(max abs round error = {np.max(np.abs(scaled - rounded)):.6g})"
             )
         if rounded.min() < INT16_MIN or rounded.max() > INT16_MAX:
-            raise ValueError(f"{name} overflows int16 at Q{frac_bits} " f"(range [{rounded.min()}, {rounded.max()}])")
+            raise ValueError(f"{name} overflows int16 at Q{frac_bits} (range [{rounded.min()}, {rounded.max()}])")
 
     _check_q_int16(gamma, GAMMA_F, "gamma")
     _check_q_int16(beta, BETA_F, "beta")
@@ -1638,7 +1636,7 @@ def convert_to_onnx_fx(
                 container = node_to_name[node.args[0]]
                 if not isinstance(container, tuple):
                     raise TypeError(
-                        f"operator.getitem on non-tuple node {node.args[0].name!r} " f"is not supported in FX ONNX export"
+                        f"operator.getitem on non-tuple node {node.args[0].name!r} is not supported in FX ONNX export"
                     )
                 node_to_name[node] = container[node.args[1]]
                 continue
