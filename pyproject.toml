@@ -46,7 +46,7 @@ dev = [
   "sphinx-autodoc-typehints",
   "sphinx_rtd_theme",
 ]
-onnx = [ "onnx", "onnxruntime" ] 
+onnx = [ "onnx", "onnxruntime" ]
 tensorflow = [ "tensorflow>=2.17,<=2.20" ]
 test = [ "pytest-cov", "pytest>=8.4" ]
 torch = [ "torch>=2.1" ]
@@ -107,7 +107,25 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = [ "F401" ]
 "docs/source/conf.py" = [ "A001" ]
-"tests/**" = [ "ARG", "D" ]
+"examples/**/*.ipynb" = [ "ARG", "B018", "E402", "ERA001", "F821", "N812", "NPY002", "PTH103", "PTH110", "PTH123" ]
+"src/pquant/**" = [
+  "A001",
+  "A002",
+  "ARG001",
+  "ARG002",
+  "ARG005",
+  "BLE001",
+  "ERA001",
+  "N801",
+  "N802",
+  "N812",
+  "NPY002",
+  "PERF401",
+  "RUF002",
+  "SIM102",
+  "SIM108",
+]
+"tests/**" = [ "ARG", "D", "ERA001", "N814", "NPY002", "PT011", "RUF059" ]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
