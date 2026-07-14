@@ -29,7 +29,6 @@ dependencies = [ "hgq2", "keras>=3", "optuna", "pydantic>=2", "pyyaml>=6.0.1", "
 repository = "https://github.com/cern-nextgen/PQuantML"
 
 [project.optional-dependencies]
-all = [ "pytest-cov", "pytest>=8.4", "tensorflow>=2.17,<=2.20", "torch>=2.1" ]
 docs = [ "furo", "myst-parser", "sphinx", "sphinx-autodoc-typehints", "sphinx_rtd_theme" ]
 dev = [
   "bandit[toml]",
