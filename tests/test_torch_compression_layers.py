@@ -482,8 +482,7 @@ class TestModelWithAvgPool(nn.Module):
         x = self.submodule(x)
         if self.activation is not None:
             x = self.activation(x)
-        x = self.avg(x)
-        return x
+        return self.avg(x)
 
 
 def test_hgq_activation_built(config_pdp, conv2d_input):
@@ -697,7 +696,7 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
             assert torch.all(i_input == 0.0)
             assert torch.all(f_input == 3.0)
         elif isinstance(m, PQActivation) and m.activation_name == "relu":
-            k_input, i_input, f_input = m.get_input_quantization_bits()
+            _k_input, i_input, f_input = m.get_input_quantization_bits()
 
             assert torch.all(i_input == 1.0)
             assert torch.all(f_input == 4.0)
@@ -829,7 +828,7 @@ def test_ebops_bn(config_pdp, conv2d_input):
     layer = Conv2d(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, bias=False)
     layer2 = BatchNorm2d(OUT_FEATURES)
     model = TestModel2(layer, layer2, None, "relu")
-    shape = [1] + list(conv2d_input.shape[1:])
+    shape = [1, *list(conv2d_input.shape[1:])]
     model = add_compression_layers(model, config_pdp, shape)
     post_pretrain_functions(model, config_pdp)
     model.submodule2.hgq_loss()
@@ -1760,12 +1759,11 @@ class ModelWithAllLayers(nn.Module):
         x = self.relu(self.bn(self.conv(x)))
         x = self.avgpool2d(x)
         x = self.tanh(x)
-        x = torch.reshape(x, list(x.shape[:-2]) + [x.shape[-2] * x.shape[-1]])
+        x = torch.reshape(x, [*list(x.shape[:-2]), x.shape[-2] * x.shape[-1]])
         x = self.conv1d(x)
         x = self.avgpool1d(x)
         x = self.flatten(x)
-        x = self.dense(x)
-        return x
+        return self.dense(x)
 
 
 def test_hgq_loss_calc_no_qoutput(config_pdp, conv2d_input):

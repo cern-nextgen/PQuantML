@@ -74,7 +74,7 @@ def _random_prune(layer, fraction, rng):
     """Zero exactly ``fraction`` of the layer's weights via its pruning mask."""
     mask = layer.pruning_layer.mask
     numel = int(np.prod(tuple(mask.shape)))
-    n_zero = int(round(fraction * numel))
+    n_zero = round(fraction * numel)
     flat = np.ones(numel, dtype="float32")
     flat[rng.permutation(numel)[:n_zero]] = 0.0
     mask.copy_(torch.tensor(flat.reshape(tuple(mask.shape)), dtype=mask.dtype, device=mask.device))
@@ -92,10 +92,7 @@ def _rtl_predict(comb, path, data):
     rtl_model = RTLModel(comb, str(path), "model", flavor="verilog", latency_cutoff=5, clock_period=5.0, print_latency=False)
     rtl_model.write()
     rtl_model.compile()
-    if isinstance(data, list):
-        data = [a.astype(np.float64) for a in data]
-    else:
-        data = data.astype(np.float64)
+    data = [a.astype(np.float64) for a in data] if isinstance(data, list) else data.astype(np.float64)
     return rtl_model.predict(data)
 
 
@@ -317,7 +314,7 @@ def test_alkaid_single_layer(case_id, tmp_path):
 
     model.train()
     with torch.no_grad():
-        model(torch.tensor(rng.standard_normal((4,) + shape[1:]), dtype=torch.float32))
+        model(torch.tensor(rng.standard_normal((4, *shape[1:])), dtype=torch.float32))
     apply_final_compression(model)
     model.eval()
 
@@ -325,7 +322,7 @@ def test_alkaid_single_layer(case_id, tmp_path):
     comb = trace(inp_fv, out_fv, optimize=True)
 
     n_samples = 16
-    x = rng.integers(0, 16, size=(n_samples,) + shape[1:]).astype("float32") / 16.0
+    x = rng.integers(0, 16, size=(n_samples, *shape[1:])).astype("float32") / 16.0
     with torch.no_grad():
         reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
     emulated = _rtl_predict(comb, tmp_path, x)

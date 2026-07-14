@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(autouse=True)
 def set_image_data_format():
     if "DATA_FORMAT" in os.environ:
         keras.backend.set_image_data_format(os.environ["DATA_FORMAT"])

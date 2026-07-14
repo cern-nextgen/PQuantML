@@ -226,7 +226,7 @@ def config_cs():
 np.random.seed(42)
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(autouse=True)
 def conv2d_input():
     if keras.backend.image_data_format() == "channels_first":
         inp = ops.convert_to_tensor(np.random.rand(BATCH_SIZE, IN_FEATURES, 32, 32))
@@ -235,7 +235,7 @@ def conv2d_input():
     return inp
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(autouse=True)
 def conv1d_input():
     if keras.backend.image_data_format() == "channels_first":
         inp = ops.convert_to_tensor(np.random.rand(BATCH_SIZE, IN_FEATURES, 32))
@@ -244,7 +244,7 @@ def conv1d_input():
     return inp
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(autouse=True)
 def dense_input():
     return ops.convert_to_tensor(np.random.rand(BATCH_SIZE, IN_FEATURES))
 
@@ -1398,7 +1398,7 @@ def test_hgq_weight_shape(config_pdp, dense_input):
 
     model = add_compression_layers(model, config_pdp, dense_input.shape)
     assert model.layers[1].weight_quantizer.quantizer.quantizer._i.shape == model.layers[1].kernel.shape
-    layer_2_input_shape = [1] + list(model.layers[2].input.shape[1:])
+    layer_2_input_shape = [1, *list(model.layers[2].input.shape[1:])]
     assert model.layers[2].input_quantizer.quantizer.quantizer._i.shape == layer_2_input_shape
 
 
@@ -1497,7 +1497,7 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
             assert ops.all(i_input == 0.0)
             assert ops.all(f_input == 3.0)
         elif isinstance(m, PQActivation) and m.activation_name == "relu":
-            k_input, i_input, f_input = m.get_input_quantization_bits()
+            _k_input, i_input, f_input = m.get_input_quantization_bits()
             assert ops.all(i_input == 1.0)
             assert ops.all(f_input == 3.0)
         elif isinstance(m, (PQAvgPool2d)):
@@ -2007,7 +2007,7 @@ def test_model_serialization(tmp_path, config_fn):
         loaded_pq = [layer for layer in reloaded.layers if isinstance(layer, pq_types)]
         assert len(loaded_pq) == len(orig_pq)
 
-        for orig_l, loaded_l in zip(orig_pq, loaded_pq):
+        for orig_l, loaded_l in zip(orig_pq, loaded_pq, strict=False):
             for attr in ("final_compression_done", "is_pretraining", "is_finetuning"):
                 np.testing.assert_equal(
                     getattr(loaded_l, attr),
@@ -2016,7 +2016,7 @@ def test_model_serialization(tmp_path, config_fn):
                 )
 
         assert len(m.weights) == len(reloaded.weights)
-        for orig_w, loaded_w in zip(m.weights, reloaded.weights):
+        for orig_w, loaded_w in zip(m.weights, reloaded.weights, strict=False):
             np.testing.assert_array_equal(
                 np.array(orig_w),
                 np.array(loaded_w),
@@ -2081,7 +2081,7 @@ def test_checkpoint_save_load(tmp_path, config_fn):
 
     model.load_weights(path)
 
-    for orig, w in zip(original_weights, model.weights):
+    for orig, w in zip(original_weights, model.weights, strict=False):
         np.testing.assert_array_equal(orig, np.array(w), err_msg=f"Checkpoint weight mismatch: {w.name}")
 
 

@@ -402,8 +402,7 @@ def _build_dense_matmul_skip_model(config, dense_qout):
         def forward(self, x):
             y = self.d(x)
             y = torch.matmul(y, self.wq(self.w))  # matmul with constant matrix (assumed quantized)
-            y = y + x  # skip connection from the (unquantized) model input
-            return y
+            return y + x  # skip connection from the (unquantized) model input
 
     return DenseMatmulSkip()
 

@@ -58,7 +58,7 @@ def _as_torch(x):
 
 
 @pytest.mark.parametrize(
-    "overflow,round_mode,is_data",
+    ("overflow", "round_mode", "is_data"),
     [
         ("SAT", "RND", False),
         ("SAT", "RND_CONV", False),
@@ -257,7 +257,7 @@ def test_data_granularity_shape(granularity, shape):
         if granularity == "per_tensor":
             assert _is_single_value(bw_shape), f"expected single value, got {bw_shape}"
         else:  # per_weight: batch axis shared, rest per-element
-            assert bw_shape == (1,) + shape[1:], f"expected batch-collapsed, got {bw_shape}"
+            assert bw_shape == (1, *shape[1:]), f"expected batch-collapsed, got {bw_shape}"
 
 
 @pytest.mark.parametrize("is_data", [False, True])
@@ -473,7 +473,7 @@ def _find_f_param(keras_q):
             continue
         # Keras Variables expose a torch `.value` parameter under the torch backend
         val = getattr(p, "value", p)
-        if isinstance(val, torch.nn.Parameter) or isinstance(val, torch.Tensor):
+        if isinstance(val, (torch.nn.Parameter, torch.Tensor)):
             return val
     raise RuntimeError("Could not locate f parameter on Keras hgq quantizer")
 
@@ -485,6 +485,6 @@ def _find_i_param(keras_q):
         if p is None:
             continue
         val = getattr(p, "value", p)
-        if isinstance(val, torch.nn.Parameter) or isinstance(val, torch.Tensor):
+        if isinstance(val, (torch.nn.Parameter, torch.Tensor)):
             return val
     return None

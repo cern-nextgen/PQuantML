@@ -114,7 +114,7 @@ def _ap_config():
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape",
+    ("layer_type", "shape"),
     [
         ("linear", (16, 8)),
         ("conv", (16, 8, 3, 3)),
@@ -192,7 +192,7 @@ def _pdp_config(sparsity=0.75, structured=False):
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape,structured",
+    ("layer_type", "shape", "structured"),
     [
         ("linear", (16, 8), False),
         ("linear", (16, 8), True),
@@ -316,7 +316,7 @@ def _dst_config(threshold_type="channelwise"):
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape,threshold_type",
+    ("layer_type", "shape", "threshold_type"),
     [
         ("linear", (16, 8), "layerwise"),
         ("linear", (16, 8), "channelwise"),
@@ -382,7 +382,7 @@ def _wanda_config(sparsity=0.75, N=None, M=None):
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape,N,M",
+    ("layer_type", "shape", "N", "M"),
     [
         ("linear", (16, 8), None, None),
         ("conv", (16, 8, 3, 3), None, None),
@@ -453,7 +453,7 @@ def _autosparse_config(threshold_type="channelwise", threshold_init=-2.0):
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape,threshold_type",
+    ("layer_type", "shape", "threshold_type"),
     [
         ("linear", (16, 8), "layerwise"),
         ("linear", (16, 8), "channelwise"),
@@ -535,7 +535,7 @@ def _mdmm_config(
 
 
 @pytest.mark.parametrize(
-    "constraint_type,metric_type",
+    ("constraint_type", "metric_type"),
     [
         ("Equality", "UnstructuredSparsity"),
         ("LessThanOrEqual", "UnstructuredSparsity"),
