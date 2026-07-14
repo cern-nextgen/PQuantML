@@ -1,9 +1,10 @@
+from collections.abc import Callable
 from math import prod
 from typing import Any
 
 import torch
 import torch.nn as nn
-from torch import maximum, minimum, relu, tanh
+from torch import Tensor, maximum, minimum, relu, tanh
 
 from pquant.core.torch.quantizer import Quantizer
 
@@ -22,7 +23,7 @@ def hard_tanh(x):
     return 2.0 * hard_sigmoid(x) - 1.0
 
 
-activation_registry = {
+activation_registry: dict[str, Callable[[Tensor], Tensor]] = {
     "relu": relu,
     "tanh": tanh,
     "hard_tanh": hard_tanh,
@@ -186,17 +187,15 @@ class PQActivation(nn.Module):
         return self.post_activation(x)
 
     def get_config(self):
-        config = super().get_config()
-        config.update(
-            {
-                "config": self.config.get_dict(),
-                "i_input": float(self.i_input),
-                "f_input": float(self.f_input),
-                "i_output": float(self.i_output),
-                "f_output": float(self.f_output),
-            }
-        )
-        return config
+        # Unlike the Keras variant, nn.Module has no get_config() to defer to,
+        # so the config is built from scratch here.
+        return {
+            "config": self.config.get_dict(),
+            "i_input": float(self.i_input),
+            "f_input": float(self.f_input),
+            "i_output": float(self.i_output),
+            "f_output": float(self.f_output),
+        }
 
     def extra_repr(self):
         return f"quantize_input = {self.quantize_input}, quantize_output = {self.quantize_output}"

@@ -77,9 +77,9 @@ class ConstraintType(str, Enum):
 
 class MDMMPruningModel(BasePruningModel):
     pruning_method: Literal["mdmm"] = "mdmm"
-    constraint_type: ConstraintType = Field("Equality")
+    constraint_type: ConstraintType = Field(ConstraintType.EQUALITY)
     target_value: float = Field(default=0.0)
-    metric_type: MetricType = Field(default="UnstructuredSparsity")
+    metric_type: MetricType = Field(default=MetricType.UNSTRUCTURED)
     target_sparsity: float = Field(default=0.9)
     rf: int = Field(default=1)
     epsilon: float = Field(default=1.0e-03)

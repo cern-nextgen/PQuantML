@@ -2,10 +2,10 @@ import torch
 
 
 class pAdam(torch.optim.AdamW):
-    def __init__(self, params, *args, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, lambda_p=1e-2, p_norm=1, **kwargs):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, lambda_p=1e-2, p_norm=1, **kwargs):
+        # weight_decay is fixed at 0: the pWD step in step() replaces AdamW's decay.
         super().__init__(
             params,
-            *args,
             lr=lr,
             betas=betas,
             eps=eps,
@@ -40,8 +40,8 @@ class pAdam(torch.optim.AdamW):
 
 
 class pSGD(torch.optim.SGD):
-    def __init__(self, params, *args, lr=1e-3, momentum=0.9, lambda_p=1e-2, p_norm=1, **kwargs):
-        super().__init__(params, *args, lr=lr, momentum=momentum, **kwargs)
+    def __init__(self, params, lr=1e-3, momentum=0.9, lambda_p=1e-2, p_norm=1, **kwargs):
+        super().__init__(params, lr=lr, momentum=momentum, **kwargs)
         self.p_norm = p_norm
         self.lambda_p = lambda_p
 
