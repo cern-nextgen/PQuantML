@@ -48,7 +48,7 @@ dev = [
 onnx = [ "onnx", "onnxruntime" ]
 tensorflow = [ "tensorflow>=2.17,<=2.20" ]
 test = [ "pytest-cov", "pytest>=8.4" ]
-torch = [ "torch>=2.1" ]
+torch = [ "torch>=2.1,<=2.13" ]
 
 [project.entry-points."alkaid_keras"]
 pquant = "pquant._alkaid_plugin._alkaid_keras_plugin:register"
