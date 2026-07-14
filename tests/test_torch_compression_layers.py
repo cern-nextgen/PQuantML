@@ -495,7 +495,6 @@ def test_hgq_activation_built(config_pdp, conv2d_input):
     model = TestModelWithAvgPool(layer, "relu")
     model = add_compression_layers(model, config_pdp, conv2d_input.shape)
     is_built = check_keras_layer_is_built(model, [])
-    torch.save(model.state_dict(), "test_model.pt")
     assert all(is_built)
 
     layer = Conv2d(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, bias=True)
