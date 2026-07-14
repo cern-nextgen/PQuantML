@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 def get_threshold_size(config, weight_shape):
@@ -34,6 +35,8 @@ def binary_step(weight):
 
 
 class DST(nn.Module):
+    mask: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):

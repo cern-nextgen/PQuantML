@@ -3,6 +3,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 _PI = math.pi
 _L0 = -6.0
@@ -60,6 +61,9 @@ def autosparse_prune(x, alpha, backward_sparsity_flag, backward_sparsity):
 
 
 class AutoSparse(nn.Module):
+    mask: Tensor
+    alpha: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):

@@ -2,9 +2,16 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class ActivationPruning(nn.Module):
+    mask: Tensor
+    mask_placeholder: Tensor
+    activations: Tensor
+    batches_collected: Tensor
+    t: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):

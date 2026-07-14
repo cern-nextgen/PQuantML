@@ -14,6 +14,7 @@ import math
 
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 from pquant.core.torch.fixed_point_quantizer import get_fixed_quantizer, round_conv
 
@@ -27,6 +28,9 @@ def _minimal_i_given_xf(absmax: torch.Tensor, f: torch.Tensor) -> torch.Tensor:
 
 
 class HGQQuantizer(nn.Module):
+    _k: Tensor
+    _i_raw: Tensor
+
     """
     HGQ fixed-point quantizer parameterized by (k, i, f) — keep_negative, integer
     bits, fractional bits.

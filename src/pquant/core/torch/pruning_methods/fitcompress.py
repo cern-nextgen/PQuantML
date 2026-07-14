@@ -1,8 +1,11 @@
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class FITCompress(nn.Module):
+    mask: Tensor
+
     def __init__(self, config, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):

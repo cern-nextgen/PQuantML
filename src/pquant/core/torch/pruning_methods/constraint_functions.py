@@ -2,6 +2,7 @@ import abc
 
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class _FlipGradient(torch.autograd.Function):
@@ -20,6 +21,11 @@ def flip_gradient(x, scale=-1.0):
 
 
 class Constraint(nn.Module):
+    scale: Tensor
+    damping: Tensor
+    lmbda: Tensor
+    prev_infs: Tensor
+
     def __init__(self, lmbda_init=1.0, scale=1.0, damping=1.0, use_grad=True, lr=0.0, **kwargs):
         super().__init__()
         self.use_grad_ = bool(use_grad)
