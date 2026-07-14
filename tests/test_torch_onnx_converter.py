@@ -60,10 +60,10 @@ def cfg():
 def _apply_compression(model: nn.Module):
     for m in model.modules():
         if hasattr(m, "apply_final_compression"):
-            m.apply_final_compression()
+            m.apply_final_compression()  # type: ignore[operator]
 
 
-def _onnx_run(model: nn.Module, x: torch.Tensor, input_shape: tuple, tmp_path) -> np.ndarray:
+def _onnx_run(model: nn.Sequential, x: torch.Tensor, input_shape: tuple, tmp_path) -> np.ndarray:
     """Export model → ONNX file in tmp_path, run with onnxruntime, return output."""
     path = str(tmp_path / "model.onnx")
     convert_to_onnx(model, input_shape=input_shape, output_path=path)

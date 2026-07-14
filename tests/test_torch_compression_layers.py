@@ -233,6 +233,7 @@ class TestModel(nn.Module):
     def __init__(self, submodule, activation=None):
         super().__init__()
         self.submodule = submodule
+        self.activation: nn.Module | None
         if activation == "relu":
             self.activation = ReLU()
         elif activation == "tanh":
@@ -470,6 +471,7 @@ class TestModelWithAvgPool(nn.Module):
     def __init__(self, submodule, activation=None):
         super().__init__()
         self.submodule = submodule
+        self.activation: nn.Module | None
         if activation == "relu":
             self.activation = ReLU()
         elif activation == "tanh":
@@ -520,6 +522,7 @@ class TestModel2(nn.Module):
         super().__init__()
         self.submodule = submodule
         self.submodule2 = submodule2
+        self.activation: nn.Module | None
         if activation == "relu":
             self.activation = ReLU()
         elif activation == "tanh":
@@ -527,6 +530,7 @@ class TestModel2(nn.Module):
         else:
             self.activation = activation
 
+        self.activation2: nn.Module | None
         if activation2 == "relu":
             self.activation2 = ReLU()
         elif activation2 == "tanh":

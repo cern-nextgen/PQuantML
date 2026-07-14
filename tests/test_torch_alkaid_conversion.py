@@ -1,5 +1,7 @@
 """Convert a pruned + quantized PQuant Torch model with Alkaid"""
 
+from typing import cast
+
 import numpy as np
 import pytest
 import torch
@@ -12,8 +14,8 @@ from alkaid.trace import (
     trace,
 )
 
+import pquant._alkaid_plugin._alkaid_torch_plugin as _alkaid_torch_plugin
 from pquant import pdp_config
-from pquant._alkaid_plugin import _alkaid_torch_plugin
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.layers import (
     PQAvgPool1d,
@@ -227,9 +229,10 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
 
     with torch.no_grad():
         for layer in [m for m in model.modules() if getattr(m, "pruning_layer", None) is not None]:
-            layer._weight.copy_(
-                torch.tensor(rng.standard_normal(tuple(layer._weight.shape)), dtype=layer._weight.dtype, device=device)
-            )
+            # _weight resolves via nn.Module.__getattr__ (typed Tensor | Module); bind it
+            # to a typed local so the tensor API is visible to type checkers.
+            weight = cast("torch.Tensor", layer._weight)
+            weight.copy_(torch.tensor(rng.standard_normal(tuple(weight.shape)), dtype=weight.dtype, device=device))
             _random_prune(layer, PRUNE_FRACTION, rng)
 
     apply_final_compression(model)

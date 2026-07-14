@@ -21,8 +21,8 @@ from pquant.layers import (
     apply_final_compression,
 )
 
+import pquant._alkaid_plugin._alkaid_keras_plugin as _alkaid_keras_plugin
 from pquant import pdp_config
-from pquant._alkaid_plugin import _alkaid_keras_plugin
 from pquant.core.keras.quantizer import Quantizer
 
 _alkaid_keras_plugin.register()
