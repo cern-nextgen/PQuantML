@@ -2298,7 +2298,7 @@ def get_ebops(model, **kwargs):
 
 
 def load_torch_hgq_model(model, path_to_checkpoint):
-    model.load_state_dict(torch.load(path_to_checkpoint), strict=False)
+    model.load_state_dict(torch.load(path_to_checkpoint, weights_only=True), strict=False)
     for m in model.modules():
         if isinstance(m, Quantizer) and m.quantizer.built:
             # Populate HGQ quantizer bit values from PQuantML quantizer
