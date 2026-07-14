@@ -28,6 +28,7 @@ import functools
 import logging
 import operator as _operator
 import os
+from typing import cast
 
 import numpy as np
 import onnx
@@ -1125,11 +1126,9 @@ def _emit_module(
             ]
             nodes.append(oh.make_node("Clip", inputs=[current, cmin_name, cmax_name], outputs=[act_out]))
         elif act == "leaky_relu":
-            nodes.append(
-                oh.make_node(
-                    "LeakyRelu", inputs=[current], outputs=[act_out], alpha=module.activation_function.negative_slope
-                )
-            )
+            # This branch only runs for leaky_relu, whose registry entry is an nn.LeakyReLU.
+            leaky_relu = cast("nn.LeakyReLU", module.activation_function)
+            nodes.append(oh.make_node("LeakyRelu", inputs=[current], outputs=[act_out], alpha=leaky_relu.negative_slope))
         elif act == "gelu":
             # Decompose so the default opset (13) works; ONNX added a Gelu op only in opset 20.
             approximate = getattr(module.activation_function, "approximate", "none")
@@ -1818,7 +1817,8 @@ if __name__ == "__main__":
 
     for module in model.modules():
         if hasattr(module, "apply_final_compression"):
-            module.apply_final_compression()
+            # Duck-typed hook, guarded by hasattr; not visible to type checkers.
+            module.apply_final_compression()  # type: ignore[operator]
 
     model.eval()
     with torch.no_grad():

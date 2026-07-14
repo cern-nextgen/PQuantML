@@ -1,8 +1,15 @@
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class Wanda(nn.Module):
+    mask: Tensor
+    inputs_sq_sum: Tensor
+    batches_collected: Tensor
+    t: Tensor
+    done: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):

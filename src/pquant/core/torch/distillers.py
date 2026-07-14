@@ -269,7 +269,8 @@ class LayerwiseDistiller:
 
             for epoch in range(n_epochs):
                 if getattr(student_layer, "enable_pruning", False):
-                    student_layer.pruning_layer.pre_epoch_function(epoch, n_epochs)
+                    # pruning_layer is resolved via nn.Module.__getattr__ (typed Tensor | Module)
+                    student_layer.pruning_layer.pre_epoch_function(epoch, n_epochs)  # type: ignore[union-attr,operator]
                 batch_losses: list[float] = []
 
                 if self.precompute_layer_inputs:
@@ -300,7 +301,7 @@ class LayerwiseDistiller:
                 mean_loss = sum(batch_losses) / len(batch_losses)
                 epoch_losses.append(mean_loss)
                 if getattr(student_layer, "enable_pruning", False):
-                    student_layer.pruning_layer.post_epoch_function(epoch, n_epochs)
+                    student_layer.pruning_layer.post_epoch_function(epoch, n_epochs)  # type: ignore[union-attr,operator]
                 val_loss: float | None = None
                 if val_dataloader is not None:
                     val_loss = self.val_layer_loss(teacher_layer, student_layer, val_dataloader)

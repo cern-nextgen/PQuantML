@@ -1608,7 +1608,9 @@ class FIT:
         curr_FIT (float): FIT value
         """
 
-        curr_FIT = 0
+        # Polymorphic numeric accumulator: starts as int, accumulates ndarray/Tensor.
+        curr_FIT: typing.Any = 0
+        delta_theta: typing.Any
         if not same_theta:
             for theta_before, theta_after, EF_trace in zip(
                 params_before, params_after, EF_trace_params_layerwise, strict=False
@@ -1644,7 +1646,8 @@ class FIT:
 
         """
 
-        curr_FIT = 0
+        # Polymorphic numeric accumulator: starts as int, accumulates ndarray.
+        curr_FIT: typing.Any = 0
 
         if not same_theta:
             # Taken from compute_fake_FIT_params()
