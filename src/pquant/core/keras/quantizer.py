@@ -91,7 +91,7 @@ class Quantizer(keras.layers.Layer):
 
     def build(self, input_shape):
         if self.use_hgq:
-            shape = tuple(input_shape) if not self.is_data else (1,) + tuple(input_shape[1:])
+            shape = tuple(input_shape) if not self.is_data else (1, *tuple(input_shape[1:]))
             self.k = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.k_init), trainable=False)
             self.i = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.i_init), trainable=False)
             self.f = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.f_init), trainable=False)
@@ -126,9 +126,8 @@ class Quantizer(keras.layers.Layer):
     def get_total_bits(self, shape):
         if self.use_hgq:
             return self.quantizer.bits_(shape)
-        else:
-            b = self.i + self.f + self.k
-            return keras.ops.ones(shape) * b
+        b = self.i + self.f + self.k
+        return keras.ops.ones(shape) * b
 
     def get_quantization_bits(self):
         if self.use_hgq:
@@ -143,7 +142,7 @@ class Quantizer(keras.layers.Layer):
         self.f = f
 
     def apply_final_compression(self):
-        if self.use_hgq and not self.quantizer.built or not self.built:
+        if (self.use_hgq and not self.quantizer.built) or not self.built:
             return
         k, i, f = self.get_quantization_bits()
         self.i.assign(i)
@@ -159,10 +158,9 @@ class Quantizer(keras.layers.Layer):
             return self.quantizer(x, training=training)
         if not training:
             return self.quantizer(x, k=self.k, i=self.i, f=self.f, training=training)
-        else:
-            i, f = self.compute_dynamic_bits(x)
-            self.i.assign(i)
-            self.f.assign(f)
+        i, f = self.compute_dynamic_bits(x)
+        self.i.assign(i)
+        self.f.assign(f)
         return self.quantizer(x, k=self.k, i=i, f=f, training=training)
 
     def hgq_loss(self):
@@ -268,7 +266,5 @@ def create_quantizer(
         axis_kwargs = axis_kwargs_for_granularity(granularity, is_data)
         if is_data:
             return create_hgq_data_quantizer(k, i, f, overflow, round_mode, axis_kwargs, gamma=gamma)
-        else:
-            return create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, axis_kwargs, gamma=gamma)
-    else:
-        return get_fixed_quantizer(round_mode=round_mode, overflow_mode=overflow)
+        return create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, axis_kwargs, gamma=gamma)
+    return get_fixed_quantizer(round_mode=round_mode, overflow_mode=overflow)

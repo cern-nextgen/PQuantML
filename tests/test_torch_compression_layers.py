@@ -16,13 +16,10 @@ from torch.nn import (
 
 os.environ["KERAS_BACKEND"] = "torch"
 
-import keras  # noqa: E402
-from keras import ops  # noqa: E402
-
-from pquant import post_training_prune  # noqa: E402
-from pquant.activations import PQActivation  # noqa: E402
-from pquant.core.hyperparameter_optimization import PQConfig  # noqa: E402
-from pquant.layers import (  # noqa: E402
+import keras
+from keras import ops
+from pquant.activations import PQActivation
+from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
     PQBatchNorm2d,
@@ -37,6 +34,9 @@ from pquant.layers import (  # noqa: E402
     post_pretrain_functions,
     pre_finetune_functions,
 )
+
+from pquant import post_training_prune
+from pquant.core.hyperparameter_optimization import PQConfig
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32
@@ -233,6 +233,7 @@ class TestModel(nn.Module):
     def __init__(self, submodule, activation=None):
         super().__init__()
         self.submodule = submodule
+        self.activation: nn.Module | None
         if activation == "relu":
             self.activation = ReLU()
         elif activation == "tanh":
@@ -470,6 +471,7 @@ class TestModelWithAvgPool(nn.Module):
     def __init__(self, submodule, activation=None):
         super().__init__()
         self.submodule = submodule
+        self.activation: nn.Module | None
         if activation == "relu":
             self.activation = ReLU()
         elif activation == "tanh":
@@ -482,8 +484,7 @@ class TestModelWithAvgPool(nn.Module):
         x = self.submodule(x)
         if self.activation is not None:
             x = self.activation(x)
-        x = self.avg(x)
-        return x
+        return self.avg(x)
 
 
 def test_hgq_activation_built(config_pdp, conv2d_input):
@@ -494,7 +495,6 @@ def test_hgq_activation_built(config_pdp, conv2d_input):
     model = TestModelWithAvgPool(layer, "relu")
     model = add_compression_layers(model, config_pdp, conv2d_input.shape)
     is_built = check_keras_layer_is_built(model, [])
-    torch.save(model.state_dict(), "test_model.pt")
     assert all(is_built)
 
     layer = Conv2d(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, bias=True)
@@ -521,6 +521,7 @@ class TestModel2(nn.Module):
         super().__init__()
         self.submodule = submodule
         self.submodule2 = submodule2
+        self.activation: nn.Module | None
         if activation == "relu":
             self.activation = ReLU()
         elif activation == "tanh":
@@ -528,6 +529,7 @@ class TestModel2(nn.Module):
         else:
             self.activation = activation
 
+        self.activation2: nn.Module | None
         if activation2 == "relu":
             self.activation2 = ReLU()
         elif activation2 == "tanh":
@@ -668,13 +670,13 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
             assert torch.all(m.input_quantizer.quantizer.f == 7.0)
 
     config_pdp.quantization_parameters.layer_specific = {
-        'submodule': {
-            'weight': {'integer_bits': 1, 'fractional_bits': 3},
-            'bias': {'integer_bits': 2, 'fractional_bits': 4},
+        "submodule": {
+            "weight": {"integer_bits": 1, "fractional_bits": 3},
+            "bias": {"integer_bits": 2, "fractional_bits": 4},
         },
-        'submodule2': {"input": {'integer_bits': 1, 'fractional_bits': 3}},
-        'activation': {"input": {'integer_bits': 1, 'fractional_bits': 4}},
-        'activation2': {"input": {'integer_bits': 0, 'fractional_bits': 3}},
+        "submodule2": {"input": {"integer_bits": 1, "fractional_bits": 3}},
+        "activation": {"input": {"integer_bits": 1, "fractional_bits": 4}},
+        "activation2": {"input": {"integer_bits": 0, "fractional_bits": 3}},
     }
 
     model = TestModel2(layer, layer2, "relu", "tanh")
@@ -697,7 +699,7 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
             assert torch.all(i_input == 0.0)
             assert torch.all(f_input == 3.0)
         elif isinstance(m, PQActivation) and m.activation_name == "relu":
-            k_input, i_input, f_input = m.get_input_quantization_bits()
+            _k_input, i_input, f_input = m.get_input_quantization_bits()
 
             assert torch.all(i_input == 1.0)
             assert torch.all(f_input == 4.0)
@@ -748,13 +750,13 @@ def test_set_activation_custom_bits_quantizer(config_pdp, conv2d_input):
             assert m.f_input == 8.0
 
     config_pdp.quantization_parameters.layer_specific = {
-        'submodule': {
-            'weight': {'integer_bits': 1.0, 'fractional_bits': 3.0},
-            'bias': {'integer_bits': 1.0, 'fractional_bits': 3.0},
+        "submodule": {
+            "weight": {"integer_bits": 1.0, "fractional_bits": 3.0},
+            "bias": {"integer_bits": 1.0, "fractional_bits": 3.0},
         },
-        'submodule2': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'activation': {"input": {'integer_bits': 0.0, 'fractional_bits': 4.0}},
-        'activation2': {"input": {'integer_bits': 0.0, 'fractional_bits': 3.0}},
+        "submodule2": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "activation": {"input": {"integer_bits": 0.0, "fractional_bits": 4.0}},
+        "activation2": {"input": {"integer_bits": 0.0, "fractional_bits": 3.0}},
     }
 
     model = TestModel2(layer, layer2, "relu", "tanh")
@@ -829,7 +831,7 @@ def test_ebops_bn(config_pdp, conv2d_input):
     layer = Conv2d(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, bias=False)
     layer2 = BatchNorm2d(OUT_FEATURES)
     model = TestModel2(layer, layer2, None, "relu")
-    shape = [1] + list(conv2d_input.shape[1:])
+    shape = [1, *list(conv2d_input.shape[1:])]
     model = add_compression_layers(model, config_pdp, shape)
     post_pretrain_functions(model, config_pdp)
     model.submodule2.hgq_loss()
@@ -1175,7 +1177,6 @@ def test_batchnorm2d_direct_hgq(config_pdp, conv2d_input):
 
 
 class DummyLayer(nn.Module):
-
     def __init__(self, is_pretraining=False):
         super().__init__()
         self.built = True
@@ -1745,7 +1746,6 @@ def dummy_hgq_loss():
 
 
 class ModelWithAllLayers(nn.Module):
-
     def __init__(self, use_bias=True):
         super().__init__()
         self.conv = Conv2d(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, bias=use_bias)
@@ -1762,12 +1762,11 @@ class ModelWithAllLayers(nn.Module):
         x = self.relu(self.bn(self.conv(x)))
         x = self.avgpool2d(x)
         x = self.tanh(x)
-        x = torch.reshape(x, list(x.shape[:-2]) + [x.shape[-2] * x.shape[-1]])
+        x = torch.reshape(x, [*list(x.shape[:-2]), x.shape[-2] * x.shape[-1]])
         x = self.conv1d(x)
         x = self.avgpool1d(x)
         x = self.flatten(x)
-        x = self.dense(x)
-        return x
+        return self.dense(x)
 
 
 def test_hgq_loss_calc_no_qoutput(config_pdp, conv2d_input):

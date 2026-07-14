@@ -32,7 +32,7 @@ def _analyze_quantization(model):
 
     class _PQTracer(Tracer):
         def is_leaf_module(self, m, module_qualified_name):
-            if isinstance(m, _PQUANTML_LAYER_TYPES) or isinstance(m, Quantizer):
+            if isinstance(m, (_PQUANTML_LAYER_TYPES, Quantizer)):
                 return True
             return super().is_leaf_module(m, module_qualified_name)
 
@@ -198,7 +198,7 @@ def _analyze_quantization(model):
             return modules.get(node.target)
         return None
 
-    quantized = {}
+    quantized: dict = {}
     node_issues = defaultdict(list)
     edges_to_quantize = set()
 

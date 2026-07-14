@@ -1,11 +1,33 @@
+# ── Python bytecode ─────────────────────────────────────────
 **/__pycache__
-**/data/
-*.txt
-venv/
-**/runs/
+
+# ── Packaging / build artifacts ─────────────────────────────
 build/
-logs/
-.ipynb_checkpoints/
 *.egg-info
-examples/*.yaml
+
+# setuptools-scm writes this at build time
 **/_version.py
+
+# ── Virtual environments ────────────────────────────────────
+venv/
+
+# ── Linter / type-checker / test caches ─────────────────────
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# ── Coverage artifacts ──────────────────────────────────────
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Notebooks ───────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Project data / experiment outputs ───────────────────────
+**/data/
+**/runs/
+logs/*.txt
+
+# ── Generated example configs ───────────────────────────────
+examples/*.yaml

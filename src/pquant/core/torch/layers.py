@@ -1,9 +1,9 @@
-import typing
-from typing import Optional, Tuple, TypeVar, Union
+from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from keras import ops
 from torch.fx import symbolic_trace
 from torch.nn.common_types import _size_1_t, _size_2_t
 
@@ -11,26 +11,24 @@ from pquant.core.torch.activations import PQActivation, PQSoftmax
 from pquant.core.torch.quantizer import Quantizer
 from pquant.core.torch.utils import get_pruning_layer
 
-if typing.TYPE_CHECKING:
-    from pquant.core.torch.fit_compress import call_fitcompress  # noqa: 401
-
-from keras import ops
-
-T = TypeVar("T")
+QuantBits = tuple[Any, Any, Any]
 
 
 class PQWeightBiasBase(nn.Module):
+    _weight: nn.Parameter
+    _bias: nn.Parameter | None
+
     def __init__(
         self,
         config,
         layer_type,
         quantize_input=True,
         quantize_output=False,
-        enable_pruning: bool = None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        enable_pruning: bool | None = None,
+        in_quant_bits: QuantBits | None = None,
+        weight_quant_bits: QuantBits | None = None,
+        bias_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -88,15 +86,15 @@ class PQWeightBiasBase(nn.Module):
         self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else self.granularity
         self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else self.granularity
         self.out_quant_granularity = out_quant_granularity if out_quant_granularity is not None else self.granularity
-        self.final_compression_done = False
+        self.final_compression_done: Any = False
         self.built = False
         self.parallelization_factor = -1
         self.hgq_beta = config.quantization_parameters.hgq_beta
-        self.input_shape = None
+        self.input_shape: tuple[Any, ...] | None = None
         self.is_pretraining = True
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
-        self.saved_outputs = []
+        self.saved_inputs: list[Any] = []
+        self.saved_outputs: list[Any] = []
         self.config = config
 
     def check_is_built(self, input_shape):
@@ -160,7 +158,7 @@ class PQWeightBiasBase(nn.Module):
         self.n_parallel = ops.prod(tuple(input_shape)[1:-1])
         self.parallelization_factor = self.parallelization_factor if self.parallelization_factor > 0 else self.n_parallel
         self.built = True
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
 
     def get_weight_quantization_bits(self):
         return self.weight_quantizer.get_quantization_bits()
@@ -190,7 +188,7 @@ class PQWeightBiasBase(nn.Module):
             return
         self._weight.data = self.init_weight.clone()
 
-    def ebops(self):
+    def ebops(self, include_mask=False):
         return 0.0
 
     def hgq_loss(self):
@@ -250,13 +248,13 @@ class PQDense(PQWeightBiasBase, nn.Linear):
         bias: bool = True,
         quantize_input=True,
         quantize_output=False,
-        enable_pruning: bool = None,
+        enable_pruning: bool | None = None,
         device=None,
         dtype=None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        weight_quant_bits: QuantBits | None = None,
+        bias_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -287,10 +285,10 @@ class PQDense(PQWeightBiasBase, nn.Linear):
         self.in_features = in_features
         self.out_features = out_features
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
-        self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
+        self._weight = nn.Parameter(self.weight.clone())
         self.register_parameter("_weight", self._weight)
         if bias:
-            self._bias = nn.Parameter(self.bias.clone()).to(self.bias.device)
+            self._bias = nn.Parameter(self.bias.clone())
             self.register_parameter("_bias", self._bias)
         else:
             self.register_parameter("_bias", None)
@@ -311,26 +309,23 @@ class PQDense(PQWeightBiasBase, nn.Linear):
             bw_bias = self.bias_quantizer.get_total_bits(ops.shape(self._bias))
             size = ops.cast(ops.prod(self.input_shape[:-1]) * self.out_features, self._weight.dtype)
             ebops += ops.mean(bw_bias) * size
-        ebops = ebops * self.parallelization_factor / self.n_parallel
-        return ebops
+        return ebops * self.parallelization_factor / self.n_parallel
 
     @property
-    def weight(self):
+    def weight(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.final_compression_done or self.is_fitcompress_pretraining():
             return self._weight
         if self.pruning_first:
             weight = self.prune(self._weight)
             return self.quantize(weight, self.weight_quantizer)
-        else:
-            weight = self.quantize(self._weight, self.weight_quantizer)
-            return self.prune(weight)
+        weight = self.quantize(self._weight, self.weight_quantizer)
+        return self.prune(weight)
 
     @property
-    def bias(self):
+    def bias(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.final_compression_done or self.is_fitcompress_pretraining():
             return self._bias
-        bias = self.quantize(self._bias, self.bias_quantizer)
-        return bias
+        return self.quantize(self._bias, self.bias_quantizer)
 
     def apply_final_compression(self):
         self._weight.data = self.weight
@@ -341,8 +336,7 @@ class PQDense(PQWeightBiasBase, nn.Linear):
     def forward(self, x):
         x = self.pre_forward(x)
         x = super().forward(x)
-        x = self.post_forward(x)
-        return x
+        return self.post_forward(x)
 
     def extra_repr(self) -> str:
         """
@@ -365,7 +359,7 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
         out_channels: int,
         kernel_size: _size_2_t,
         stride: _size_2_t = 1,
-        padding: Union[str, _size_2_t] = 0,
+        padding: str | _size_2_t = 0,
         dilation: _size_2_t = 1,
         groups: int = 1,
         bias: bool = True,
@@ -374,11 +368,11 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
         dtype=None,
         quantize_input=True,
         quantize_output=False,
-        enable_pruning: bool = None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        enable_pruning: bool | None = None,
+        in_quant_bits: QuantBits | None = None,
+        weight_quant_bits: QuantBits | None = None,
+        bias_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -413,10 +407,10 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
             **kwargs,
         )
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
-        self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
+        self._weight = nn.Parameter(self.weight.clone())
         self.register_parameter("_weight", self._weight)
         if bias:
-            self._bias = nn.Parameter(self.bias.clone()).to(self.bias.device)
+            self._bias = nn.Parameter(self.bias.clone())
             self.register_parameter("_bias", self._bias)
         else:
             self.register_parameter("_bias", None)
@@ -435,7 +429,7 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
             ebops = ops.sum(F.conv2d(bw_inp, bw_ker, stride=self.stride, padding=self.padding, dilation=self.dilation))
         else:
             reduce_axis_kernel = tuple(range(2, 4))
-            reduce_axis_input = (0,) + tuple(range(2, 4))
+            reduce_axis_input = (0, *tuple(range(2, 4)))
 
             bw_inp = ops.max(bw_inp, axis=reduce_axis_input)
             bw_ker = ops.sum(bw_ker, axis=reduce_axis_kernel)
@@ -447,22 +441,20 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
         return ebops
 
     @property
-    def weight(self):
+    def weight(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.final_compression_done:
             return self._weight
         if self.pruning_first:
             weight = self.prune(self._weight)
             return self.quantize(weight, self.weight_quantizer)
-        else:
-            weight = self.quantize(self._weight, self.weight_quantizer)
-            return self.prune(weight)
+        weight = self.quantize(self._weight, self.weight_quantizer)
+        return self.prune(weight)
 
     @property
-    def bias(self):
+    def bias(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.final_compression_done:
             return self._bias
-        bias = self.quantize(self._bias, self.bias_quantizer)
-        return bias
+        return self.quantize(self._bias, self.bias_quantizer)
 
     def apply_final_compression(self):
         self._weight.data = self.weight
@@ -483,8 +475,7 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
             self.dilation,
             self.groups,
         )
-        x = self.post_forward(x)
-        return x
+        return self.post_forward(x)
 
     def extra_repr(self):
         s = "{in_channels}, {out_channels}, kernel_size={kernel_size}, stride={stride}"
@@ -514,7 +505,7 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
         out_channels: int,
         kernel_size: _size_1_t,
         stride: _size_1_t = 1,
-        padding: Union[str, _size_1_t] = 0,
+        padding: str | _size_1_t = 0,
         dilation: _size_1_t = 1,
         groups: int = 1,
         bias: bool = True,
@@ -523,11 +514,11 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
         dtype=None,
         quantize_input=True,
         quantize_output=False,
-        enable_pruning: bool = None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        enable_pruning: bool | None = None,
+        in_quant_bits: QuantBits | None = None,
+        weight_quant_bits: QuantBits | None = None,
+        bias_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -562,10 +553,10 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
             **kwargs,
         )
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
-        self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
+        self._weight = nn.Parameter(self.weight.clone())
         self.register_parameter("_weight", self._weight)
         if bias:
-            self._bias = nn.Parameter(self.bias.clone()).to(self.bias.device)
+            self._bias = nn.Parameter(self.bias.clone())
             self.register_parameter("_bias", self._bias)
         else:
             self.register_parameter("_bias", None)
@@ -584,7 +575,7 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
             ebops = ops.sum(F.conv1d(bw_inp, bw_ker, stride=self.stride, padding=self.padding, dilation=self.dilation))
         else:
             reduce_axis_kernel = tuple(range(2, 3))
-            reduce_axis_input = (0,) + tuple(range(2, 3))
+            reduce_axis_input = (0, *tuple(range(2, 3)))
 
             bw_inp = ops.max(bw_inp, axis=reduce_axis_input)
             bw_ker = ops.sum(bw_ker, axis=reduce_axis_kernel)
@@ -596,22 +587,20 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
         return ebops
 
     @property
-    def weight(self):
+    def weight(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.final_compression_done:
             return self._weight
         if self.pruning_first:
             weight = self.prune(self._weight)
             return self.quantize(weight, self.weight_quantizer)
-        else:
-            weight = self.quantize(self._weight, self.weight_quantizer)
-            return self.prune(weight)
+        weight = self.quantize(self._weight, self.weight_quantizer)
+        return self.prune(weight)
 
     @property
-    def bias(self):
+    def bias(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.final_compression_done:
             return self._bias
-        bias = self.quantize(self._bias, self.bias_quantizer)
-        return bias
+        return self.quantize(self._bias, self.bias_quantizer)
 
     def apply_final_compression(self):
         self._weight.data = self.weight
@@ -622,8 +611,7 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
     def forward(self, x):
         x = self.pre_forward(x)
         x = super().forward(x)
-        x = self.post_forward(x)
-        return x
+        return self.post_forward(x)
 
     def extra_repr(self):
         s = "{in_channels}, {out_channels}, kernel_size={kernel_size}, stride={stride}"
@@ -653,10 +641,11 @@ def add_compression_layers(model, config, input_shape=None, add_missing_quantize
         from pquant.core.torch.tracing import check_quantization
 
         model = check_quantization(model, add_missing_quantizers=True, config=config)
-    model.to("cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
     if input_shape is not None:
-        model(torch.rand(input_shape).to("cuda"))
-        model.to("cuda")
+        model(torch.rand(input_shape).to(device))
+        model.to(device)
     return model
 
 
@@ -666,8 +655,8 @@ class PQAvgPoolBase(nn.Module):
         config,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -696,7 +685,7 @@ class PQAvgPoolBase(nn.Module):
         self.hgq_beta = config.quantization_parameters.hgq_beta
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
         # Optional per-quantizer granularity override; None → inherit config granularity.
@@ -731,7 +720,7 @@ class PQAvgPoolBase(nn.Module):
             dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
             granularity=self.out_quant_granularity,
         )
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
 
     def get_input_quantization_bits(self):
         return self.input_quantizer.get_quantization_bits()
@@ -778,7 +767,7 @@ class PQAvgPoolBase(nn.Module):
         return x
 
     def extra_repr(self) -> str:
-        return f"kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, quantize_input={self.quantize_input}, quantize_output={self.quantize_output}"  # noqa: 501
+        return f"kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, quantize_input={self.quantize_input}, quantize_output={self.quantize_output}"
 
 
 class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
@@ -792,8 +781,8 @@ class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
         count_include_pad: bool = True,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -817,8 +806,7 @@ class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
     def forward(self, x):
         x = self.pre_pooling(x)
         x = super().forward(x)
-        x = self.post_pooling(x)
-        return x
+        return self.post_pooling(x)
 
 
 class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
@@ -830,11 +818,11 @@ class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
         padding: _size_2_t = 0,
         ceil_mode: bool = False,
         count_include_pad: bool = True,
-        divisor_override: Optional[int] = None,
+        divisor_override: int | None = None,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -859,25 +847,27 @@ class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
     def forward(self, x):
         x = self.pre_pooling(x)
         x = super().forward(x)
-        x = self.post_pooling(x)
-        return x
+        return self.post_pooling(x)
 
 
 class PQBatchNorm2d(nn.BatchNorm2d):
+    _weight: nn.Parameter
+    _bias: nn.Parameter | None
+
     def __init__(
         self,
         config,
         num_features: int,
         eps: float = 1e-5,
-        momentum: typing.Optional[float] = 0.1,
+        momentum: float | None = 0.1,
         affine: bool = True,
         track_running_stats: bool = True,
         device=None,
         dtype=None,
         quantize_input=True,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        weight_quant_bits: QuantBits | None = None,
+        bias_quant_bits: QuantBits | None = None,
         in_quant_granularity=None,
         weight_quant_granularity=None,
         bias_quant_granularity=None,
@@ -916,10 +906,10 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else granularity
         self.weight_quant_granularity = weight_quant_granularity if weight_quant_granularity is not None else granularity
         self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else granularity
-        self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
+        self._weight = nn.Parameter(self.weight.clone())
         self.register_parameter("_weight", self._weight)
         if self.bias is not None:
-            self._bias = nn.Parameter(self.bias.clone()).to(self.bias.device)
+            self._bias = nn.Parameter(self.bias.clone())
             self.register_parameter("_bias", self._bias)
         else:
             self.register_parameter("_bias", None)
@@ -927,7 +917,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         self.final_compression_done = False
         self.is_pretraining = True
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
 
     def check_is_built(self, input_shape):
         if self.built:
@@ -973,7 +963,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         shape = [1] * len(input_shape)
         shape[1] = input_shape[1]
         self._shape = tuple(shape)
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
 
     def apply_final_compression(self):
         self.final_compression_done = True
@@ -993,13 +983,13 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         return self.is_pretraining and self.use_fitcompress
 
     @property
-    def weight(self):
+    def weight(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.enable_quantization and not self.final_compression_done and not self.is_fitcompress_pretraining():
             return self.weight_quantizer(self._weight)
         return self._weight
 
     @property
-    def bias(self):
+    def bias(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.enable_quantization and not self.final_compression_done and not self.is_fitcompress_pretraining():
             return self.bias_quantizer(self._bias)
         return self._bias
@@ -1009,8 +999,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         bw_ker = ops.reshape(self.weight_quantizer.get_total_bits(self.running_mean.shape), self._shape)
         bw_bias = ops.reshape(self.bias_quantizer.get_total_bits(self.running_mean.shape), self._shape)
         size = ops.cast(ops.prod(list(self.input_shape)), self._weight.dtype)
-        ebops = ops.sum(bw_inp * bw_ker) + ops.mean(bw_bias) * size
-        return ebops
+        return ops.sum(bw_inp * bw_ker) + ops.mean(bw_bias) * size
 
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:
@@ -1037,20 +1026,23 @@ class PQBatchNorm2d(nn.BatchNorm2d):
 
 
 class PQBatchNorm1d(nn.BatchNorm1d):
+    _weight: nn.Parameter
+    _bias: nn.Parameter | None
+
     def __init__(
         self,
         config,
         num_features: int,
         eps: float = 1e-5,
-        momentum: typing.Optional[float] = 0.1,
+        momentum: float | None = 0.1,
         affine: bool = True,
         track_running_stats: bool = True,
         device=None,
         dtype=None,
         quantize_input=True,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        weight_quant_bits: QuantBits | None = None,
+        bias_quant_bits: QuantBits | None = None,
         in_quant_granularity=None,
         weight_quant_granularity=None,
         bias_quant_granularity=None,
@@ -1089,10 +1081,10 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else granularity
         self.weight_quant_granularity = weight_quant_granularity if weight_quant_granularity is not None else granularity
         self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else granularity
-        self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
+        self._weight = nn.Parameter(self.weight.clone())
         self.register_parameter("_weight", self._weight)
         if self.bias is not None:
-            self._bias = nn.Parameter(self.bias.clone()).to(self.bias.device)
+            self._bias = nn.Parameter(self.bias.clone())
             self.register_parameter("_bias", self._bias)
         else:
             self.register_parameter("_bias", None)
@@ -1101,7 +1093,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         self.final_compression_done = False
         self.is_pretraining = True
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
 
     def check_is_built(self, input_shape):
         if self.built:
@@ -1147,7 +1139,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         shape = [1] * len(input_shape)
         shape[1] = input_shape[1]
         self._shape = tuple(shape)
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
 
     def apply_final_compression(self):
         self.final_compression_done = True
@@ -1167,13 +1159,13 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         return self.is_pretraining and self.use_fitcompress
 
     @property
-    def weight(self):
+    def weight(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.enable_quantization and not self.final_compression_done and not self.is_fitcompress_pretraining():
             return self.weight_quantizer(self._weight)
         return self._weight
 
     @property
-    def bias(self):
+    def bias(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self.enable_quantization and not self.final_compression_done and not self.is_fitcompress_pretraining():
             return self.bias_quantizer(self._bias)
         return self._bias
@@ -1183,8 +1175,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         bw_ker = ops.reshape(self.weight_quantizer.get_total_bits(self.running_mean.shape), self._shape)
         bw_bias = ops.reshape(self.bias_quantizer.get_total_bits(self.running_mean.shape), self._shape)
         size = ops.cast(ops.prod(list(self.input_shape)), self._weight.dtype)
-        ebops = ops.sum(bw_inp * bw_ker) + ops.mean(bw_bias) * size
-        return ebops
+        return ops.sum(bw_inp * bw_ker) + ops.mean(bw_bias) * size
 
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:
@@ -1211,10 +1202,13 @@ class PQBatchNorm1d(nn.BatchNorm1d):
 
 
 class PQLayerNorm(nn.LayerNorm):
+    _weight: nn.Parameter | None
+    _bias: nn.Parameter | None
+
     def __init__(
         self,
         config,
-        normalized_shape: Union[int, Tuple[int, ...], torch.Size],
+        normalized_shape: int | tuple[int, ...] | torch.Size,
         eps: float = 1e-5,
         elementwise_affine: bool = True,
         bias: bool = True,
@@ -1222,10 +1216,10 @@ class PQLayerNorm(nn.LayerNorm):
         dtype=None,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
+        weight_quant_bits: QuantBits | None = None,
+        bias_quant_bits: QuantBits | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         weight_quant_granularity=None,
@@ -1279,12 +1273,12 @@ class PQLayerNorm(nn.LayerNorm):
         self.weight_quant_granularity = weight_quant_granularity if weight_quant_granularity is not None else granularity
         self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else granularity
         if self.weight is not None:
-            self._weight = nn.Parameter(self.weight.clone()).to(self.weight.device)
+            self._weight = nn.Parameter(self.weight.clone())
             self.register_parameter("_weight", self._weight)
         else:
             self.register_parameter("_weight", None)
         if self.bias is not None:
-            self._bias = nn.Parameter(self.bias.clone()).to(self.bias.device)
+            self._bias = nn.Parameter(self.bias.clone())
             self.register_parameter("_bias", self._bias)
         else:
             self.register_parameter("_bias", None)
@@ -1292,7 +1286,7 @@ class PQLayerNorm(nn.LayerNorm):
         self.final_compression_done = False
         self.is_pretraining = True
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
 
     def check_is_built(self, input_shape):
         if self.built:
@@ -1349,7 +1343,7 @@ class PQLayerNorm(nn.LayerNorm):
         if self.use_hgq:
             self.input_quantizer.quantizer.build(input_shape)
             self.output_quantizer.quantizer.build(input_shape)
-        self.input_shape = (1,) + tuple(input_shape[1:])
+        self.input_shape = (1, *tuple(input_shape[1:]))
 
     def apply_final_compression(self):
         self.final_compression_done = True
@@ -1374,7 +1368,7 @@ class PQLayerNorm(nn.LayerNorm):
         return self.is_pretraining and self.use_fitcompress
 
     @property
-    def weight(self):
+    def weight(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self._weight is None:
             return None
         if self.enable_quantization and not self.final_compression_done and not self.is_fitcompress_pretraining():
@@ -1382,7 +1376,7 @@ class PQLayerNorm(nn.LayerNorm):
         return self._weight
 
     @property
-    def bias(self):
+    def bias(self):  # type: ignore[override]  # quantize/prune-on-read; base class declares a writeable attribute
         if self._bias is None:
             return None
         if self.enable_quantization and not self.final_compression_done and not self.is_fitcompress_pretraining():
@@ -1466,17 +1460,17 @@ class PQMultiheadAttention(nn.Module):
         num_heads: int,
         dropout: float = 0.0,
         bias: bool = True,
-        kdim: int = None,
-        vdim: int = None,
+        kdim: int | None = None,
+        vdim: int | None = None,
         batch_first: bool = False,
         quantize_input: bool = True,
         quantize_output: bool = False,
         approximate_softmax: bool = False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
-        attn_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        weight_quant_bits: QuantBits | None = None,
+        bias_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
+        attn_quant_bits: QuantBits | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         param_quant_granularity=None,
@@ -1500,15 +1494,15 @@ class PQMultiheadAttention(nn.Module):
         self.in_quant_granularity = in_quant_granularity
         self.out_quant_granularity = out_quant_granularity
         self.param_quant_granularity = param_quant_granularity
-        proj_kwargs = dict(
-            bias=bias,
-            in_quant_bits=in_quant_bits,
-            weight_quant_bits=weight_quant_bits,
-            bias_quant_bits=bias_quant_bits,
-            out_quant_bits=out_quant_bits,
-            weight_quant_granularity=param_quant_granularity,
-            bias_quant_granularity=param_quant_granularity,
-        )
+        proj_kwargs = {
+            "bias": bias,
+            "in_quant_bits": in_quant_bits,
+            "weight_quant_bits": weight_quant_bits,
+            "bias_quant_bits": bias_quant_bits,
+            "out_quant_bits": out_quant_bits,
+            "weight_quant_granularity": param_quant_granularity,
+            "bias_quant_granularity": param_quant_granularity,
+        }
 
         qkv_kwargs = dict(
             quantize_input=quantize_input, quantize_output=True, in_quant_granularity=in_quant_granularity, **proj_kwargs
@@ -1569,10 +1563,10 @@ class PQMultiheadAttention(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        key_padding_mask: Optional[torch.Tensor] = None,
-        attn_mask: Optional[torch.Tensor] = None,
+        key_padding_mask: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | None = None,
         need_weights: bool = True,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if not self.batch_first:
             # (T, B, E) -> (B, T, E)
             query = query.transpose(0, 1)
@@ -1625,8 +1619,7 @@ class PQMultiheadAttention(nn.Module):
 
     def extra_repr(self) -> str:
         return (
-            f"embed_dim={self.embed_dim}, num_heads={self.num_heads}, "
-            f"dropout={self.dropout}, batch_first={self.batch_first}"
+            f"embed_dim={self.embed_dim}, num_heads={self.num_heads}, dropout={self.dropout}, batch_first={self.batch_first}"
         )
 
 
@@ -1733,31 +1726,7 @@ def add_layer_specific_quantization_to_model(name, layer, config):
                     layer.f_output = torch.tensor(layer_config["output"]["fractional_bits"])
                 if "quantize" in layer_config["output"]:
                     layer.quantize_output = layer_config["output"]["quantize"]
-    elif layer.__class__ in [PQAvgPool1d, PQAvgPool2d]:
-        if name in config.quantization_parameters.layer_specific:
-            layer_config = config.quantization_parameters.layer_specific[name]
-            if "input" in layer_config:
-                if "integer_bits" in layer_config["input"]:
-                    input_int_bits = torch.tensor(layer_config["input"]["integer_bits"])
-                    layer.i_input = input_int_bits
-                if "fractional_bits" in layer_config["input"]:
-                    input_fractional_bits = torch.tensor(layer_config["input"]["fractional_bits"])
-                    layer.f_input = input_fractional_bits
-                if "quantize" in layer_config["input"]:
-                    quantize = layer_config["input"]["quantize"]
-                    layer.quantize_input = quantize
-            if "output" in layer_config:
-                if "integer_bits" in layer_config["output"]:
-                    output_int_bits = torch.tensor(layer_config["output"]["integer_bits"])
-                    layer.i_output = output_int_bits
-                if "fractional_bits" in layer_config["output"]:
-                    output_fractional_bits = torch.tensor(layer_config["output"]["fractional_bits"])
-                    layer.f_output = output_fractional_bits
-                if "quantize" in layer_config["output"]:
-                    quantize = layer_config["output"]["quantize"]
-                    layer.quantize_output = quantize
-
-    elif layer.__class__ == PQActivation:
+    elif layer.__class__ in [PQAvgPool1d, PQAvgPool2d] or layer.__class__ == PQActivation:
         if name in config.quantization_parameters.layer_specific:
             layer_config = config.quantization_parameters.layer_specific[name]
             if "input" in layer_config:
@@ -1790,6 +1759,7 @@ def add_quantized_activations_to_model_layer(module, config, prefix=""):
     quantize_output = config.quantization_parameters.quantize_output
     # Replaces ReLU and Tanh layers with quantized versions
     for name, layer in module.named_children():
+        new_layer: nn.Module
         full_name = f"{prefix}.{name}" if prefix else name
         i = config.quantization_parameters.default_data_integer_bits
         f = config.quantization_parameters.default_data_fractional_bits
@@ -1871,13 +1841,13 @@ def add_quantized_activations_to_model_layer(module, config, prefix=""):
             new_layer = add_layer_specific_quantization_to_model(full_name, new_layer, config)
             setattr(module, name, new_layer)
         elif layer.__class__ == nn.LayerNorm:
-            ln_kwargs = dict(
-                normalized_shape=layer.normalized_shape,
-                eps=layer.eps,
-                elementwise_affine=layer.elementwise_affine,
-                quantize_input=quantize_input,
-                quantize_output=quantize_output,
-            )
+            ln_kwargs = {
+                "normalized_shape": layer.normalized_shape,
+                "eps": layer.eps,
+                "elementwise_affine": layer.elementwise_affine,
+                "quantize_input": quantize_input,
+                "quantize_output": quantize_output,
+            }
             new_layer = PQLayerNorm(config, **ln_kwargs)
             if layer.elementwise_affine:
                 if layer.weight is not None and new_layer._weight is not None:
@@ -1935,6 +1905,8 @@ def add_pruning_to_model(module, config, prefix=""):
     quantize_input = config.quantization_parameters.quantize_input
     quantize_output = config.quantization_parameters.quantize_output
     for name, layer in module.named_children():
+        # Reused across the if/elif chain below to build different layer types.
+        sparse_layer: nn.Module
         full_name = f"{prefix}.{name}" if prefix else name
         if layer.__class__ is nn.Linear:
             sparse_layer = PQDense(
@@ -1952,10 +1924,10 @@ def add_pruning_to_model(module, config, prefix=""):
                 config,
                 layer.in_channels,
                 layer.out_channels,
-                layer.kernel_size,
-                layer.stride,
-                layer.padding,
-                layer.dilation,
+                layer.kernel_size,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                layer.stride,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                layer.padding,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                layer.dilation,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
                 layer.groups,
                 layer.bias is not None,
                 layer.padding_mode,
@@ -1975,10 +1947,10 @@ def add_pruning_to_model(module, config, prefix=""):
                 config,
                 layer.in_channels,
                 layer.out_channels,
-                layer.kernel_size,
-                layer.stride,
-                layer.padding,
-                layer.dilation,
+                layer.kernel_size,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                layer.stride,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                layer.padding,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                layer.dilation,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
                 layer.groups,
                 layer.bias is not None,
                 layer.padding_mode,
@@ -2007,9 +1979,7 @@ def apply_final_compression(module):
 
 def call_post_round_functions(model, rewind, rounds, r):
     last_round = r == rounds - 1
-    if rewind == "every-round":
-        rewind_weights_functions(model)
-    elif rewind == "post-training-stage" and last_round:
+    if rewind == "every-round" or (rewind == "post-training-stage" and last_round):
         rewind_weights_functions(model)
     elif not last_round:
         post_round_functions(model)
@@ -2056,7 +2026,7 @@ def pre_finetune_functions(model):
 def post_pretrain_functions(model, config, train_loader=None, loss_function=None, input_shape=None):
 
     if config.fitcompress_parameters.enable_fitcompress:
-        from pquant.core.torch.fit_compress import call_fitcompress  # noqa: 811
+        from pquant.core.torch.fit_compress import call_fitcompress
 
         for layer in model.modules():
             if isinstance(
@@ -2090,25 +2060,24 @@ def post_pretrain_functions(model, config, train_loader=None, loss_function=None
                 layer.pruning_layer.pre_finetune_function()  # So mask is not updated during training anymore
                 idx += 1
         return
-    else:
-        for layer in model.modules():
-            if isinstance(
-                layer,
-                (
-                    PQConv2d,
-                    PQConv1d,
-                    PQDense,
-                    PQActivation,
-                    PQBatchNorm2d,
-                    PQBatchNorm1d,
-                    PQLayerNorm,
-                    PQAvgPoolBase,
-                    PQSoftmax,
-                    PQMultiheadAttention,
-                    Quantizer,
-                ),
-            ):
-                layer.post_pre_train_function()
+    for layer in model.modules():
+        if isinstance(
+            layer,
+            (
+                PQConv2d,
+                PQConv1d,
+                PQDense,
+                PQActivation,
+                PQBatchNorm2d,
+                PQBatchNorm1d,
+                PQLayerNorm,
+                PQAvgPoolBase,
+                PQSoftmax,
+                PQMultiheadAttention,
+                Quantizer,
+            ),
+        ):
+            layer.post_pre_train_function()
     if config.pruning_parameters.pruning_method == "pdp" or (
         config.pruning_parameters.pruning_method == "wanda" and config.pruning_parameters.calculate_pruning_budget
     ):
@@ -2143,10 +2112,11 @@ def pdp_setup(model, config):
             idx += weight_size
 
 
-@torch.no_grad
+@torch.no_grad()
 def get_layer_keep_ratio(model):
     total_w = 0
-    remaining_weights = 0
+    # Accumulates Tensor counts as well as ints, depending on the layer type.
+    remaining_weights: Any = 0
     for layer in model.modules():
         if isinstance(layer, (PQConv2d, PQConv1d, PQDense)):
             weight = layer.weight
@@ -2162,7 +2132,7 @@ def get_layer_keep_ratio(model):
 
 
 def is_training_stage(layer):
-    return False if layer.pruning_layer._is_finetuning or layer.pruning_layer._is_pretraining else True
+    return not (layer.pruning_layer._is_finetuning or layer.pruning_layer._is_pretraining)
 
 
 def get_model_losses(model, losses):
@@ -2288,14 +2258,14 @@ def remove_compression_layers(module, config):
         if isinstance(layer, PQDense):
             out_features = layer.out_features
             in_features = layer.in_features
-            bias = True if layer.bias is not None else False
+            bias = layer.bias is not None
             setattr(module, name, nn.Linear(in_features=in_features, out_features=out_features, bias=bias))
             getattr(module, name).weight.data.copy_(layer.weight)
             if getattr(module, name).bias is not None:
                 getattr(module, name).bias.data.copy_(layer.bias)
         elif isinstance(layer, (PQConv1d, PQConv2d)):
             bias_values = layer.bias if layer.bias is not None else None
-            bias = True if bias_values is not None else False
+            bias = bias_values is not None
             conv = nn.Conv2d if isinstance(layer, PQConv2d) else nn.Conv1d
             setattr(
                 module,
@@ -2303,10 +2273,10 @@ def remove_compression_layers(module, config):
                 conv(
                     layer.in_channels,
                     layer.out_channels,
-                    layer.kernel_size,
-                    layer.stride,
-                    layer.padding,
-                    layer.dilation,
+                    layer.kernel_size,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                    layer.stride,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                    layer.padding,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
+                    layer.dilation,  # type: ignore[arg-type]  # torch types these as tuple[int, ...] on _ConvNd
                     layer.groups,
                     bias,
                     layer.padding_mode,
@@ -2345,7 +2315,7 @@ def get_ebops(model, **kwargs):
 
 
 def load_torch_hgq_model(model, path_to_checkpoint):
-    model.load_state_dict(torch.load(path_to_checkpoint), strict=False)
+    model.load_state_dict(torch.load(path_to_checkpoint, weights_only=True), strict=False)
     for m in model.modules():
         if isinstance(m, Quantizer) and m.quantizer.built:
             # Populate HGQ quantizer bit values from PQuantML quantizer

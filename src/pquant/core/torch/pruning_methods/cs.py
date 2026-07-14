@@ -1,8 +1,14 @@
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class ContinuousSparsification(nn.Module):
+    s_init: Tensor
+    scaling: Tensor
+    beta: Tensor
+    mask: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):

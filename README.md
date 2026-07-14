@@ -3,11 +3,66 @@
 ## Prune and Quantize ML models
 PQuant is a library for training compressed machine learning models, developed at CERN as part of the [Next Generation Triggers](https://nextgentriggers.web.cern.ch/t13/) project.
 
-Installation via pip: ```pip install pquant-ml```.
+### Installation
 
-With TensorFlow ```pip install pquant-ml[tensorflow]```.
+PQuant requires **Python 3.10 or newer** (tested on 3.10–3.13).
 
-With PyTorch ```pip install pquant-ml[torch]```.
+PQuant is built on [Keras 3](https://keras.io/), which needs a backend to run. Install PQuant together
+with the backend you intend to use:
+
+```bash
+pip install pquant-ml[tensorflow]   # TensorFlow backend
+pip install pquant-ml[torch]        # PyTorch backend
+```
+
+Installing `pquant-ml` on its own will not give you a usable install — a backend is required.
+
+Optional extras:
+
+```bash
+pip install pquant-ml[onnx]         # ONNX export support
+pip install -e ".[dev]"             # contributors: linting, typing, tests, docs
+```
+
+### Selecting the backend
+
+Keras chooses its backend from the `KERAS_BACKEND` environment variable, and it must be set **before**
+importing PQuant. It defaults to `tensorflow`, so PyTorch users must set it explicitly:
+
+```bash
+export KERAS_BACKEND=torch          # or: tensorflow
+```
+
+Or from Python, before the first import:
+
+```python
+import os
+os.environ["KERAS_BACKEND"] = "torch"
+
+import pquant
+```
+
+### Quick start
+
+```python
+import os
+os.environ["KERAS_BACKEND"] = "torch"
+
+from pquant import add_compression_layers, pdp_config, train_model
+
+# 1. Load a default configuration for a pruning method (pdp, cs, dst, wanda, ap, mdmm, autosparse).
+config = pdp_config()
+
+# 2. Replace the model's layers with their compressed/quantized variants.
+model = add_compression_layers(model, config, input_shape)
+
+# 3. Train. You supply the per-epoch train/validate functions; PQuant drives the
+#    pre-training, pruning and fine-tuning phases described by the config.
+model = train_model(model, config, train_func, valid_func, input_shape)
+```
+
+See the [example notebooks](https://github.com/cern-nextgen/PQuantML/tree/main/examples) for complete,
+runnable versions.
 
 PQuant replaces the layers and activations it finds with a Compressed (in the case of layers) or Quantized (in the case of activations) variant. These automatically handle the quantization of the weights, biases and activations, and the pruning of the weights.
 Both PyTorch and TensorFlow models are supported.
@@ -38,14 +93,29 @@ Example notebook can be found [here](https://github.com/cern-nextgen/PQuantML/tr
   7. Usage of fine-tuning platform.
 
 ### Pruning methods
-A description of the pruning methods and their hyperparameters can be found [here](docs/pruning_methods.md).
+A description of the pruning methods and their hyperparameters can be found [here](docs/source/reference.md#pruning-methods).
 
 ### Quantization parameters
-A description of the quantization parameters can be found [here](docs/quantization_parameters.md).
+A description of the quantization parameters can be found [here](docs/source/reference.md#quantization-parameters).
 
 
 For detailed documentation check this page: [PQuantML documentation](https://pquantml.readthedocs.io/en/latest/)
 
+### Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, and
+[CHANGELOG.md](CHANGELOG.md) for the release history. To set up a development environment:
+
+```bash
+git clone https://github.com/cern-nextgen/PQuantML.git
+cd PQuantML
+pip install -e ".[dev,torch]"   # or ".[dev,tensorflow]"
+pre-commit install
+```
+
+### License
+
+PQuant is released under the [Apache License 2.0](LICENSE).
 
 ### Authors
  - Roope Niemi (CERN)

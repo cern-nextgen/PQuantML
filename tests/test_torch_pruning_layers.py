@@ -15,49 +15,49 @@ import os
 # routed through ``ops.custom_gradient``) exercise their intended backend.
 os.environ.setdefault("KERAS_BACKEND", "tensorflow")
 
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-import torch  # noqa: E402
-from keras import ops  # noqa: E402
+import numpy as np
+import pytest
+import torch
+from keras import ops
 
-from pquant.core.keras.pruning_methods.activation_pruning import (  # noqa: E402
+from pquant.core.keras.pruning_methods.activation_pruning import (
     ActivationPruning as KActivationPruning,
 )
-from pquant.core.keras.pruning_methods.autosparse import (  # noqa: E402
+from pquant.core.keras.pruning_methods.autosparse import (
     AutoSparse as KAutoSparse,
 )
-from pquant.core.keras.pruning_methods.cs import (  # noqa: E402
+from pquant.core.keras.pruning_methods.cs import (
     ContinuousSparsification as KCS,
 )
-from pquant.core.keras.pruning_methods.dst import DST as KDST  # noqa: E402
-from pquant.core.keras.pruning_methods.mdmm import MDMM as KMDMM  # noqa: E402
-from pquant.core.keras.pruning_methods.metric_functions import (  # noqa: E402
+from pquant.core.keras.pruning_methods.dst import DST as KDST
+from pquant.core.keras.pruning_methods.mdmm import MDMM as KMDMM
+from pquant.core.keras.pruning_methods.metric_functions import (
     StructuredSparsityMetric as KStructuredSparsityMetric,
 )
-from pquant.core.keras.pruning_methods.metric_functions import (  # noqa: E402
+from pquant.core.keras.pruning_methods.metric_functions import (
     UnstructuredSparsityMetric as KUnstructuredSparsityMetric,
 )
-from pquant.core.keras.pruning_methods.pdp import PDP as KPDP  # noqa: E402
-from pquant.core.keras.pruning_methods.wanda import Wanda as KWanda  # noqa: E402
-from pquant.core.torch.pruning_methods.activation_pruning import (  # noqa: E402
+from pquant.core.keras.pruning_methods.pdp import PDP as KPDP
+from pquant.core.keras.pruning_methods.wanda import Wanda as KWanda
+from pquant.core.torch.pruning_methods.activation_pruning import (
     ActivationPruning as TActivationPruning,
 )
-from pquant.core.torch.pruning_methods.autosparse import (  # noqa: E402
+from pquant.core.torch.pruning_methods.autosparse import (
     AutoSparse as TAutoSparse,
 )
-from pquant.core.torch.pruning_methods.cs import (  # noqa: E402
+from pquant.core.torch.pruning_methods.cs import (
     ContinuousSparsification as TCS,
 )
-from pquant.core.torch.pruning_methods.dst import DST as TDST  # noqa: E402
-from pquant.core.torch.pruning_methods.mdmm import MDMM as TMDMM  # noqa: E402
-from pquant.core.torch.pruning_methods.metric_functions import (  # noqa: E402
+from pquant.core.torch.pruning_methods.dst import DST as TDST
+from pquant.core.torch.pruning_methods.mdmm import MDMM as TMDMM
+from pquant.core.torch.pruning_methods.metric_functions import (
     StructuredSparsityMetric as TStructuredSparsityMetric,
 )
-from pquant.core.torch.pruning_methods.metric_functions import (  # noqa: E402
+from pquant.core.torch.pruning_methods.metric_functions import (
     UnstructuredSparsityMetric as TUnstructuredSparsityMetric,
 )
-from pquant.core.torch.pruning_methods.pdp import PDP as TPDP  # noqa: E402
-from pquant.core.torch.pruning_methods.wanda import Wanda as TWanda  # noqa: E402
+from pquant.core.torch.pruning_methods.pdp import PDP as TPDP
+from pquant.core.torch.pruning_methods.wanda import Wanda as TWanda
 
 ATOL = 1e-5
 RTOL = 1e-4
@@ -114,7 +114,7 @@ def _ap_config():
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape",
+    ("layer_type", "shape"),
     [
         ("linear", (16, 8)),
         ("conv", (16, 8, 3, 3)),
@@ -192,7 +192,7 @@ def _pdp_config(sparsity=0.75, structured=False):
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape,structured",
+    ("layer_type", "shape", "structured"),
     [
         ("linear", (16, 8), False),
         ("linear", (16, 8), True),
@@ -237,7 +237,7 @@ def test_pdp_matches_keras(layer_type, shape, structured):
     t_mask_np = _to_numpy(t.mask)
     actual_sparsity = float((t_mask_np < 0.5).sum()) / t_mask_np.size
     assert actual_sparsity == pytest.approx(target_sparsity, abs=1e-6), (
-        f"PDP {layer_type} (structured={structured}) mask sparsity " f"{actual_sparsity} != target {target_sparsity}"
+        f"PDP {layer_type} (structured={structured}) mask sparsity {actual_sparsity} != target {target_sparsity}"
     )
 
 
@@ -316,7 +316,7 @@ def _dst_config(threshold_type="channelwise"):
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape,threshold_type",
+    ("layer_type", "shape", "threshold_type"),
     [
         ("linear", (16, 8), "layerwise"),
         ("linear", (16, 8), "channelwise"),
@@ -382,7 +382,7 @@ def _wanda_config(sparsity=0.75, N=None, M=None):
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape,N,M",
+    ("layer_type", "shape", "N", "M"),
     [
         ("linear", (16, 8), None, None),
         ("conv", (16, 8, 3, 3), None, None),
@@ -421,9 +421,9 @@ def test_wanda_matches_keras(layer_type, shape, N, M):
     target_sparsity = (N / M) if (N is not None and M is not None) else cfg["pruning_parameters"]["sparsity"]
     mask_np = _to_numpy(t.mask)
     pruned_fraction = float((mask_np == 0).sum()) / mask_np.size
-    assert pruned_fraction == pytest.approx(
-        target_sparsity
-    ), f"Wanda {layer_type} (N={N}, M={M}) pruned fraction {pruned_fraction} != target {target_sparsity}"
+    assert pruned_fraction == pytest.approx(target_sparsity), (
+        f"Wanda {layer_type} (N={N}, M={M}) pruned fraction {pruned_fraction} != target {target_sparsity}"
+    )
 
     k_out = k(_keras_tensor(w_np))
     t_out = t(_torch_tensor(w_np))
@@ -453,7 +453,7 @@ def _autosparse_config(threshold_type="channelwise", threshold_init=-2.0):
 
 
 @pytest.mark.parametrize(
-    "layer_type,shape,threshold_type",
+    ("layer_type", "shape", "threshold_type"),
     [
         ("linear", (16, 8), "layerwise"),
         ("linear", (16, 8), "channelwise"),
@@ -535,7 +535,7 @@ def _mdmm_config(
 
 
 @pytest.mark.parametrize(
-    "constraint_type,metric_type",
+    ("constraint_type", "metric_type"),
     [
         ("Equality", "UnstructuredSparsity"),
         ("LessThanOrEqual", "UnstructuredSparsity"),

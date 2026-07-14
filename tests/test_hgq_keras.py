@@ -15,9 +15,6 @@ import keras
 import numpy as np
 import pytest
 from keras import ops
-
-from pquant import pdp_config
-from pquant.core.keras.quantizer import Quantizer
 from pquant.layers import (
     PQAvgPool1d,
     PQBatchNormalization,
@@ -26,6 +23,9 @@ from pquant.layers import (
     PQDense,
     PQMultiheadAttention,
 )
+
+from pquant import pdp_config
+from pquant.core.keras.quantizer import Quantizer
 
 BATCH_SIZE = 4
 IN_FEATURES = 16
@@ -115,7 +115,7 @@ def assert_data_granularity(output_shape, granularity):
         if granularity == "per_tensor":
             assert is_single_value(shape), f"data {name}: expected single value, got {shape}"
         else:  # per_weight: batch axis shared, rest per-element
-            assert shape == (1,) + tuple(output_shape[1:]), f"data {name}: expected batch-collapsed, got {shape}"
+            assert shape == (1, *tuple(output_shape[1:])), f"data {name}: expected batch-collapsed, got {shape}"
 
 
 @pytest.mark.parametrize("granularity", GRANULARITIES)

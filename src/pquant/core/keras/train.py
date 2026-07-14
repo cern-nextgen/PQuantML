@@ -113,7 +113,7 @@ class PQuantCallback(keras.callbacks.Callback):
         if self.log_keep_ratio:
             logs["remaining_weights"] = get_layer_keep_ratio(self.model)
 
-    def on_train_end(self, logs=None):  # noqa: ARG002
+    def on_train_end(self, logs=None):
         if self.apply_final_compression:
             apply_final_compression(self.model)
 

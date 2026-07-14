@@ -1,15 +1,17 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 def get_threshold_size(config, weight_shape):
     if config.pruning_parameters.threshold_type == "layerwise":
         return (1, 1)
-    elif config.pruning_parameters.threshold_type == "channelwise":
+    if config.pruning_parameters.threshold_type == "channelwise":
         return (weight_shape[0], 1)
-    elif config.pruning_parameters.threshold_type == "weightwise":
+    if config.pruning_parameters.threshold_type == "weightwise":
         return (weight_shape[0], int(np.prod(weight_shape[1:])))
+    return None
 
 
 class _BinaryStep(torch.autograd.Function):
@@ -33,6 +35,8 @@ def binary_step(weight):
 
 
 class DST(nn.Module):
+    mask: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):

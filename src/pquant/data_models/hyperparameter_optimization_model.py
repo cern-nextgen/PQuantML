@@ -1,16 +1,16 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class HyperparameterSearch(BaseModel):
-    numerical: Dict[str, List[Union[int, float]]] = Field(default_factory=dict)
-    categorical: Optional[Dict[str, List[str]]] = Field(default_factory=dict)
+    numerical: dict[str, list[int | float]] = Field(default_factory=dict)
+    categorical: dict[str, list[str]] | None = Field(default_factory=dict)
 
 
 class Sampler(BaseModel):
     type: str = Field(default="TPESampler")
-    params: Dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class BaseHyperparameterOptimizationModel(BaseModel):

@@ -6,11 +6,12 @@ from torch import nn
 
 os.environ["KERAS_BACKEND"] = "torch"
 
-from pquant.activations import PQActivation  # noqa: E402
-from pquant.core.hyperparameter_optimization import PQConfig  # noqa: E402
-from pquant.core.torch.quantizer import Quantizer  # noqa: E402
-from pquant.core.torch.tracing import check_quantization  # noqa: E402
-from pquant.layers import PQDense  # noqa: E402
+from pquant.activations import PQActivation
+from pquant.layers import PQDense
+
+from pquant.core.hyperparameter_optimization import PQConfig
+from pquant.core.torch.quantizer import Quantizer
+from pquant.core.torch.tracing import check_quantization
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32
@@ -401,8 +402,7 @@ def _build_dense_matmul_skip_model(config, dense_qout):
         def forward(self, x):
             y = self.d(x)
             y = torch.matmul(y, self.wq(self.w))  # matmul with constant matrix (assumed quantized)
-            y = y + x  # skip connection from the (unquantized) model input
-            return y
+            return y + x  # skip connection from the (unquantized) model input
 
     return DenseMatmulSkip()
 

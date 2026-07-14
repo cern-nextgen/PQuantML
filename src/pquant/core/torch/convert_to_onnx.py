@@ -28,6 +28,7 @@ import functools
 import logging
 import operator as _operator
 import os
+from typing import cast
 
 import numpy as np
 import onnx
@@ -41,8 +42,8 @@ from onnx import TensorProto
 
 os.environ["KERAS_BACKEND"] = "torch"  # must be set before any keras/pquant import
 
-from pquant.core.torch.activations import PQActivation  # noqa: E402
-from pquant.core.torch.layers import (  # noqa: E402
+from pquant.core.torch.activations import PQActivation
+from pquant.core.torch.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
     PQBatchNorm1d,
@@ -53,7 +54,7 @@ from pquant.core.torch.layers import (  # noqa: E402
     PQLayerNorm,
     PQMultiheadAttention,
 )
-from pquant.core.torch.quantizer import Quantizer  # noqa: E402
+from pquant.core.torch.quantizer import Quantizer
 
 # ---------------------------------------------------------------------------
 # QONNX Quant node
@@ -114,9 +115,7 @@ def _quant_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, o
 # ---------------------------------------------------------------------------
 
 
-def _qdq_node(
-    name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True
-):  # noqa: ARG001
+def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True):
     """Build QuantizeLinear+DequantizeLinear nodes, optionally preceded by a Clip.
 
     Returns ([nodes], output_name). Set include_clip=False to skip the Clip node
@@ -173,7 +172,7 @@ def _qdq_node(
 # ---------------------------------------------------------------------------
 
 
-def _int_weight_node(name_prefix, weight_np, k, i, f, initializers):  # noqa: ARG001 (i unused)
+def _int_weight_node(name_prefix, weight_np, k, i, f, initializers):
     """
     Store a weight tensor as int8/uint8 + DequantizeLinear.
 
@@ -401,8 +400,7 @@ def _add_dense_integer(module, prefix, current, nodes, initializers):
     current = y_float_name
 
     # Optional output quantization (e.g. last layer with quantize_output=True)
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, _qdq_node)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, _qdq_node)
 
 
 def _add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
@@ -477,8 +475,7 @@ def _add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qo
         nodes.append(oh.make_node("Add", inputs=[matmul_out, q_bias], outputs=[biased_out]))
         current = biased_out
 
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_dense(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops=False):
@@ -544,8 +541,7 @@ def _add_dense(module, prefix, current, nodes, initializers, quant_fn, use_qonnx
     nodes.append(oh.make_node("Gemm", inputs=gemm_inputs, outputs=[gemm_out], transB=1))
     current = gemm_out
 
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_qonnx, store_integer_weights):
@@ -612,13 +608,13 @@ def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_
         pads = _torch_padding_to_onnx(padding, ndim)
 
     to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
-    conv_attrs = dict(
-        kernel_shape=to_list(module.kernel_size, ndim),
-        strides=to_list(module.stride, ndim),
-        dilations=to_list(module.dilation, ndim),
-        group=module.groups,
-        auto_pad=auto_pad,
-    )
+    conv_attrs = {
+        "kernel_shape": to_list(module.kernel_size, ndim),
+        "strides": to_list(module.stride, ndim),
+        "dilations": to_list(module.dilation, ndim),
+        "group": module.groups,
+        "auto_pad": auto_pad,
+    }
     if pads is not None:
         conv_attrs["pads"] = pads
 
@@ -626,8 +622,7 @@ def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_
     nodes.append(oh.make_node("Conv", inputs=conv_inputs, outputs=[conv_out], **conv_attrs))
     current = conv_out
 
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_batchnorm(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
@@ -772,8 +767,7 @@ def _add_layernorm(module, prefix, current, nodes, initializers, quant_fn, use_q
         )
     )
     current = ln_out
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
@@ -795,8 +789,7 @@ def _add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
     )
     current = pool_out
 
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 # ---------------------------------------------------------------------------
@@ -1133,11 +1126,9 @@ def _emit_module(
             ]
             nodes.append(oh.make_node("Clip", inputs=[current, cmin_name, cmax_name], outputs=[act_out]))
         elif act == "leaky_relu":
-            nodes.append(
-                oh.make_node(
-                    "LeakyRelu", inputs=[current], outputs=[act_out], alpha=module.activation_function.negative_slope
-                )
-            )
+            # This branch only runs for leaky_relu, whose registry entry is an nn.LeakyReLU.
+            leaky_relu = cast("nn.LeakyReLU", module.activation_function)
+            nodes.append(oh.make_node("LeakyRelu", inputs=[current], outputs=[act_out], alpha=leaky_relu.negative_slope))
         elif act == "gelu":
             # Decompose so the default opset (13) works; ONNX added a Gelu op only in opset 20.
             approximate = getattr(module.activation_function, "approximate", "none")
@@ -1192,8 +1183,7 @@ def _emit_module(
         else:
             raise TypeError(f"PQActivation: unsupported activation {act!r} for ONNX export")
         current = act_out
-        current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-        return current
+        return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
     if isinstance(module, PQMultiheadAttention):
         # Sequential converter: treat as self-attention (Q = K = V = current).
         # Returns (out_name, avg_attn_name); expose only the attention output.
@@ -1276,7 +1266,7 @@ def convert_to_onnx(
     with torch.no_grad():
         dummy_out = model(torch.zeros(1, *input_shape))
     batch_dim = batch_size  # None → dynamic, int → fixed
-    output_shape = [batch_dim] + list(dummy_out.shape[1:])
+    output_shape = [batch_dim, *list(dummy_out.shape[1:])]
 
     batch_dim_vi = oh.make_tensor_value_info("input", TensorProto.FLOAT, [batch_dim, *input_shape])
     output_vi = oh.make_tensor_value_info(current, TensorProto.FLOAT, output_shape)
@@ -1388,7 +1378,7 @@ def export_qdq_layernorm(
                 f"(max abs round error = {np.max(np.abs(scaled - rounded)):.6g})"
             )
         if rounded.min() < INT16_MIN or rounded.max() > INT16_MAX:
-            raise ValueError(f"{name} overflows int16 at Q{frac_bits} " f"(range [{rounded.min()}, {rounded.max()}])")
+            raise ValueError(f"{name} overflows int16 at Q{frac_bits} (range [{rounded.min()}, {rounded.max()}])")
 
     _check_q_int16(gamma, GAMMA_F, "gamma")
     _check_q_int16(beta, BETA_F, "beta")
@@ -1536,12 +1526,15 @@ def convert_to_onnx_fx(
 
     onnx_nodes: list[onnx.NodeProto] = []
     initializers: list[onnx.TensorProto] = []
-    node_to_name: dict[_fx.Node, str] = {}
+    node_to_name: dict[_fx.Node, str | tuple[str, str]] = {}
     output_names: list[str] = []
 
     def _res(arg) -> str:
         if isinstance(arg, _fx.Node):
-            return node_to_name[arg]
+            name = node_to_name[arg]
+            if isinstance(name, tuple):
+                raise TypeError(f"Expected tensor node name, got tuple output for {arg.name!r}")
+            return name
         raise TypeError(f"Expected fx.Node, got {type(arg)}")
 
     def _binop_inputs(node: _fx.Node) -> list[str]:
@@ -1550,7 +1543,7 @@ def convert_to_onnx_fx(
         names: list[str] = []
         for i, a in enumerate(node.args[:2]):
             if isinstance(a, _fx.Node):
-                names.append(node_to_name[a])
+                names.append(_res(a))
             elif isinstance(a, (int, float, bool)):
                 cname = f"{node.name}_arg{i}_const"
                 initializers.append(onh.from_array(np.array(float(a), dtype=np.float32), name=cname))
@@ -1573,10 +1566,7 @@ def convert_to_onnx_fx(
 
     def _resolve_perm_dims(args, rank: int) -> list[int]:
         # Accept both permute(d0, d1, ...) and permute([d0, d1, ...]) shapes.
-        if len(args) == 1 and isinstance(args[0], (list, tuple)):
-            dims = args[0]
-        else:
-            dims = args
+        dims = args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
         return [int(d) % rank for d in dims]
 
     for node in gm.graph.nodes:
@@ -1599,9 +1589,9 @@ def convert_to_onnx_fx(
             mod_prefix = node.name.replace(".", "_")
             if isinstance(mod, PQMultiheadAttention):
                 # node.args = (query, key, value[, key_padding_mask, attn_mask, ...])
-                q_name = node_to_name[node.args[0]]
-                k_name = node_to_name[node.args[1]] if len(node.args) > 1 else q_name
-                v_name = node_to_name[node.args[2]] if len(node.args) > 2 else q_name
+                q_name = _res(node.args[0])
+                k_name = _res(node.args[1]) if len(node.args) > 1 else q_name
+                v_name = _res(node.args[2]) if len(node.args) > 2 else q_name
                 out_name, avg_attn_name = _add_mha(
                     mod,
                     mod_prefix,
@@ -1620,7 +1610,7 @@ def convert_to_onnx_fx(
                 current = _emit_module(
                     mod,
                     mod_prefix,
-                    node_to_name[node.args[0]],
+                    _res(node.args[0]),
                     onnx_nodes,
                     initializers,
                     quant_fn,
@@ -1638,7 +1628,7 @@ def convert_to_onnx_fx(
                 container = node_to_name[node.args[0]]
                 if not isinstance(container, tuple):
                     raise TypeError(
-                        f"operator.getitem on non-tuple node {node.args[0].name!r} " f"is not supported in FX ONNX export"
+                        f"operator.getitem on non-tuple node {node.args[0].name!r} is not supported in FX ONNX export"
                     )
                 node_to_name[node] = container[node.args[1]]
                 continue
@@ -1773,8 +1763,8 @@ def convert_to_onnx_fx(
 
     batch_dim = oh.make_tensor_value_info("input", TensorProto.FLOAT, [None, *input_shape])
     output_vis = [
-        oh.make_tensor_value_info(name, TensorProto.FLOAT, [None] + list(t.shape[1:]))
-        for name, t in zip(output_names, dummy_outs)
+        oh.make_tensor_value_info(name, TensorProto.FLOAT, [None, *list(t.shape[1:])])
+        for name, t in zip(output_names, dummy_outs, strict=False)
     ]
 
     onnx_graph = oh.make_graph(
@@ -1827,7 +1817,8 @@ if __name__ == "__main__":
 
     for module in model.modules():
         if hasattr(module, "apply_final_compression"):
-            module.apply_final_compression()
+            # Duck-typed hook, guarded by hasattr; not visible to type checkers.
+            module.apply_final_compression()  # type: ignore[operator]
 
     model.eval()
     with torch.no_grad():
@@ -1852,8 +1843,8 @@ if __name__ == "__main__":
     sess = ort.InferenceSession(onnx_path)
     onnx_out = sess.run(None, {sess.get_inputs()[0].name: x.numpy()})[0]
 
-    print(f"\n{'':=<55}")  # noqa: T201
-    print(f"  max |torch - qonnx| : {np.abs(torch_out - qonnx_out).max():.6f}")  # noqa: T201
-    print(f"  max |torch - onnx|  : {np.abs(torch_out - onnx_out).max():.6f}")  # noqa: T201
-    print(f"  max |qonnx - onnx|  : {np.abs(qonnx_out - onnx_out).max():.6f}")  # noqa: T201
-    print(f"{'':=<55}")  # noqa: T201
+    print(f"\n{'':=<55}")
+    print(f"  max |torch - qonnx| : {np.abs(torch_out - qonnx_out).max():.6f}")
+    print(f"  max |torch - onnx|  : {np.abs(torch_out - onnx_out).max():.6f}")
+    print(f"  max |qonnx - onnx|  : {np.abs(qonnx_out - onnx_out).max():.6f}")
+    print(f"{'':=<55}")

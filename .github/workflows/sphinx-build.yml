@@ -39,8 +39,7 @@ jobs:
           pip3 install ".[docs]"
       - name: Build
         run: |
-          cd docs
-          make html
+          sphinx-build -b html docs/source docs/_build/html
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

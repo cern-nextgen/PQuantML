@@ -25,9 +25,7 @@ def train_model(model, config, train_func, valid_func, input_shape=None, **kwarg
             valid_func(model, epoch=epoch, **kwargs)
             post_epoch_functions(model, e, training_config.pretraining_epochs)
             epoch += 1
-    post_pretrain_functions(
-        model, config, kwargs.get("trainloader", None), kwargs.get("loss_function", None), input_shape=input_shape
-    )
+    post_pretrain_functions(model, config, kwargs.get("trainloader"), kwargs.get("loss_function"), input_shape=input_shape)
     for r in range(training_config.rounds):
         for e in range(training_config.epochs):
             model.train()

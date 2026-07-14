@@ -67,7 +67,7 @@ def test_conv(config):
 
     # Each item in batch has same output, find out where the 0 outputs are
     mask = ops.average(ops.cast(layer_output > 0, layer_output.dtype), axis=0)
-    mask = ops.reshape(mask, list(mask.shape) + [1, 1, 1])
+    mask = ops.reshape(mask, [*list(mask.shape), 1, 1, 1])
     # mask = ops.expand_dims(ops.expand_dims(ops.expand_dims(mask, -1), -1), -1)
     for _ in range(config["pruning_parameters"]["t_delta"]):
         ap.collect_output(layer_output, training=True)

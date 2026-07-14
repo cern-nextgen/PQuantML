@@ -24,19 +24,19 @@ class Constraint(keras.layers.Layer):
         super().__init__(**kwargs)
 
         self.scale = self.add_weight(
-            name='scale',
+            name="scale",
             shape=(),
             initializer=lambda shape, dtype: ops.convert_to_tensor(scale, dtype=dtype),
             trainable=False,
         )
         self.damping = self.add_weight(
-            name='damping',
+            name="damping",
             shape=(),
             initializer=lambda shape, dtype: ops.convert_to_tensor(damping, dtype=dtype),
             trainable=False,
         )
         self.lmbda = self.add_weight(
-            name=f'{self.name}_lmbda',
+            name=f"{self.name}_lmbda",
             shape=(),
             initializer=lambda shape, dtype: ops.convert_to_tensor(lmbda_init, dtype=dtype),
             trainable=self.use_grad_,
@@ -44,7 +44,7 @@ class Constraint(keras.layers.Layer):
 
         if not self.use_grad_:
             self.prev_infs = self.add_weight(
-                name=f'{self.name}_prev_infs',
+                name=f"{self.name}_prev_infs",
                 shape=(),
                 initializer=lambda shape, dtype: ops.convert_to_tensor(0.0, dtype=dtype),
                 trainable=False,
@@ -67,9 +67,7 @@ class Constraint(keras.layers.Layer):
 
         l_term = ascent_lmbda * infeasibility
         damp_term = self.damping * ops.square(infeasibility) / 2
-        penalty = self.scale * (l_term + damp_term)
-
-        return penalty
+        return self.scale * (l_term + damp_term)
 
     @abc.abstractmethod
     def get_infeasibility(self, weight):

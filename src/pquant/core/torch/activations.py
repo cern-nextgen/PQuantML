@@ -1,21 +1,21 @@
+from collections.abc import Callable
 from math import prod
-from typing import Tuple, TypeVar, Union
+from typing import Any
 
 import torch
 import torch.nn as nn
-from torch import maximum, minimum, relu, tanh
+from torch import Tensor, maximum, minimum, relu, tanh
 
 from pquant.core.torch.quantizer import Quantizer
 
-T = TypeVar("T")
+QuantBits = tuple[Any, Any, Any]
 
 
 def hard_sigmoid(x):
     """Computes hard_sigmoid function that saturates between 0 and 1."""
     x = torch.tensor(0.5) * x + torch.tensor(0.5)
     x = maximum(x, torch.tensor(0.0))
-    x = minimum(x, torch.tensor(1.0))
-    return x
+    return minimum(x, torch.tensor(1.0))
 
 
 def hard_tanh(x):
@@ -23,7 +23,7 @@ def hard_tanh(x):
     return 2.0 * hard_sigmoid(x) - 1.0
 
 
-activation_registry = {
+activation_registry: dict[str, Callable[[Tensor], Tensor]] = {
     "relu": relu,
     "tanh": tanh,
     "hard_tanh": hard_tanh,
@@ -37,8 +37,8 @@ class PQActivation(nn.Module):
         self,
         config,
         activation="relu",
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         quantize_input=True,
         quantize_output=False,
         enable_ebops=True,
@@ -85,7 +85,7 @@ class PQActivation(nn.Module):
         self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
 
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
         self.enable_ebops = enable_ebops
@@ -95,7 +95,7 @@ class PQActivation(nn.Module):
         if self.built:
             return
         self.built = True
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
         self.output_quantizer = Quantizer(
             k=self.k_output,
             i=self.i_output,
@@ -184,21 +184,18 @@ class PQActivation(nn.Module):
         # Multiplier after fitcompress if condition, such that we don't use any relu multiplier during FITcompress search
         x = self.pre_activation(x)
         x = self.activation_function(x)
-        x = self.post_activation(x)
-        return x
+        return self.post_activation(x)
 
     def get_config(self):
-        config = super().get_config()
-        config.update(
-            {
-                "config": self.config.get_dict(),
-                "i_input": float(self.i_input),
-                "f_input": float(self.f_input),
-                "i_output": float(self.i_output),
-                "f_output": float(self.f_output),
-            }
-        )
-        return config
+        # Unlike the Keras variant, nn.Module has no get_config() to defer to,
+        # so the config is built from scratch here.
+        return {
+            "config": self.config.get_dict(),
+            "i_input": float(self.i_input),
+            "f_input": float(self.f_input),
+            "i_output": float(self.i_output),
+            "f_output": float(self.f_output),
+        }
 
     def extra_repr(self):
         return f"quantize_input = {self.quantize_input}, quantize_output = {self.quantize_output}"
@@ -224,18 +221,18 @@ class PQSoftmax(nn.Module):
     def __init__(
         self,
         config,
-        axis: Union[int, Tuple[int, ...]] = -1,
+        axis: int | tuple[int, ...] = -1,
         stable: bool = True,
         input_scaler: float = 1.0,
         parallelization_factor: int = -1,
         quantize_input: bool = True,
         quantize_output: bool = False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
-        exp_in_quant_bits: Tuple[T, T, T] = None,
-        exp_out_quant_bits: Tuple[T, T, T] = None,
-        inv_in_quant_bits: Tuple[T, T, T] = None,
-        inv_out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
+        exp_in_quant_bits: QuantBits | None = None,
+        exp_out_quant_bits: QuantBits | None = None,
+        inv_in_quant_bits: QuantBits | None = None,
+        inv_out_quant_bits: QuantBits | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -317,7 +314,7 @@ class PQSoftmax(nn.Module):
         self.built = True
         ndim = len(input_shape)
         self.axes = tuple(sorted(a if a >= 0 else a + ndim for a in self._axis))
-        self.input_shape = (1,) + tuple(input_shape[1:])
+        self.input_shape = (1, *tuple(input_shape[1:]))
 
         def _data_quantizer(k, i, f):
             return Quantizer(

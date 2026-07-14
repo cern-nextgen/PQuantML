@@ -17,13 +17,7 @@ import torch.nn as nn
 
 os.environ["KERAS_BACKEND"] = "torch"
 
-import pquant  # noqa: E402
-from pquant.core.torch.convert_to_onnx import (  # noqa: E402
-    convert_to_onnx,
-    convert_to_onnx_fx,
-    export_qdq_layernorm,
-)
-from pquant.layers import (  # noqa: E402
+from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
     PQBatchNorm1d,
@@ -32,6 +26,13 @@ from pquant.layers import (  # noqa: E402
     PQConv2d,
     PQDense,
     PQMultiheadAttention,
+)
+
+import pquant
+from pquant.core.torch.convert_to_onnx import (
+    convert_to_onnx,
+    convert_to_onnx_fx,
+    export_qdq_layernorm,
 )
 
 ort = pytest.importorskip("onnxruntime", reason="onnxruntime not installed")
@@ -59,10 +60,10 @@ def cfg():
 def _apply_compression(model: nn.Module):
     for m in model.modules():
         if hasattr(m, "apply_final_compression"):
-            m.apply_final_compression()
+            m.apply_final_compression()  # type: ignore[operator]
 
 
-def _onnx_run(model: nn.Module, x: torch.Tensor, input_shape: tuple, tmp_path) -> np.ndarray:
+def _onnx_run(model: nn.Sequential, x: torch.Tensor, input_shape: tuple, tmp_path) -> np.ndarray:
     """Export model → ONNX file in tmp_path, run with onnxruntime, return output."""
     path = str(tmp_path / "model.onnx")
     convert_to_onnx(model, input_shape=input_shape, output_path=path)

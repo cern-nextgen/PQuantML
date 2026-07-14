@@ -6,8 +6,8 @@ gradients on the fractional-bit parameter `f`, and should follow a similar
 training trajectory when fed the same data with the same initial state.
 """
 
-import pytest  # noqa: E402
-import torch  # noqa: E402
+import pytest
+import torch
 
 hgq = pytest.importorskip("hgq")
 from hgq.quantizer import Quantizer as KerasHGQQuantizer  # noqa: E402
@@ -58,7 +58,7 @@ def _as_torch(x):
 
 
 @pytest.mark.parametrize(
-    "overflow,round_mode,is_data",
+    ("overflow", "round_mode", "is_data"),
     [
         ("SAT", "RND", False),
         ("SAT", "RND_CONV", False),
@@ -89,7 +89,7 @@ def test_forward_matches_keras(overflow, round_mode, is_data):
 
     assert out_torch.shape == out_keras.shape, f"shape mismatch: {out_torch.shape} vs {out_keras.shape}"
     assert torch.allclose(out_torch, out_keras, rtol=RTOL, atol=ATOL), (
-        f"[{overflow}/{round_mode}/is_data={is_data}] " f"max diff = {(out_torch - out_keras).abs().max().item():.6g}"
+        f"[{overflow}/{round_mode}/is_data={is_data}] max diff = {(out_torch - out_keras).abs().max().item():.6g}"
     )
 
 
@@ -103,7 +103,7 @@ def test_forward_matches_keras_training_sat():
     out_keras = _as_torch(keras_q(x, training=True)).detach()
 
     assert torch.allclose(out_torch, out_keras, rtol=RTOL, atol=ATOL), (
-        f"training forward diverged, max diff = " f"{(out_torch - out_keras).abs().max().item():.6g}"
+        f"training forward diverged, max diff = {(out_torch - out_keras).abs().max().item():.6g}"
     )
 
 
@@ -139,7 +139,7 @@ def test_backward_f_gradient_sat():
     assert grad_f_torch.shape == grad_f_keras.shape, f"grad f shape mismatch: {grad_f_torch.shape} vs {grad_f_keras.shape}"
     # Gradient direction/magnitude should match up to STE discretisation noise.
     assert torch.allclose(grad_f_torch, grad_f_keras, rtol=1e-3, atol=1e-5), (
-        f"grad f mismatch, max diff = " f"{(grad_f_torch - grad_f_keras).abs().max().item():.6g}"
+        f"grad f mismatch, max diff = {(grad_f_torch - grad_f_keras).abs().max().item():.6g}"
     )
 
 
@@ -154,7 +154,7 @@ def test_backward_input_gradient_ste():
 
     assert x.grad is not None
     assert torch.allclose(x.grad, torch.ones_like(x), atol=1e-5), (
-        f"STE grad should be ~1 inside sat range, got max deviation " f"{(x.grad - 1).abs().max().item():.6g}"
+        f"STE grad should be ~1 inside sat range, got max deviation {(x.grad - 1).abs().max().item():.6g}"
     )
 
 
@@ -257,7 +257,7 @@ def test_data_granularity_shape(granularity, shape):
         if granularity == "per_tensor":
             assert _is_single_value(bw_shape), f"expected single value, got {bw_shape}"
         else:  # per_weight: batch axis shared, rest per-element
-            assert bw_shape == (1,) + shape[1:], f"expected batch-collapsed, got {bw_shape}"
+            assert bw_shape == (1, *shape[1:]), f"expected batch-collapsed, got {bw_shape}"
 
 
 @pytest.mark.parametrize("is_data", [False, True])
@@ -473,7 +473,7 @@ def _find_f_param(keras_q):
             continue
         # Keras Variables expose a torch `.value` parameter under the torch backend
         val = getattr(p, "value", p)
-        if isinstance(val, torch.nn.Parameter) or isinstance(val, torch.Tensor):
+        if isinstance(val, (torch.nn.Parameter, torch.Tensor)):
             return val
     raise RuntimeError("Could not locate f parameter on Keras hgq quantizer")
 
@@ -485,6 +485,6 @@ def _find_i_param(keras_q):
         if p is None:
             continue
         val = getattr(p, "value", p)
-        if isinstance(val, torch.nn.Parameter) or isinstance(val, torch.Tensor):
+        if isinstance(val, (torch.nn.Parameter, torch.Tensor)):
             return val
     return None

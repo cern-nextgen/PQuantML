@@ -1,16 +1,21 @@
 """Convert a pruned + quantized PQuant Torch model with Alkaid"""
 
+from typing import cast
+
 import numpy as np
 import pytest
 import torch
 import torch.nn as nn
-from alkaid.codegen import RTLModel  # noqa: E402
+from alkaid.codegen import RTLModel
 from alkaid.converter import trace_model
-from alkaid.trace import trace  # noqa: E402
-from alkaid.trace import FVArray, HWConfig  # noqa: E402
+from alkaid.trace import (
+    FVArray,
+    HWConfig,
+    trace,
+)
 
+import pquant._alkaid_plugin._alkaid_torch_plugin as _alkaid_torch_plugin
 from pquant import pdp_config
-from pquant._alkaid_plugin import _alkaid_torch_plugin  # noqa: E402
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.layers import (
     PQAvgPool1d,
@@ -71,7 +76,7 @@ def _random_prune(layer, fraction, rng):
     """Zero exactly ``fraction`` of the layer's weights via its pruning mask."""
     mask = layer.pruning_layer.mask
     numel = int(np.prod(tuple(mask.shape)))
-    n_zero = int(round(fraction * numel))
+    n_zero = round(fraction * numel)
     flat = np.ones(numel, dtype="float32")
     flat[rng.permutation(numel)[:n_zero]] = 0.0
     mask.copy_(torch.tensor(flat.reshape(tuple(mask.shape)), dtype=mask.dtype, device=mask.device))
@@ -89,10 +94,7 @@ def _rtl_predict(comb, path, data):
     rtl_model = RTLModel(comb, str(path), "model", flavor="verilog", latency_cutoff=5, clock_period=5.0, print_latency=False)
     rtl_model.write()
     rtl_model.compile()
-    if isinstance(data, list):
-        data = [a.astype(np.float64) for a in data]
-    else:
-        data = data.astype(np.float64)
+    data = [a.astype(np.float64) for a in data] if isinstance(data, list) else data.astype(np.float64)
     return rtl_model.predict(data)
 
 
@@ -223,13 +225,14 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
             torch.tensor(rng.standard_normal((4, IN_FEATURES, ALL_LIN)), dtype=torch.float32, device=device),
         )
 
-    assert ALL_TORCH_LAYER_TYPES <= {type(m).__name__ for m in model.modules()}
+    assert {type(m).__name__ for m in model.modules()} >= ALL_TORCH_LAYER_TYPES
 
     with torch.no_grad():
         for layer in [m for m in model.modules() if getattr(m, "pruning_layer", None) is not None]:
-            layer._weight.copy_(
-                torch.tensor(rng.standard_normal(tuple(layer._weight.shape)), dtype=layer._weight.dtype, device=device)
-            )
+            # _weight resolves via nn.Module.__getattr__ (typed Tensor | Module); bind it
+            # to a typed local so the tensor API is visible to type checkers.
+            weight = cast("torch.Tensor", layer._weight)
+            weight.copy_(torch.tensor(rng.standard_normal(tuple(weight.shape)), dtype=weight.dtype, device=device))
             _random_prune(layer, PRUNE_FRACTION, rng)
 
     apply_final_compression(model)
@@ -314,7 +317,7 @@ def test_alkaid_single_layer(case_id, tmp_path):
 
     model.train()
     with torch.no_grad():
-        model(torch.tensor(rng.standard_normal((4,) + shape[1:]), dtype=torch.float32))
+        model(torch.tensor(rng.standard_normal((4, *shape[1:])), dtype=torch.float32))
     apply_final_compression(model)
     model.eval()
 
@@ -322,7 +325,7 @@ def test_alkaid_single_layer(case_id, tmp_path):
     comb = trace(inp_fv, out_fv, optimize=True)
 
     n_samples = 16
-    x = rng.integers(0, 16, size=(n_samples,) + shape[1:]).astype("float32") / 16.0
+    x = rng.integers(0, 16, size=(n_samples, *shape[1:])).astype("float32") / 16.0
     with torch.no_grad():
         reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
     emulated = _rtl_predict(comb, tmp_path, x)

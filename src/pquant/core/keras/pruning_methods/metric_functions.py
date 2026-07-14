@@ -6,10 +6,10 @@ class UnstructuredSparsityMetric:
 
     """Calculates the ratio of non-zero weights in a tensor."""
 
-    def __init__(self, l0_mode='coarse', scale_mode="mean", epsilon=1e-3, target_sparsity=0.8, alpha=100.0):
+    def __init__(self, l0_mode="coarse", scale_mode="mean", epsilon=1e-3, target_sparsity=0.8, alpha=100.0):
         # Note: scale_mode:"sum" give very high losses for large model
-        assert l0_mode in ['coarse', 'smooth'], "Mode must be 'coarse' or 'smooth'"
-        assert scale_mode in ['sum', 'mean'], "Scale mode must be 'sum' or 'mean'"
+        assert l0_mode in ["coarse", "smooth"], "Mode must be 'coarse' or 'smooth'"
+        assert scale_mode in ["sum", "mean"], "Scale mode must be 'sum' or 'mean'"
         assert 0 <= target_sparsity <= 1, "target_sparsity must be between 0 and 1"
         self.l0_mode = l0_mode
         self.scale_mode = scale_mode
@@ -24,14 +24,14 @@ class UnstructuredSparsityMetric:
 
     def build(self):
         # l0 term -> number of zero weights/number of weights
-        if self.l0_mode == 'coarse':
+        if self.l0_mode == "coarse":
             self.l0_fn = self._coarse_l0
-        elif self.l0_mode == 'smooth':
+        elif self.l0_mode == "smooth":
             self.l0_fn = self._smooth_l0
 
-        if self.scale_mode == 'mean':
+        if self.scale_mode == "mean":
             self._scaling = self._mean_scaling
-        elif self.scale_mode == 'sum':
+        elif self.scale_mode == "sum":
             self._scaling = self._sum_scaling
 
     def _sum_scaling(self, fn_value, num):
@@ -57,9 +57,7 @@ class UnstructuredSparsityMetric:
         # farctor by constrction goes to zero when l0_term == target_sparsiity
         factor = ops.square(self.target_sparsity) - ops.square(l0_term)
         fn_value = factor * l1_term
-        fn_value = self._scaling(fn_value, num_weights)
-
-        return fn_value
+        return self._scaling(fn_value, num_weights)
 
 
 class StructuredSparsityMetric:

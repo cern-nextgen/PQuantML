@@ -84,8 +84,8 @@ else:
         pdp_config,
         wanda_config,
     )
-    from .core.keras import activations, layers, pruning_methods, quantizer
-    from .core.keras.layers import (
+    from .core.keras import activations, layers, pruning_methods, quantizer  # type: ignore[no-redef]
+    from .core.keras.layers import (  # type: ignore[assignment]
         add_compression_layers,
         apply_final_compression,
         get_ebops,
@@ -93,7 +93,7 @@ else:
         get_model_losses,
         post_training_prune,
     )
-    from .core.keras.train import train_model
+    from .core.keras.train import train_model  # type: ignore[assignment]
 
     _forwards = ["activations", "layers", "quantizer"]
 

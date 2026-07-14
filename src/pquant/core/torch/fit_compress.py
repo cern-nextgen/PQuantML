@@ -58,8 +58,8 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
                 model - current model with quantization enabled
 
         """
-        from pquant.activations import PQActivation  # noqa: F811
-        from pquant.layers import PQAvgPoolBase, PQWeightBiasBase  # noqa: F811
+        from pquant.activations import PQActivation
+        from pquant.layers import PQAvgPoolBase, PQWeightBiasBase
 
         for m in model.modules():
             if isinstance(m, PQWeightBiasBase):
@@ -93,8 +93,8 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
 
         """
 
-        from pquant.core.torch.activations import PQActivation  # noqa: F401, F811
-        from pquant.core.torch.layers import (  # noqa: F401, F811
+        from pquant.core.torch.activations import PQActivation  # noqa: F401
+        from pquant.core.torch.layers import (  # noqa: F401
             PQAvgPoolBase,
             PQBatchNorm2d,
             PQConv2d,
@@ -119,8 +119,8 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
         model - current model
 
         """
-        from pquant.core.torch.activations import PQActivation  # noqa: F811
-        from pquant.core.torch.layers import (  # noqa: F811
+        from pquant.core.torch.activations import PQActivation
+        from pquant.core.torch.layers import (
             PQAvgPoolBase,
             PQConv1d,
             PQConv2d,
@@ -151,7 +151,7 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
 
     # Start A* (path-finding through compression space)
     (
-        optimal_node,
+        _optimal_node,
         quant_prune_config,
         trained_uncompressed_model,
         optimal_node_pruning_mask,
@@ -184,7 +184,6 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
 
 
 class node:
-
     def __init__(
         self,
         matrices_params_layerwise,
@@ -232,7 +231,7 @@ class node:
         self.unquantized_weights = unquantized_weights
         self.int_bits = int_bits
         self.frac_bits = frac_bits
-        self.key = ''.join(random.choices(string.ascii_uppercase + string.digits, k=20))
+        self.key = "".join(random.choices(string.ascii_uppercase + string.digits, k=20))
 
     def extract_config_from_node(self, layer_names):
         """
@@ -247,16 +246,14 @@ class node:
 
         # Create a dictionary to store the quantization config w.r.t layer names
         quant_config = {
-            layer_name: [i_bits, f_bits] for layer_name, i_bits, f_bits in zip(layer_names, self.int_bits, self.frac_bits)
+            layer_name: [i_bits, f_bits]
+            for layer_name, i_bits, f_bits in zip(layer_names, self.int_bits, self.frac_bits, strict=False)
         }
 
-        config = {'quant_config': quant_config, 'pruning_metrics': self.pruning_metrics}
-
-        return config
+        return {"quant_config": quant_config, "pruning_metrics": self.pruning_metrics}
 
 
 class FITcompress:
-
     def __init__(self, model, device, dataloader, criterion, config, layerwise_pruning=False, input_shape=None):
         """
         Calculate initial EF of the uncompressed model and set up quantization &
@@ -320,7 +317,7 @@ class FITcompress:
         )
 
         # for N:M pruning in Wanda, use 50% pruning cap during FITcompress
-        if self.config.pruning_parameters.pruning_method == 'wanda' and type(self.config.pruning_parameters.N) is int:
+        if self.config.pruning_parameters.pruning_method == "wanda" and type(self.config.pruning_parameters.N) is int:
             self.pruning_schedule = 0.5 * (
                 1
                 - np.logspace(
@@ -333,15 +330,15 @@ class FITcompress:
 
         # Dictionary structure allows us to possibly iterate over multiple different pruning metrics
         # but currently only one as in FITcompress, the target pruning sparsity, i.e. percentage
-        pruning_metrics = {'percentage': 0}
+        pruning_metrics = {"percentage": 0}
 
         # If we want to find sparsity targets per layer (not part of FITcompress paper)
         if layerwise_pruning:
             self.pruning_schedulers_layerwise = self.get_pruning_schedulers_layer_specific(
-                matrices_params_layerwise, None, mode='fit'
+                matrices_params_layerwise, None, mode="fit"
             )
             # Add the layer-specific starting pruning percentages to the current metric
-            pruning_metrics = pruning_metrics | {f'{self.layer_names[i]}_percentage': 0 for i in range(self.n_layers)}
+            pruning_metrics = pruning_metrics | {f"{self.layer_names[i]}_percentage": 0 for i in range(self.n_layers)}
 
         # Initialize the first node in the compression space
         self.initial_node = node(
@@ -368,7 +365,7 @@ class FITcompress:
         # Intialize a list to store nodes that can be traversed during the path finding process
         self.potential_nodes = [self.initial_node]
 
-    def get_pruning_schedulers_layer_specific(self, matrices_params_layerwise, global_sparsity_scheduler, mode='fit'):
+    def get_pruning_schedulers_layer_specific(self, matrices_params_layerwise, global_sparsity_scheduler, mode="fit"):
         """
         Calculates layer-specific pruning schedulers. The idea is that layers with weights
         that are not that much affected by pertubation should be pruned more/faster than layers with weights
@@ -383,7 +380,7 @@ class FITcompress:
         """
 
         schedulers = {}
-        if mode == 'fit':
+        if mode == "fit":
             # Get the layer-wise FIT scores of the initial model
             _, FIT_layerwise = self.fit_computer.get_FIT_old(
                 FeM=self.FeM, params_after=matrices_params_layerwise, same_theta=True
@@ -396,7 +393,6 @@ class FITcompress:
             max_importance = max(FIT_layerwise_summed)
 
             for layer_idx, importance in enumerate(FIT_layerwise_summed):
-
                 # Scale importance between 0 and 1
                 importance_ratio = (importance - min_importance) / (max_importance - min_importance)
 
@@ -447,12 +443,12 @@ class FITcompress:
                 this is not done in the original code.
         """
         i = 0
-        from pquant.layers import PQConv2d, PQDense  # noqa: F811
+        from pquant.layers import PQConv2d, PQDense
 
         for _, module in model.named_modules():
             if isinstance(module, (PQDense, PQConv2d)):
                 for name_param, matrix_param in list(module.named_parameters()):
-                    if name_param.endswith('_weight'):
+                    if name_param.endswith("_weight"):
                         matrix_param.data = nn.parameter.Parameter(params[i].to(self.device))
                         matrix_param.collect = True
                         i += 1
@@ -643,7 +639,6 @@ class FITcompress:
         current_node_matrices_params_layerwise = []
         # Now iterate through all layers
         for idx, curr_pruning_percentage in enumerate(pruning_metrics.values()):
-
             if idx == 0:  # Global pruning percentage
                 continue
 
@@ -665,9 +660,7 @@ class FITcompress:
             )
 
         # Put everything on GPU again
-        current_node_matrices_params_layerwise = [layer.to(self.device) for layer in current_node_matrices_params_layerwise]
-
-        return current_node_matrices_params_layerwise
+        return [layer.to(self.device) for layer in current_node_matrices_params_layerwise]
 
     def set_activation_bits(self, layer):
         if layer.quantize_input:
@@ -718,8 +711,8 @@ class FITcompress:
                         pool_int_bits: Integer bits for the (single) pooling layer (res20).
                         pool_frac_bits: Fractional bits for the (single) pooling layer (res20).
         """
-        from pquant.core.torch.activations import PQActivation  # noqa: F811
-        from pquant.core.torch.layers import (  # noqa: F811
+        from pquant.core.torch.activations import PQActivation
+        from pquant.core.torch.layers import (
             PQAvgPoolBase,
             PQWeightBiasBase,
         )
@@ -728,9 +721,9 @@ class FITcompress:
         # Store input data, as we also need to quantize input (which is currently done in resnet.py of pquant-dev)
         data_input = []
         for m in self.model.modules():
-            if isinstance(m, (PQAvgPoolBase, PQWeightBiasBase)):
-                m.post_fitcompress_calibration = True
-            elif m.__class__ == PQActivation and m.activation_name == "relu":
+            if isinstance(m, (PQAvgPoolBase, PQWeightBiasBase)) or (
+                m.__class__ == PQActivation and m.activation_name == "relu"
+            ):
                 m.post_fitcompress_calibration = True
 
         # Trigger forward pass through model
@@ -746,13 +739,11 @@ class FITcompress:
                 counter += 1
 
         for m in self.model.modules():
-            if isinstance(m, PQAvgPoolBase):
-                m.post_fitcompress_calibration = False
-                self.set_activation_bits(m)
-            elif m.__class__ == PQActivation and m.activation_name == "relu":
-                m.post_fitcompress_calibration = False
-                self.set_activation_bits(m)
-            elif isinstance(m, PQWeightBiasBase):
+            if (
+                isinstance(m, PQAvgPoolBase)
+                or (m.__class__ == PQActivation and m.activation_name == "relu")
+                or isinstance(m, PQWeightBiasBase)
+            ):
                 m.post_fitcompress_calibration = False
                 self.set_activation_bits(m)
 
@@ -768,7 +759,7 @@ class FITcompress:
         """
         iterations = 0
         while len(self.potential_nodes) > 0 and iterations < 1000:
-            logging.info(f'Iteration : {iterations} ')
+            logging.info(f"Iteration : {iterations} ")
 
             next_best_node = None
 
@@ -777,7 +768,6 @@ class FITcompress:
             for p_node in self.potential_nodes:
                 # If we find a node with wanted compression rate, we can return it and stop the A* algorithm
                 if p_node.curr_compression_rate < self.compression_goal:
-
                     logging.info(
                         f"Optimal node found with full distance {p_node.full_dist}, "
                         f"compression rate {p_node.curr_compression_rate}, "
@@ -800,7 +790,7 @@ class FITcompress:
                     self.assign_parameters(self.model, params_quantized_unpruned)
 
                     self.post_fitcompress_calibration(
-                        p_node.extract_config_from_node(self.layer_names)['quant_config'], config
+                        p_node.extract_config_from_node(self.layer_names)["quant_config"], config
                     )
 
                     return (
@@ -830,6 +820,7 @@ class FITcompress:
             self.create_neighbours(next_best_node)
 
             iterations += 1
+        return None
 
     def create_neighbours(self, current_node):
         """
@@ -866,7 +857,6 @@ class FITcompress:
         """
 
         if self.config.fitcompress_parameters.approximate:
-
             # Update FeM for the best node and use it when creating the neighbours for quantization.
             # This leads to num_layers less FIT calculations, as we do not need to calculate the FeM again,
             # which reduces runtime
@@ -889,7 +879,6 @@ class FITcompress:
         logging.info("Current node states for quantization & pruning: ", current_node_state)
         if self.config.fitcompress_parameters.optimize_quantization:
             for layer_idx in range(self.n_layers):
-
                 # Set neighbour state to current state
                 neighbour_node_state = current_node_state.copy()
 
@@ -934,7 +923,6 @@ class FITcompress:
                     self.potential_nodes.append(neighbour_node)
 
         if self.config.fitcompress_parameters.optimize_pruning:
-
             # Set neighbour state to current state
             neighbour_node_state = current_node_state.copy()
 
@@ -973,7 +961,6 @@ class FITcompress:
                         current_node=current_node, pruning_metrics=neighbour_node_pruning_metrics
                     )
                 else:
-
                     neighbour_node_parameters_layerwise, neighbour_node_unquantized_parameters_layerwise = self.add_pruning(
                         current_node=current_node,
                         params=current_node.parameters.copy(),
@@ -1062,7 +1049,7 @@ class FITcompress:
         )
 
         # Create the instance for the neighbour node
-        neighbour_node = node(
+        return node(
             matrices_params_layerwise=neighbour_node_parameters_layerwise,
             FeM=neighbour_node_FeM,
             quant_config=neighbour_node_quant_config,
@@ -1076,8 +1063,6 @@ class FITcompress:
             int_bits=neighbour_node_int_bits,
             frac_bits=neighbour_node_frac_bits,
         )
-
-        return neighbour_node
 
     def calculate_path_cost(
         self, current_node, neighbour_node_parameters_layerwise, neighbour_node_FeM, neighbour_node_quant_config
@@ -1147,7 +1132,7 @@ class FITcompress:
 
         active_bytes = 0.0
         uncompressed = 0.0
-        for params_layer, quant_conf_layer in zip(params_layerwise, quant_config):
+        for params_layer, quant_conf_layer in zip(params_layerwise, quant_config, strict=False):
             # Count which parameters are non-zero, non_zero is simply the number of non-zero parameters in the current layer
             int_bits = max(0, math.ceil(math.log2(torch.max(torch.abs(params_layer)))))
             frac_bits_round_threshold = max(
@@ -1169,7 +1154,6 @@ class FITcompress:
 
 
 class FIT:
-
     def __init__(self, model, device, input_spec):
         """
         Initialize the FIT class, which is used to compute the FIT values for quantization and pruning.
@@ -1211,18 +1195,17 @@ class FIT:
                 matrices_params_sizes_layerwise (list): A list of sizes of the weight matrices for each layer of interest.
                 layer_names (list): A list of the names of the layers of interest.
         """
-        from pquant.layers import PQConv2d, PQDense  # noqa: F811
+        from pquant.layers import PQConv2d, PQDense
 
         matrices_params_layerwise = []
         layer_names = []
         # Iterate through all modules in the model
         for name, module in model.named_modules():
-
             if isinstance(module, (PQDense, PQConv2d)):
                 layer_names.append(name)
                 for name_param, matrix_param in list(module.named_parameters()):
                     # Search for the weights
-                    if name_param.endswith('_weight'):
+                    if name_param.endswith("_weight"):
                         matrices_params_layerwise.append(matrix_param)
                         # Set their collect flag to True (later on we can then access them easily like this)
                         matrix_param.collect = True
@@ -1248,7 +1231,7 @@ class FIT:
         Args :
                 model (torch.nn.Module): The model to hook the layers of.
         """
-        from pquant.layers import PQConv2d, PQDense  # noqa: F811
+        from pquant.layers import PQConv2d, PQDense
 
         def hook_inp(module, inp, outp):
             """
@@ -1276,7 +1259,7 @@ class FIT:
         self.hooks.clear()
         assert len(self.hooks) == 0, "Hooks were not removed properly!"
 
-    def get_loss(self, model, data_batch, target_batch, loss_func, mode='mini-batch'):
+    def get_loss(self, model, data_batch, target_batch, loss_func, mode="mini-batch"):
         """
         This function triggers the loss calcuation of a model.
         We use it such that we can then calculate gradients which are
@@ -1302,20 +1285,17 @@ class FIT:
 
         output = model(data_batch)
 
-        if mode == 'mini-batch':
+        if mode == "mini-batch":
             # Check which loss_func instance is active
             if isinstance(loss_func, torch.nn.CrossEntropyLoss):
                 # Calculate loss based on mini-batch and averaged over it
                 loss_func = torch.nn.CrossEntropyLoss()
 
-        if mode == 'sample':
-            if isinstance(loss_func, torch.nn.CrossEntropyLoss):
-                # Calculate loss for each sample
-                loss_func = torch.nn.CrossEntropyLoss(reduce=False, reduction='none')
+        if mode == "sample" and isinstance(loss_func, torch.nn.CrossEntropyLoss):
+            # Calculate loss for each sample
+            loss_func = torch.nn.CrossEntropyLoss(reduce=False, reduction="none")
 
-        loss = loss_func(output, target_batch)
-
-        return loss
+        return loss_func(output, target_batch)
 
     def get_gradients(self, model, loss, matrices_layerwise, batch_size):
         """
@@ -1332,9 +1312,7 @@ class FIT:
                 squared_grad : Squared gradients for the passed parameters/activations, layer-wise.
         """
         grads = torch.autograd.grad(loss, [*matrices_layerwise], retain_graph=True)
-        squared_grads = [batch_size * g**2 for g in grads]
-
-        return squared_grads
+        return [batch_size * g**2 for g in grads]
 
     def get_EF(self, model, data_loader, loss_func, tolerance=1e-3, min_iterations=100, max_iterations=100):
         """
@@ -1405,16 +1383,15 @@ class FIT:
                 if data_batch.size(0) != batch_size:
                     continue  # Uneven batches break loop
 
-                loss = self.get_loss(model, data_batch, target_batch, loss_func, mode='mini-batch')
+                loss = self.get_loss(model, data_batch, target_batch, loss_func, mode="mini-batch")
                 curr_batch_matrices_params_layerwise = []
                 curr_batch_minmax_range_params_layerwise = []
                 for weights in model.parameters():
-                    if hasattr(weights, "collect"):
-                        if weights.collect:
-                            curr_batch_matrices_params_layerwise.append(weights)
-                            curr_batch_minmax_range_params_layerwise.append(
-                                (torch.max(weights.data) - torch.min(weights.data)).detach().cpu().numpy()
-                            )
+                    if hasattr(weights, "collect") and weights.collect:
+                        curr_batch_matrices_params_layerwise.append(weights)
+                        curr_batch_minmax_range_params_layerwise.append(
+                            (torch.max(weights.data) - torch.min(weights.data)).detach().cpu().numpy()
+                        )
 
                 per_batch_layerwise_minmax_range_params.append(curr_batch_minmax_range_params_layerwise)
 
@@ -1457,7 +1434,7 @@ class FIT:
                 batch_accum_EF_matrices_params_layerwise = [
                     curr_val_layer + curr_squared_grad_layer + 0.0
                     for curr_val_layer, curr_squared_grad_layer in zip(
-                        batch_accum_EF_matrices_params_layerwise, curr_batch_squared_grads_params_layerwise
+                        batch_accum_EF_matrices_params_layerwise, curr_batch_squared_grads_params_layerwise, strict=False
                     )
                 ]
                 batch_accum_EF_matrices_activs_layerwise = [
@@ -1465,6 +1442,7 @@ class FIT:
                     for acc, grad in zip(
                         batch_accum_EF_matrices_activs_layerwise,
                         curr_batch_squared_grads_activs_layerwise,
+                        strict=False,
                     )
                 ]
                 total_batches += 1
@@ -1630,17 +1608,20 @@ class FIT:
         curr_FIT (float): FIT value
         """
 
-        curr_FIT = 0
+        # Polymorphic numeric accumulator: starts as int, accumulates ndarray/Tensor.
+        curr_FIT: typing.Any = 0
+        delta_theta: typing.Any
         if not same_theta:
-            for theta_before, theta_after, EF_trace in zip(params_before, params_after, EF_trace_params_layerwise):
+            for theta_before, theta_after, EF_trace in zip(
+                params_before, params_after, EF_trace_params_layerwise, strict=False
+            ):
                 # Calculate the squared difference between the parameters before and after
                 delta_theta = torch.sum((theta_before.detach().cpu() - theta_after.detach().cpu()) ** 2).numpy()
                 # Calculate the FIT for the current layer
                 curr_FIT += EF_trace * delta_theta
 
         else:
-
-            for theta, EF_trace in zip(params_before, EF_trace_params_layerwise):
+            for theta, EF_trace in zip(params_before, EF_trace_params_layerwise, strict=False):
                 # Calculate the squared difference between the parameters before and after
                 delta_theta = torch.sum(theta.detach().cpu() ** 2)
                 # Calculate the FIT for the current layer
@@ -1665,13 +1646,12 @@ class FIT:
 
         """
 
-        curr_FIT = 0
+        # Polymorphic numeric accumulator: starts as int, accumulates ndarray.
+        curr_FIT: typing.Any = 0
 
         if not same_theta:
-
             # Taken from compute_fake_FIT_params()
-            for theta_before, theta_after, layer_FeM in zip(params_before, params_after, FeM):
-
+            for theta_before, theta_after, layer_FeM in zip(params_before, params_after, FeM, strict=False):
                 curr_FIT_layer = torch.sum(
                     layer_FeM * (theta_before.detach().cpu() - theta_after.detach().cpu()) ** 2
                 ).numpy()
@@ -1679,18 +1659,16 @@ class FIT:
 
             return curr_FIT
 
-        else:
-            FIT_layerwise = []
+        FIT_layerwise = []
 
-            # Taken from generate_FIT_pruning_importance()
-            for theta_after, layer_FeM in zip(params_after, FeM):
+        # Taken from generate_FIT_pruning_importance()
+        for theta_after, layer_FeM in zip(params_after, FeM, strict=False):
+            curr_FIT_layer = layer_FeM * (theta_after.detach().cpu() ** 2)
+            FIT_layerwise.append(curr_FIT_layer)
 
-                curr_FIT_layer = layer_FeM * (theta_after.detach().cpu() ** 2)
-                FIT_layerwise.append(curr_FIT_layer)
+        # Taken from renorm_heuristic()
+        final_FIT = torch.sum(torch.cat([FIT_score.view(-1) for FIT_score in FIT_layerwise])).detach().cpu().numpy()
 
-            # Taken from renorm_heuristic()
-            final_FIT = torch.sum(torch.cat([FIT_score.view(-1) for FIT_score in FIT_layerwise])).detach().cpu().numpy()
+        curr_FIT += final_FIT
 
-            curr_FIT += final_FIT
-
-            return curr_FIT, FIT_layerwise
+        return curr_FIT, FIT_layerwise

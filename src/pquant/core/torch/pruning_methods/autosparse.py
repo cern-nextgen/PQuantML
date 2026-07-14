@@ -3,6 +3,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 _PI = math.pi
 _L0 = -6.0
@@ -25,10 +26,11 @@ def cosine_sigmoid_decay(i, T):
 def get_threshold_size(config, weight_shape):
     if config.pruning_parameters.threshold_type == "layerwise":
         return (1, 1)
-    elif config.pruning_parameters.threshold_type == "channelwise":
+    if config.pruning_parameters.threshold_type == "channelwise":
         return (weight_shape[0], 1)
-    elif config.pruning_parameters.threshold_type == "weightwise":
+    if config.pruning_parameters.threshold_type == "weightwise":
         return (weight_shape[0], int(np.prod(weight_shape[1:])))
+    return None
 
 
 class _AutoSparsePrune(torch.autograd.Function):
@@ -59,6 +61,9 @@ def autosparse_prune(x, alpha, backward_sparsity_flag, backward_sparsity):
 
 
 class AutoSparse(nn.Module):
+    mask: Tensor
+    alpha: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):
@@ -101,10 +106,9 @@ class AutoSparse(nn.Module):
         with torch.no_grad():
             self.mask.copy_(new_binary_mask)
 
-        sparse = torch.sign(weight) * autosparse_prune(
+        return torch.sign(weight) * autosparse_prune(
             w_t, self.alpha, self._backward_sparsity_flag, self._backward_sparsity
         ).reshape(weight.shape)
-        return sparse
 
     def get_hard_mask(self, weight=None):
         return self.mask

@@ -1,9 +1,12 @@
 import inspect
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 from pquant.core.torch.pruning_methods.constraint_functions import (
+    Constraint,
     EqualityConstraint,
     GreaterThanOrEqualConstraint,
     LessThanOrEqualConstraint,
@@ -18,7 +21,7 @@ _METRIC_REGISTRY = {
     "StructuredSparsity": StructuredSparsityMetric,
 }
 
-_CONSTRAINT_REGISTRY = {
+_CONSTRAINT_REGISTRY: dict[str, Callable[..., Constraint]] = {
     "Equality": EqualityConstraint,
     "LessThanOrEqual": LessThanOrEqualConstraint,
     "GreaterThanOrEqual": GreaterThanOrEqualConstraint,
@@ -26,6 +29,8 @@ _CONSTRAINT_REGISTRY = {
 
 
 class MDMM(nn.Module):
+    mask: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):

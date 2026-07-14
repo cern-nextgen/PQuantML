@@ -3,14 +3,10 @@
 import keras
 import numpy as np
 import pytest
-from alkaid.codegen import RTLModel  # noqa: E402
+from alkaid.codegen import RTLModel
 from alkaid.converter import trace_model
-from alkaid.trace import trace  # noqa: E402
-
-from pquant import pdp_config
-from pquant._alkaid_plugin import _alkaid_keras_plugin  # noqa: E402
+from alkaid.trace import trace
 from pquant.activations import PQActivation
-from pquant.core.keras.quantizer import Quantizer
 from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
@@ -24,6 +20,10 @@ from pquant.layers import (
     PQSoftmax,
     apply_final_compression,
 )
+
+import pquant._alkaid_plugin._alkaid_keras_plugin as _alkaid_keras_plugin
+from pquant import pdp_config
+from pquant.core.keras.quantizer import Quantizer
 
 _alkaid_keras_plugin.register()
 
@@ -68,10 +68,7 @@ def _rtl_predict(comb, path, data):
     rtl_model = RTLModel(comb, str(path), "model", flavor="verilog", latency_cutoff=5, clock_period=5.0, print_latency=False)
     rtl_model.write()
     rtl_model.compile()
-    if isinstance(data, list):
-        data = [a.astype(np.float64) for a in data]
-    else:
-        data = data.astype(np.float64)
+    data = [a.astype(np.float64) for a in data] if isinstance(data, list) else data.astype(np.float64)
     return rtl_model.predict(data)
 
 
@@ -79,7 +76,7 @@ def _random_prune(layer, fraction, rng):
     """Zero exactly ``fraction`` of the layer's weights via its pruning mask."""
     mask = layer.pruning_layer.mask
     numel = int(np.prod(mask.shape))
-    n_zero = int(round(fraction * numel))
+    n_zero = round(fraction * numel)
     flat = np.ones(numel, dtype="float32")
     flat[rng.permutation(numel)[:n_zero]] = 0.0
     mask.assign(flat.reshape(mask.shape))
@@ -90,8 +87,8 @@ def _build_pruned_compressed_model(config, rng):
     """Build the model, build it (one forward), prune 90%, and apply final compression."""
     model = _build_model(config)
 
-    img = np.zeros((1,) + IMG_SHAPE, dtype="float32")
-    seq = np.zeros((1,) + SEQ_SHAPE, dtype="float32")
+    img = np.zeros((1, *IMG_SHAPE), dtype="float32")
+    seq = np.zeros((1, *SEQ_SHAPE), dtype="float32")
 
     # Call once to build the quantizers and pruning masks.
     model([img, seq])
@@ -111,7 +108,7 @@ def test_alkaid_conversion_pruned_quantized_model():
     config.quantization_parameters.enable_quantization = True
 
     rng = np.random.default_rng(0)
-    model, pq_layers, expected_sparsity = _build_pruned_compressed_model(config, rng)
+    model, pq_layers, _expected_sparsity = _build_pruned_compressed_model(config, rng)
     assert {type(layer).__name__ for layer in pq_layers} == {"PQConv2d", "PQConv1d", "PQDense"}
 
     inp, out = trace_model(model, inputs_kif=INPUT_KIF)
@@ -131,8 +128,8 @@ def test_alkaid_rtl_matches_model(tmp_path):
     comb = trace(inp_fv, out_fv, optimize=True)
 
     n_samples = 16
-    img = rng.integers(0, 16, size=(n_samples,) + IMG_SHAPE).astype("float32") / 16.0
-    seq = rng.integers(0, 16, size=(n_samples,) + SEQ_SHAPE).astype("float32") / 16.0
+    img = rng.integers(0, 16, size=(n_samples, *IMG_SHAPE)).astype("float32") / 16.0
+    seq = rng.integers(0, 16, size=(n_samples, *SEQ_SHAPE)).astype("float32") / 16.0
 
     reference = np.asarray(model([img, seq]), dtype=np.float64)  # (n_samples, OUT_FEATURES)
     emulated = _rtl_predict(comb, tmp_path, [img, seq])
@@ -214,12 +211,12 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
     # Build with random input so batchnorm running stats are sane.
     model(
         [
-            rng.standard_normal((4,) + ALL_IMG_SHAPE).astype("float32"),
-            rng.standard_normal((4,) + ALL_SEQ_SHAPE).astype("float32"),
+            rng.standard_normal((4, *ALL_IMG_SHAPE)).astype("float32"),
+            rng.standard_normal((4, *ALL_SEQ_SHAPE)).astype("float32"),
         ]
     )
 
-    assert ALL_KERAS_LAYER_TYPES <= {type(layer).__name__ for layer in model.layers}
+    assert {type(layer).__name__ for layer in model.layers} >= ALL_KERAS_LAYER_TYPES
 
     for layer in _all_prunable_layers(model):
         layer._kernel.assign(rng.standard_normal(layer._kernel.shape).astype("float32"))
@@ -232,8 +229,8 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
     assert out_fv.shape == (OUT_FEATURES,)
 
     n_samples = 16
-    img = rng.integers(0, 16, size=(n_samples,) + ALL_IMG_SHAPE).astype("float32") / 16.0
-    seq = rng.integers(0, 16, size=(n_samples,) + ALL_SEQ_SHAPE).astype("float32") / 16.0
+    img = rng.integers(0, 16, size=(n_samples, *ALL_IMG_SHAPE)).astype("float32") / 16.0
+    seq = rng.integers(0, 16, size=(n_samples, *ALL_SEQ_SHAPE)).astype("float32") / 16.0
     reference = np.asarray(model([img, seq]), dtype=np.float64)
     emulated = _rtl_predict(comb, tmp_path, [img, seq])
     assert (tmp_path / "src" / "model.v").exists()
@@ -316,14 +313,14 @@ def test_alkaid_single_layer(case_id, tmp_path):
     input_shape, model = _SINGLE_LAYER_CASES[case_id](config)
     rng = np.random.default_rng(0)
 
-    model(rng.standard_normal((4,) + input_shape).astype("float32"))  # build
+    model(rng.standard_normal((4, *input_shape)).astype("float32"))  # build
     apply_final_compression(model)
 
     inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
     comb = trace(inp_fv, out_fv, optimize=True)
 
     n_samples = 16
-    x = rng.integers(0, 16, size=(n_samples,) + input_shape).astype("float32") / 16.0
+    x = rng.integers(0, 16, size=(n_samples, *input_shape)).astype("float32") / 16.0
     reference = np.asarray(model(x), dtype=np.float64).reshape(n_samples, -1)
     emulated = _rtl_predict(comb, tmp_path, x)
 

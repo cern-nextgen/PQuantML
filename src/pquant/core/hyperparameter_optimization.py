@@ -2,7 +2,9 @@ import copy
 import json
 import logging
 import os
-from typing import Annotated, Callable, Dict, Optional, Union
+from collections.abc import Callable
+from pathlib import Path
+from typing import Annotated
 
 import keras
 import optuna
@@ -28,12 +30,14 @@ from pquant.data_models.pruning_model import (
 from pquant.data_models.quantization_model import BaseQuantizationModel
 from pquant.data_models.training_model import BaseTrainingModel
 
+CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
+
 
 def get_sampler(sampler_type, **kwargs):
     try:
         return constants.SAMPLER_REGISTRY[sampler_type](**kwargs)
-    except KeyError:
-        raise ValueError(f"Unknown sampler type: {sampler_type}")
+    except KeyError as err:
+        raise ValueError(f"Unknown sampler type: {sampler_type}") from err
 
 
 def log_model_by_backend(model, name, backend, signature=None, registered_model_name=None):
@@ -46,17 +50,17 @@ def log_model_by_backend(model, name, backend, signature=None, registered_model_
     }
     if backend == constants.TORCH_BACKEND:
         return mlflow.pytorch.log_model(model, **kwargs)
-    elif backend == constants.TF_BACKEND:
+    if backend == constants.TF_BACKEND:
         return mlflow.tensorflow.log_model(model, **kwargs)
-    else:
-        raise ValueError(f"Unsupported backend: {backend}")
+    raise ValueError(f"Unsupported backend: {backend}")
 
 
 class MetricFunction(BaseModel):
     function_name: Callable
     direction: str
 
-    @field_validator('direction')
+    @field_validator("direction")
+    @classmethod
     def validate_direction(cls, direction):
         if direction not in constants.FINETUNING_DIRECTION:
             raise ValueError("Direction must be 'maximize' or 'minimize'")
@@ -66,16 +70,14 @@ class MetricFunction(BaseModel):
 class PQConfig(BaseModel):
     hpo_parameters: BaseHyperparameterOptimizationModel
     pruning_parameters: Annotated[
-        Union[
-            CSPruningModel,
-            DSTPruningModel,
-            FITCompressPruningModel,
-            PDPPruningModel,
-            WandaPruningModel,
-            AutoSparsePruningModel,
-            ActivationPruningModel,
-            MDMMPruningModel,
-        ],
+        CSPruningModel
+        | DSTPruningModel
+        | FITCompressPruningModel
+        | PDPPruningModel
+        | WandaPruningModel
+        | AutoSparsePruningModel
+        | ActivationPruningModel
+        | MDMMPruningModel,
         Field(discriminator="pruning_method"),
     ]
     quantization_parameters: BaseQuantizationModel
@@ -84,11 +86,12 @@ class PQConfig(BaseModel):
 
     @classmethod
     def load_from_file(cls, path_to_config_file):
-        if path_to_config_file.endswith(('.yaml', '.yml')):
-            with open(path_to_config_file) as f:
+        config_path = Path(path_to_config_file)
+        if config_path.suffix in {".yaml", ".yml"}:
+            with config_path.open() as f:
                 config_data = yaml.safe_load(f)
-        elif path_to_config_file.endswith('.json'):
-            with open(path_to_config_file) as f:
+        elif config_path.suffix == ".json":
+            with config_path.open() as f:
                 config_data = json.load(f)
         else:
             raise ValueError("Unsupported file type. Use .yaml, .yml, or .json")
@@ -121,10 +124,11 @@ class BackendAdapter:
     def clone_model(self, model):
         if self.backend == constants.TORCH_BACKEND:
             return copy.deepcopy(model)
-        elif self.backend == constants.TF_BACKEND:
+        if self.backend == constants.TF_BACKEND:
             new_model = keras.models.clone_model(model)
             new_model.set_weights(model.get_weights())
             return new_model
+        return None
 
     def get_backend(self):
         return self.backend
@@ -135,10 +139,9 @@ class BackendAdapter:
     def _detect_backend(self, model):
         if hasattr(model, "parameters"):
             return constants.TORCH_BACKEND
-        elif isinstance(model, keras.Model):
+        if isinstance(model, keras.Model):
             return constants.TF_BACKEND
-        else:
-            raise ValueError("Unsupported model type")
+        raise ValueError("Unsupported model type")
 
     def move_to_device(self, model):
         if self.backend == constants.TORCH_BACKEND:
@@ -154,29 +157,31 @@ class BackendAdapter:
     def tensor_to_numpy(self, tensor):
         if self.backend == constants.TORCH_BACKEND:
             return tensor.detach().cpu().numpy()
-        elif self.backend == constants.TF_BACKEND:
+        if self.backend == constants.TF_BACKEND:
             return tensor.numpy()
+        return None
 
     def forward(self, model, x):
         if self.backend == constants.TORCH_BACKEND:
             x = x.to(self.device)
             return model(x)
-        elif self.backend == constants.TF_BACKEND:
+        if self.backend == constants.TF_BACKEND:
             return model(x, training=False)
+        return None
 
 
 class TuningTask:
     def __init__(self, config: PQConfig):
         self.config = config
-        self.hyperparameters = {}
-        self.objectives: Dict[str, MetricFunction] = {}
-        self._training_function: Optional[Callable] = None
-        self._validation_function: Optional[Callable] = None
-        self._optimizer_function: Optional[Callable] = None
-        self._scheduler_function: Optional[Callable] = None
+        self.hyperparameters: dict[str, tuple[Callable, tuple, dict]] = {}
+        self.objectives: dict[str, MetricFunction] = {}
+        self._training_function: Callable | None = None
+        self._validation_function: Callable | None = None
+        self._optimizer_function: Callable | None = None
+        self._scheduler_function: Callable | None = None
         self.enable_mlflow = False
-        self.tracking_uri = None
-        self.storage_db = None
+        self.tracking_uri: str | None = None
+        self.storage_db: str | None = None
 
     def set_tracking_uri(self, tracking_uri: str):
         self.tracking_uri = tracking_uri
@@ -293,7 +298,7 @@ class TuningTask:
 
     def objective(self, trial, model, train_func, valid_func, **kwargs):
         from pquant import add_compression_layers, train_model
-        
+
         config_copy = copy.deepcopy(self.config)
         applied_parameters = {}
         for param_name, (optuna_func, func_args, func_kwargs) in self.hyperparameters.items():
@@ -315,15 +320,15 @@ class TuningTask:
             if not applied:
                 logging.error(f"'{param_name}' not found in config: value not applied.")
 
-        trainloader = kwargs['trainloader']
+        trainloader = kwargs["trainloader"]
         raw_input_batch = next(iter(trainloader))
-        
+
         sample_input = raw_input_batch[0]
         model_copy = self.adapter.clone_model(model)
         model_copy = self.adapter.move_to_device(model_copy)
         sample_output = self.adapter.forward(model_copy, sample_input)
         input_shape = sample_input.shape
-        
+
         compressed_model = add_compression_layers(model_copy, config_copy, input_shape)
         optimizer_func = self.get_optimizer_function()
         optimizer = optimizer_func(config_copy, compressed_model)
@@ -354,7 +359,7 @@ class TuningTask:
 
             with mlflow.start_run(nested=True):
                 mlflow.log_params(applied_parameters)
-                mlflow.log_metrics({key: val for key, val in zip(self.objectives.keys(), objectives)})
+                mlflow.log_metrics(dict(zip(self.objectives.keys(), objectives, strict=False)))
                 signature = infer_signature(
                     self.adapter.tensor_to_numpy(sample_input), self.adapter.tensor_to_numpy(sample_output)
                 )
@@ -404,64 +409,43 @@ class TuningTask:
         )
         if len(self.objectives.keys()) == 1:
             return study.best_params
-        else:
-            return study.best_trials
+        return study.best_trials
+
+
+def _load_default_config(yaml_name):
+    return PQConfig.load_from_file(CONFIG_DIR / yaml_name)
 
 
 def ap_config():
-    yaml_name = "config_ap.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_ap.yaml")
 
 
 def autosparse_config():
-    yaml_name = "config_autosparse.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_autosparse.yaml")
 
 
 def cs_config():
-    yaml_name = "config_cs.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_cs.yaml")
 
 
 def dst_config():
-    yaml_name = "config_dst.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_dst.yaml")
 
 
 def fitcompress_config():
-    yaml_name = "config_fitcompress.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_fitcompress.yaml")
 
 
 def mdmm_config():
-    yaml_name = "config_mdmm.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_mdmm.yaml")
 
 
 def pdp_config():
-    yaml_name = "config_pdp.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_pdp.yaml")
 
 
 def wanda_config():
-    yaml_name = "config_wanda.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_wanda.yaml")
 
 
 def load_from_file(path):

@@ -1,8 +1,15 @@
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class Wanda(nn.Module):
+    mask: Tensor
+    inputs_sq_sum: Tensor
+    batches_collected: Tensor
+    t: Tensor
+    done: Tensor
+
     def __init__(self, config, layer_type, *args, **kwargs):
         super().__init__()
         if isinstance(config, dict):
@@ -59,7 +66,7 @@ class Wanda(nn.Module):
         if self.layer_type == "linear":
             per_batch_sq = (x * x).sum(dim=0)
         else:
-            axes = (0,) + tuple(range(2, x.dim()))
+            axes = (0, *tuple(range(2, x.dim())))
             per_batch_sq = (x * x).sum(dim=axes)
 
         self.inputs_sq_sum.add_(per_batch_sq.to(self.inputs_sq_sum.dtype))
@@ -93,10 +100,7 @@ class Wanda(nn.Module):
         return mask.reshape(weight.shape)
 
     def _handle_conv(self, norm, weight):
-        if weight.dim() == 3:
-            norm_reshaped = norm.reshape(1, norm.shape[0], 1)
-        else:
-            norm_reshaped = norm.reshape(1, norm.shape[0], 1, 1)
+        norm_reshaped = norm.reshape(1, norm.shape[0], 1) if weight.dim() == 3 else norm.reshape(1, norm.shape[0], 1, 1)
         metric = weight.abs() * norm_reshaped
         if self.N is not None and self.M is not None:
             metric_reshaped = metric.reshape(-1, self.M)
