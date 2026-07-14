@@ -114,7 +114,7 @@ def _quant_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, o
 # ---------------------------------------------------------------------------
 
 
-def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True):  # noqa: ARG001
+def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True):
     """Build QuantizeLinear+DequantizeLinear nodes, optionally preceded by a Clip.
 
     Returns ([nodes], output_name). Set include_clip=False to skip the Clip node
@@ -171,7 +171,7 @@ def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, ove
 # ---------------------------------------------------------------------------
 
 
-def _int_weight_node(name_prefix, weight_np, k, i, f, initializers):  # noqa: ARG001 (i unused)
+def _int_weight_node(name_prefix, weight_np, k, i, f, initializers):
     """
     Store a weight tensor as int8/uint8 + DequantizeLinear.
 
@@ -399,8 +399,7 @@ def _add_dense_integer(module, prefix, current, nodes, initializers):
     current = y_float_name
 
     # Optional output quantization (e.g. last layer with quantize_output=True)
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, _qdq_node)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, _qdq_node)
 
 
 def _add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
@@ -475,8 +474,7 @@ def _add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qo
         nodes.append(oh.make_node("Add", inputs=[matmul_out, q_bias], outputs=[biased_out]))
         current = biased_out
 
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_dense(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops=False):
@@ -542,8 +540,7 @@ def _add_dense(module, prefix, current, nodes, initializers, quant_fn, use_qonnx
     nodes.append(oh.make_node("Gemm", inputs=gemm_inputs, outputs=[gemm_out], transB=1))
     current = gemm_out
 
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_qonnx, store_integer_weights):
@@ -610,13 +607,13 @@ def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_
         pads = _torch_padding_to_onnx(padding, ndim)
 
     to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
-    conv_attrs = dict(
-        kernel_shape=to_list(module.kernel_size, ndim),
-        strides=to_list(module.stride, ndim),
-        dilations=to_list(module.dilation, ndim),
-        group=module.groups,
-        auto_pad=auto_pad,
-    )
+    conv_attrs = {
+        "kernel_shape": to_list(module.kernel_size, ndim),
+        "strides": to_list(module.stride, ndim),
+        "dilations": to_list(module.dilation, ndim),
+        "group": module.groups,
+        "auto_pad": auto_pad,
+    }
     if pads is not None:
         conv_attrs["pads"] = pads
 
@@ -624,8 +621,7 @@ def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_
     nodes.append(oh.make_node("Conv", inputs=conv_inputs, outputs=[conv_out], **conv_attrs))
     current = conv_out
 
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_batchnorm(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
@@ -770,8 +766,7 @@ def _add_layernorm(module, prefix, current, nodes, initializers, quant_fn, use_q
         )
     )
     current = ln_out
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
@@ -793,8 +788,7 @@ def _add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
     )
     current = pool_out
 
-    current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
 # ---------------------------------------------------------------------------
@@ -1190,8 +1184,7 @@ def _emit_module(
         else:
             raise TypeError(f"PQActivation: unsupported activation {act!r} for ONNX export")
         current = act_out
-        current = _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
-        return current
+        return _maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
     if isinstance(module, PQMultiheadAttention):
         # Sequential converter: treat as self-attention (Q = K = V = current).
         # Returns (out_name, avg_attn_name); expose only the attention output.
@@ -1274,7 +1267,7 @@ def convert_to_onnx(
     with torch.no_grad():
         dummy_out = model(torch.zeros(1, *input_shape))
     batch_dim = batch_size  # None → dynamic, int → fixed
-    output_shape = [batch_dim] + list(dummy_out.shape[1:])
+    output_shape = [batch_dim, *list(dummy_out.shape[1:])]
 
     batch_dim_vi = oh.make_tensor_value_info("input", TensorProto.FLOAT, [batch_dim, *input_shape])
     output_vi = oh.make_tensor_value_info(current, TensorProto.FLOAT, output_shape)
@@ -1571,10 +1564,7 @@ def convert_to_onnx_fx(
 
     def _resolve_perm_dims(args, rank: int) -> list[int]:
         # Accept both permute(d0, d1, ...) and permute([d0, d1, ...]) shapes.
-        if len(args) == 1 and isinstance(args[0], (list, tuple)):
-            dims = args[0]
-        else:
-            dims = args
+        dims = args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
         return [int(d) % rank for d in dims]
 
     for node in gm.graph.nodes:
@@ -1771,8 +1761,8 @@ def convert_to_onnx_fx(
 
     batch_dim = oh.make_tensor_value_info("input", TensorProto.FLOAT, [None, *input_shape])
     output_vis = [
-        oh.make_tensor_value_info(name, TensorProto.FLOAT, [None] + list(t.shape[1:]))
-        for name, t in zip(output_names, dummy_outs)
+        oh.make_tensor_value_info(name, TensorProto.FLOAT, [None, *list(t.shape[1:])])
+        for name, t in zip(output_names, dummy_outs, strict=False)
     ]
 
     onnx_graph = oh.make_graph(

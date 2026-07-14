@@ -65,13 +65,13 @@ class ContinuousSparsification(keras.layers.Layer):
     def pre_epoch_function(self, epoch, total_epochs):
         pass
 
-    def post_epoch_function(self, epoch, total_epochs):  # noqa: ARG002
+    def post_epoch_function(self, epoch, total_epochs):
         if total_epochs <= 1:
             self.beta.assign(self.beta * self.final_temp)
         else:
             self.beta.assign(self.beta * self.final_temp ** (1 / (total_epochs - 1)))
 
-    def get_hard_mask(self, weight=None):  # noqa: ARG002
+    def get_hard_mask(self, weight=None):
         if self.config.pruning_parameters.enable_pruning:
             return ops.cast((self.s > 0), self.s.dtype)
         return ops.convert_to_tensor(1.0)

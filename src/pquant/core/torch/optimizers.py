@@ -24,7 +24,7 @@ class pAdam(torch.optim.AdamW):
         # Perform the standard AdamW step
         loss = super().step(closure)
         # Perform the pWD step
-        for group, old_group in zip(self.param_groups, old_params):
+        for group, old_group in zip(self.param_groups, old_params, strict=False):
             lambda_p_group = group.get("lambda_p", self.lambda_p)  # support prams groups
             if lambda_p_group > 0:  # Apply regularization only for lambda_p > 0
                 for param in group["params"]:
@@ -54,7 +54,7 @@ class pSGD(torch.optim.SGD):
         # Perform the standard SGD step
         loss = super().step(closure)
         # Perform the pWD step
-        for group, old_group in zip(self.param_groups, old_params):
+        for group, old_group in zip(self.param_groups, old_params, strict=False):
             lambda_p_group = group.get("lambda_p", self.lambda_p)  # support prams groups
             if lambda_p_group > 0:  # Apply regularization only for lambda_p > 0
                 for param in group["params"]:

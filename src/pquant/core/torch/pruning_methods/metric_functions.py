@@ -47,10 +47,7 @@ class StructuredSparsityMetric:
         w_reshaped = weight.reshape(weight.shape[0], -1)
         num_weights = w_reshaped.shape[1]
         padding = (self.rf - num_weights % self.rf) % self.rf
-        if padding:
-            w_padded = torch.nn.functional.pad(w_reshaped, (0, padding))
-        else:
-            w_padded = w_reshaped
+        w_padded = torch.nn.functional.pad(w_reshaped, (0, padding)) if padding else w_reshaped
         groups = w_padded.reshape(w_padded.shape[0], -1, self.rf)
         group_norms = torch.sqrt((groups.square()).sum(dim=-1))
         zero_groups = (group_norms <= self.epsilon).to(torch.float32)

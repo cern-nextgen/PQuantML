@@ -1,6 +1,8 @@
-import os
+from pathlib import Path
 
 import yaml
+
+CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
 
 
 def get_default_config(pruning_method: str):
@@ -14,18 +16,16 @@ def get_default_config(pruning_method: str):
         "mdmm",
     ], "Unkown pruning method. Acceptable pruning methods: autosparse, ap, cs, dst, pdp, wanda"
     yaml_name = f"config_{pruning_method}.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return get_pruning_config(path)
+    return get_pruning_config(CONFIG_DIR / yaml_name)
 
 
 def get_pruning_config(config_path):
-    with open(config_path) as f:
+    with Path(config_path).open() as f:
         return yaml.safe_load(f)
 
 
 def write_config_to_yaml(config, output_path, sort_keys=True):
-    with open(output_path, "w") as f:
+    with Path(output_path).open("w") as f:
         yaml.dump(config, f, sort_keys=sort_keys)
 
 
@@ -95,7 +95,7 @@ def validate_pruning_parameters(config):
             "sparsity",
         ]
     for k in valid_keys:
-        assert k in config.pruning_parameters.keys(), f"missing pruning parameter: {k}"
+        assert k in config.pruning_parameters, f"missing pruning parameter: {k}"
 
 
 def validate_quantization_parameters(config):
@@ -110,7 +110,7 @@ def validate_quantization_parameters(config):
         "use_symmetric_quantization",
     ]
     for k in valid_keys:
-        assert k in config.quantization_parameters.keys(), f"missing quantization parameter: {k}"
+        assert k in config.quantization_parameters, f"missing quantization parameter: {k}"
 
 
 def validate_training_parameters(config):
@@ -124,7 +124,7 @@ def validate_training_parameters(config):
         "save_weights_epoch",
     ]
     for k in valid_keys:
-        assert k in config.training_parameters.keys(), f"missing training parameter: {k}"
+        assert k in config.training_parameters, f"missing training parameter: {k}"
 
 
 def validate_config(config):

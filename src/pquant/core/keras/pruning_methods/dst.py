@@ -10,6 +10,7 @@ def get_threshold_size(config, weight_shape):
         return (weight_shape[0], 1)
     if config.pruning_parameters.threshold_type == "weightwise":
         return (weight_shape[0], np.prod(weight_shape[1:]))
+    return None
 
 
 @ops.custom_gradient
@@ -98,8 +99,7 @@ class DST(keras.layers.Layer):
         weights_reshaped = ops.reshape(weight, (weight.shape[0], -1))
         pre_binarystep_weights = ops.abs(weights_reshaped) - self.threshold
         mask = binary_step(pre_binarystep_weights)
-        mask = ops.reshape(mask, weight_orig_shape)
-        return mask
+        return ops.reshape(mask, weight_orig_shape)
 
     def pre_epoch_function(self, epoch, total_epochs):
         pass

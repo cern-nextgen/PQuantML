@@ -151,7 +151,7 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
 
     # Start A* (path-finding through compression space)
     (
-        optimal_node,
+        _optimal_node,
         quant_prune_config,
         trained_uncompressed_model,
         optimal_node_pruning_mask,
@@ -246,12 +246,11 @@ class node:
 
         # Create a dictionary to store the quantization config w.r.t layer names
         quant_config = {
-            layer_name: [i_bits, f_bits] for layer_name, i_bits, f_bits in zip(layer_names, self.int_bits, self.frac_bits)
+            layer_name: [i_bits, f_bits]
+            for layer_name, i_bits, f_bits in zip(layer_names, self.int_bits, self.frac_bits, strict=False)
         }
 
-        config = {"quant_config": quant_config, "pruning_metrics": self.pruning_metrics}
-
-        return config
+        return {"quant_config": quant_config, "pruning_metrics": self.pruning_metrics}
 
 
 class FITcompress:
@@ -661,9 +660,7 @@ class FITcompress:
             )
 
         # Put everything on GPU again
-        current_node_matrices_params_layerwise = [layer.to(self.device) for layer in current_node_matrices_params_layerwise]
-
-        return current_node_matrices_params_layerwise
+        return [layer.to(self.device) for layer in current_node_matrices_params_layerwise]
 
     def set_activation_bits(self, layer):
         if layer.quantize_input:
@@ -724,7 +721,9 @@ class FITcompress:
         # Store input data, as we also need to quantize input (which is currently done in resnet.py of pquant-dev)
         data_input = []
         for m in self.model.modules():
-            if isinstance(m, (PQAvgPoolBase, PQWeightBiasBase)) or (m.__class__ == PQActivation and m.activation_name == "relu"):
+            if isinstance(m, (PQAvgPoolBase, PQWeightBiasBase)) or (
+                m.__class__ == PQActivation and m.activation_name == "relu"
+            ):
                 m.post_fitcompress_calibration = True
 
         # Trigger forward pass through model
@@ -740,7 +739,11 @@ class FITcompress:
                 counter += 1
 
         for m in self.model.modules():
-            if isinstance(m, PQAvgPoolBase) or (m.__class__ == PQActivation and m.activation_name == "relu") or isinstance(m, PQWeightBiasBase):
+            if (
+                isinstance(m, PQAvgPoolBase)
+                or (m.__class__ == PQActivation and m.activation_name == "relu")
+                or isinstance(m, PQWeightBiasBase)
+            ):
                 m.post_fitcompress_calibration = False
                 self.set_activation_bits(m)
 
@@ -817,6 +820,7 @@ class FITcompress:
             self.create_neighbours(next_best_node)
 
             iterations += 1
+        return None
 
     def create_neighbours(self, current_node):
         """
@@ -1045,7 +1049,7 @@ class FITcompress:
         )
 
         # Create the instance for the neighbour node
-        neighbour_node = node(
+        return node(
             matrices_params_layerwise=neighbour_node_parameters_layerwise,
             FeM=neighbour_node_FeM,
             quant_config=neighbour_node_quant_config,
@@ -1059,8 +1063,6 @@ class FITcompress:
             int_bits=neighbour_node_int_bits,
             frac_bits=neighbour_node_frac_bits,
         )
-
-        return neighbour_node
 
     def calculate_path_cost(
         self, current_node, neighbour_node_parameters_layerwise, neighbour_node_FeM, neighbour_node_quant_config
@@ -1130,7 +1132,7 @@ class FITcompress:
 
         active_bytes = 0.0
         uncompressed = 0.0
-        for params_layer, quant_conf_layer in zip(params_layerwise, quant_config):
+        for params_layer, quant_conf_layer in zip(params_layerwise, quant_config, strict=False):
             # Count which parameters are non-zero, non_zero is simply the number of non-zero parameters in the current layer
             int_bits = max(0, math.ceil(math.log2(torch.max(torch.abs(params_layer)))))
             frac_bits_round_threshold = max(
@@ -1289,14 +1291,11 @@ class FIT:
                 # Calculate loss based on mini-batch and averaged over it
                 loss_func = torch.nn.CrossEntropyLoss()
 
-        if mode == "sample":
-            if isinstance(loss_func, torch.nn.CrossEntropyLoss):
-                # Calculate loss for each sample
-                loss_func = torch.nn.CrossEntropyLoss(reduce=False, reduction="none")
+        if mode == "sample" and isinstance(loss_func, torch.nn.CrossEntropyLoss):
+            # Calculate loss for each sample
+            loss_func = torch.nn.CrossEntropyLoss(reduce=False, reduction="none")
 
-        loss = loss_func(output, target_batch)
-
-        return loss
+        return loss_func(output, target_batch)
 
     def get_gradients(self, model, loss, matrices_layerwise, batch_size):
         """
@@ -1313,9 +1312,7 @@ class FIT:
                 squared_grad : Squared gradients for the passed parameters/activations, layer-wise.
         """
         grads = torch.autograd.grad(loss, [*matrices_layerwise], retain_graph=True)
-        squared_grads = [batch_size * g**2 for g in grads]
-
-        return squared_grads
+        return [batch_size * g**2 for g in grads]
 
     def get_EF(self, model, data_loader, loss_func, tolerance=1e-3, min_iterations=100, max_iterations=100):
         """
@@ -1390,12 +1387,11 @@ class FIT:
                 curr_batch_matrices_params_layerwise = []
                 curr_batch_minmax_range_params_layerwise = []
                 for weights in model.parameters():
-                    if hasattr(weights, "collect"):
-                        if weights.collect:
-                            curr_batch_matrices_params_layerwise.append(weights)
-                            curr_batch_minmax_range_params_layerwise.append(
-                                (torch.max(weights.data) - torch.min(weights.data)).detach().cpu().numpy()
-                            )
+                    if hasattr(weights, "collect") and weights.collect:
+                        curr_batch_matrices_params_layerwise.append(weights)
+                        curr_batch_minmax_range_params_layerwise.append(
+                            (torch.max(weights.data) - torch.min(weights.data)).detach().cpu().numpy()
+                        )
 
                 per_batch_layerwise_minmax_range_params.append(curr_batch_minmax_range_params_layerwise)
 
@@ -1438,7 +1434,7 @@ class FIT:
                 batch_accum_EF_matrices_params_layerwise = [
                     curr_val_layer + curr_squared_grad_layer + 0.0
                     for curr_val_layer, curr_squared_grad_layer in zip(
-                        batch_accum_EF_matrices_params_layerwise, curr_batch_squared_grads_params_layerwise
+                        batch_accum_EF_matrices_params_layerwise, curr_batch_squared_grads_params_layerwise, strict=False
                     )
                 ]
                 batch_accum_EF_matrices_activs_layerwise = [
@@ -1446,6 +1442,7 @@ class FIT:
                     for acc, grad in zip(
                         batch_accum_EF_matrices_activs_layerwise,
                         curr_batch_squared_grads_activs_layerwise,
+                        strict=False,
                     )
                 ]
                 total_batches += 1
@@ -1613,14 +1610,16 @@ class FIT:
 
         curr_FIT = 0
         if not same_theta:
-            for theta_before, theta_after, EF_trace in zip(params_before, params_after, EF_trace_params_layerwise):
+            for theta_before, theta_after, EF_trace in zip(
+                params_before, params_after, EF_trace_params_layerwise, strict=False
+            ):
                 # Calculate the squared difference between the parameters before and after
                 delta_theta = torch.sum((theta_before.detach().cpu() - theta_after.detach().cpu()) ** 2).numpy()
                 # Calculate the FIT for the current layer
                 curr_FIT += EF_trace * delta_theta
 
         else:
-            for theta, EF_trace in zip(params_before, EF_trace_params_layerwise):
+            for theta, EF_trace in zip(params_before, EF_trace_params_layerwise, strict=False):
                 # Calculate the squared difference between the parameters before and after
                 delta_theta = torch.sum(theta.detach().cpu() ** 2)
                 # Calculate the FIT for the current layer
@@ -1649,7 +1648,7 @@ class FIT:
 
         if not same_theta:
             # Taken from compute_fake_FIT_params()
-            for theta_before, theta_after, layer_FeM in zip(params_before, params_after, FeM):
+            for theta_before, theta_after, layer_FeM in zip(params_before, params_after, FeM, strict=False):
                 curr_FIT_layer = torch.sum(
                     layer_FeM * (theta_before.detach().cpu() - theta_after.detach().cpu()) ** 2
                 ).numpy()
@@ -1660,7 +1659,7 @@ class FIT:
         FIT_layerwise = []
 
         # Taken from generate_FIT_pruning_importance()
-        for theta_after, layer_FeM in zip(params_after, FeM):
+        for theta_after, layer_FeM in zip(params_after, FeM, strict=False):
             curr_FIT_layer = layer_FeM * (theta_after.detach().cpu() ** 2)
             FIT_layerwise.append(curr_FIT_layer)
 

@@ -121,8 +121,7 @@ class Quantizer(nn.Module):
         self.i.data = i
         self.f.data = f
         _, i, f = self.get_quantization_bits()
-        x = self.quantizer(x, k=self.k, i=i, f=f, training=self.training)
-        return x
+        return self.quantizer(x, k=self.k, i=i, f=f, training=self.training)
 
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:

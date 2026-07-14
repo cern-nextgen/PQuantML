@@ -10,6 +10,7 @@ def get_threshold_size(config, weight_shape):
         return (weight_shape[0], 1)
     if config.pruning_parameters.threshold_type == "weightwise":
         return (weight_shape[0], int(np.prod(weight_shape[1:])))
+    return None
 
 
 class _BinaryStep(torch.autograd.Function):

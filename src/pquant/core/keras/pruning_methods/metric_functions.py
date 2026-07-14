@@ -57,9 +57,7 @@ class UnstructuredSparsityMetric:
         # farctor by constrction goes to zero when l0_term == target_sparsiity
         factor = ops.square(self.target_sparsity) - ops.square(l0_term)
         fn_value = factor * l1_term
-        fn_value = self._scaling(fn_value, num_weights)
-
-        return fn_value
+        return self._scaling(fn_value, num_weights)
 
 
 class StructuredSparsityMetric:

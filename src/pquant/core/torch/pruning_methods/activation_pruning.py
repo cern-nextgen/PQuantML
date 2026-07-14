@@ -24,10 +24,7 @@ class ActivationPruning(nn.Module):
         if self.built:
             return
         if self.layer_type in ("conv", "depthwise_conv"):
-            if len(input_shape) == 3:
-                shape = (input_shape[0], 1, 1)
-            else:
-                shape = (input_shape[0], 1, 1, 1)
+            shape = (input_shape[0], 1, 1) if len(input_shape) == 3 else (input_shape[0], 1, 1, 1)
         else:
             shape = (input_shape[0], 1)
         self.shape = shape
@@ -54,7 +51,7 @@ class ActivationPruning(nn.Module):
         if self.layer_type == "linear":
             per_channel = gt_zero.mean(dim=0)
         else:
-            axes = (0,) + tuple(range(2, output.dim()))
+            axes = (0, *tuple(range(2, output.dim())))
             per_channel = gt_zero.mean(dim=axes)
 
         self.activations.add_(per_channel.to(self.activations.dtype))

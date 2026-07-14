@@ -67,9 +67,7 @@ class Constraint(keras.layers.Layer):
 
         l_term = ascent_lmbda * infeasibility
         damp_term = self.damping * ops.square(infeasibility) / 2
-        penalty = self.scale * (l_term + damp_term)
-
-        return penalty
+        return self.scale * (l_term + damp_term)
 
     @abc.abstractmethod
     def get_infeasibility(self, weight):

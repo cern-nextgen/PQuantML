@@ -114,7 +114,7 @@ def _quant_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, o
 # ---------------------------------------------------------------------------
 
 
-def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True):  # noqa: ARG001
+def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True):
     """Build QuantizeLinear+DequantizeLinear nodes, optionally preceded by a Clip.
 
     Returns ([nodes], output_name).  Set include_clip=False to skip the Clip node
@@ -172,7 +172,7 @@ def _qdq_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, ove
 # ---------------------------------------------------------------------------
 
 
-def _int_weight_node(name_prefix, weight_np, k, i, f, initializers):  # noqa: ARG001 (i unused)
+def _int_weight_node(name_prefix, weight_np, k, i, f, initializers):
     """
     Store a weight tensor as int8/uint8 + DequantizeLinear.
 
@@ -415,8 +415,7 @@ def _add_dense(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx,
     nodes.append(oh.make_node("Gemm", inputs=gemm_inputs, outputs=[gemm_out], transB=1))
     current = gemm_out
 
-    current = _maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_conv(layer, prefix, current, nodes, initializers, ndim, quant_fn, use_qonnx, store_integer_weights):
@@ -506,13 +505,13 @@ def _add_conv(layer, prefix, current, nodes, initializers, ndim, quant_fn, use_q
         auto_pad = "NOTSET"
 
     to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
-    conv_attrs = dict(
-        kernel_shape=to_list(layer.kernel_size, ndim),
-        strides=to_list(layer.strides, ndim),
-        dilations=to_list(layer.dilation_rate, ndim),
-        group=getattr(layer, "groups", 1),
-        auto_pad=auto_pad,
-    )
+    conv_attrs = {
+        "kernel_shape": to_list(layer.kernel_size, ndim),
+        "strides": to_list(layer.strides, ndim),
+        "dilations": to_list(layer.dilation_rate, ndim),
+        "group": getattr(layer, "groups", 1),
+        "auto_pad": auto_pad,
+    }
     if pads is not None:
         conv_attrs["pads"] = pads
 
@@ -613,13 +612,13 @@ def _add_depthwise_conv(layer, prefix, current, nodes, initializers, quant_fn, u
         auto_pad = "NOTSET"
 
     to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
-    conv_attrs = dict(
-        kernel_shape=to_list(layer.kernel_size, 2),
-        strides=to_list(layer.strides, 2),
-        dilations=to_list(layer.dilation_rate, 2),
-        group=in_ch,
-        auto_pad=auto_pad,
-    )
+    conv_attrs = {
+        "kernel_shape": to_list(layer.kernel_size, 2),
+        "strides": to_list(layer.strides, 2),
+        "dilations": to_list(layer.dilation_rate, 2),
+        "group": in_ch,
+        "auto_pad": auto_pad,
+    }
     if pads is not None:
         conv_attrs["pads"] = pads
 
@@ -796,8 +795,7 @@ def _add_dense_nd(layer, prefix, current, nodes, initializers, quant_fn, use_qon
         nodes.append(oh.make_node("Add", inputs=[current, q_bias], outputs=[add_out]))
         current = add_out
 
-    current = _maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn)
 
 
 def _add_mha(layer, prefix, q_input, k_input, v_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
@@ -1063,8 +1061,7 @@ def _add_pq_activation(layer, prefix, current, nodes, initializers, quant_fn):
     current = act_out
 
     # --- optional output quantization ---
-    current = _maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn)
-    return current
+    return _maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn)
 
 
 # ---------------------------------------------------------------------------
@@ -1176,7 +1173,7 @@ def _emit_layer(
     if isinstance(layer, keras.layers.Reshape):
         target_shape = list(layer.target_shape)
         # Prepend batch dim (-1 means dynamic)
-        full_shape = [-1] + target_shape
+        full_shape = [-1, *target_shape]
         shape_name = f"{prefix}_shape"
         out = f"{prefix}_reshape"
         initializers.append(onh.from_array(np.array(full_shape, dtype=np.int64), name=shape_name))
@@ -1184,7 +1181,8 @@ def _emit_layer(
         return out
 
     if isinstance(layer, keras.layers.Add):
-        assert input_onnx_names is not None and len(input_onnx_names) == 2
+        assert input_onnx_names is not None
+        assert len(input_onnx_names) == 2
         out = f"{prefix}_add"
         nodes.append(oh.make_node("Add", inputs=input_onnx_names, outputs=[out]))
         return out
@@ -1198,7 +1196,8 @@ def _emit_layer(
         return out
 
     if isinstance(layer, keras.layers.Multiply):
-        assert input_onnx_names is not None and len(input_onnx_names) == 2
+        assert input_onnx_names is not None
+        assert len(input_onnx_names) == 2
         out = f"{prefix}_mul"
         nodes.append(oh.make_node("Mul", inputs=input_onnx_names, outputs=[out]))
         return out
@@ -1241,13 +1240,13 @@ def _add_conv_plain(layer, prefix, current, nodes, initializers):
     padding = layer.padding
     auto_pad = "SAME_UPPER" if padding == "same" else "VALID"
     to_list = lambda v, n: list(v) if hasattr(v, "__iter__") else [v] * n  # noqa: E731
-    conv_attrs = dict(
-        kernel_shape=to_list(layer.kernel_size, 2),
-        strides=to_list(layer.strides, 2),
-        dilations=to_list(layer.dilation_rate, 2),
-        group=layer.groups,
-        auto_pad=auto_pad,
-    )
+    conv_attrs = {
+        "kernel_shape": to_list(layer.kernel_size, 2),
+        "strides": to_list(layer.strides, 2),
+        "dilations": to_list(layer.dilation_rate, 2),
+        "group": layer.groups,
+        "auto_pad": auto_pad,
+    }
     conv_out = f"{prefix}_conv"
     nodes.append(oh.make_node("Conv", inputs=conv_inputs, outputs=[conv_out], **conv_attrs))
     current = conv_out
@@ -1308,7 +1307,7 @@ def _register_layer_output(layer, onnx_name, tensor_to_onnx):
     if not isinstance(out_tensors, (list, tuple)):
         out_tensors = [out_tensors]
     if isinstance(onnx_name, (list, tuple)):
-        for tensor, name in zip(out_tensors, onnx_name):
+        for tensor, name in zip(out_tensors, onnx_name, strict=False):
             tensor_to_onnx[id(tensor)] = name
     else:
         tensor_to_onnx[id(out_tensors[0])] = onnx_name
@@ -1403,7 +1402,7 @@ def convert_to_onnx(
     dummy_out = model(dummy, training=False)
     dummy_out_np = np.array(ops.convert_to_numpy(dummy_out))
     batch_dim = batch_size  # None → dynamic, int → fixed
-    output_shape = [batch_dim] + list(dummy_out_np.shape[1:])
+    output_shape = [batch_dim, *list(dummy_out_np.shape[1:])]
 
     # Build ONNX graph
     if len(model.inputs) == 1:

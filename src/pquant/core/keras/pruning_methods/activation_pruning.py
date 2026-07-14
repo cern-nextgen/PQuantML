@@ -71,7 +71,7 @@ class ActivationPruning(keras.layers.Layer):
             per_channel = ops.mean(gt_zero, axis=0)
         else:
             # output is channels-first (batch, channels, ...); average over batch + spatial
-            axes = (0,) + tuple(range(2, len(output.shape)))
+            axes = (0, *tuple(range(2, len(output.shape))))
             per_channel = ops.mean(gt_zero, axis=axes)
 
         # Snapshot current state
@@ -108,7 +108,7 @@ class ActivationPruning(keras.layers.Layer):
         stored_mask = ops.convert_to_tensor(self.mask)
         return ops.where(self.is_pretraining, weight, stored_mask * weight)
 
-    def get_hard_mask(self, weight=None):  # noqa: ARG002
+    def get_hard_mask(self, weight=None):
         return ops.convert_to_tensor(self.mask)
 
     def post_pre_train_function(self):
@@ -133,7 +133,7 @@ class ActivationPruning(keras.layers.Layer):
     def get_layer_sparsity(self, weight):
         pass
 
-    def post_epoch_function(self, epoch, total_epochs, **kwargs):  # noqa: ARG002
+    def post_epoch_function(self, epoch, total_epochs, **kwargs):
         if not self._is_pretraining:
             self.t.assign_add(1)
         self.mask.assign(ops.convert_to_tensor(self.mask_placeholder))

@@ -23,3 +23,4 @@ def get_pruning_layer(config, layer_type):
         return Wanda(config, layer_type)
     if pruning_method == "mdmm":
         return MDMM(config, layer_type)
+    return None

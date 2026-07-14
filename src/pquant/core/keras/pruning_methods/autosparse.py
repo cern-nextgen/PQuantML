@@ -27,6 +27,7 @@ def get_threshold_size(config, weight_shape):
         return (weight_shape[0], 1)
     if config.pruning_parameters.threshold_type == "weightwise":
         return (weight_shape[0], np.prod(weight_shape[1:]))
+    return None
 
 
 BACKWARD_SPARSITY = False
@@ -123,7 +124,7 @@ class AutoSparse(keras.layers.Layer):
             ops.where(self.is_finetuning, ops.convert_to_tensor(self.mask) * weight, sparse_weight),
         )
 
-    def get_hard_mask(self, weight=None):  # noqa: ARG002
+    def get_hard_mask(self, weight=None):
         return ops.convert_to_tensor(self.mask)
 
     def get_mask(self, weight):

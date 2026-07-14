@@ -91,7 +91,7 @@ class Quantizer(keras.layers.Layer):
 
     def build(self, input_shape):
         if self.use_hgq:
-            shape = tuple(input_shape) if not self.is_data else (1,) + tuple(input_shape[1:])
+            shape = tuple(input_shape) if not self.is_data else (1, *tuple(input_shape[1:]))
             self.k = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.k_init), trainable=False)
             self.i = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.i_init), trainable=False)
             self.f = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.f_init), trainable=False)

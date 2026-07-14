@@ -75,7 +75,7 @@ class Wanda(keras.layers.Layer):
             per_batch_sq = ops.sum(ops.square(x), axis=0)  # (n_in,)
         else:
             # x is channels-first (batch, in_channels, ...); sum over batch + spatial
-            axes = (0,) + tuple(range(2, len(x.shape)))
+            axes = (0, *tuple(range(2, len(x.shape))))
             per_batch_sq = ops.sum(ops.square(x), axis=axes)  # (in_channels,)
 
         # Snapshot current state
@@ -125,9 +125,9 @@ class Wanda(keras.layers.Layer):
     def _handle_conv(self, norm, weight):
         # norm.shape = (in_channels,); weight.shape = (out_channels, in_channels, ...)
         if len(weight.shape) == 3:
-            norm_reshaped = ops.reshape(norm, [1] + list(norm.shape) + [1])
+            norm_reshaped = ops.reshape(norm, [1, *list(norm.shape), 1])
         else:
-            norm_reshaped = ops.reshape(norm, [1] + list(norm.shape) + [1, 1])
+            norm_reshaped = ops.reshape(norm, [1, *list(norm.shape), 1, 1])
         metric = ops.abs(weight) * norm_reshaped
         if self.N is not None and self.M is not None:
             metric_reshaped = ops.reshape(metric, (-1, self.M))
@@ -142,7 +142,7 @@ class Wanda(keras.layers.Layer):
     def _handle_depthwise_conv(self, norm, weight):
         # norm.shape = (in_channels,); weight.shape = (in_channels, depth_mult, kH, kW)
         # Prune per-input-channel: norm[ic] scales all weights for that channel
-        norm_reshaped = ops.reshape(norm, list(norm.shape) + [1, 1, 1])
+        norm_reshaped = ops.reshape(norm, [*list(norm.shape), 1, 1, 1])
         metric = ops.abs(weight) * norm_reshaped
         metric_reshaped = ops.reshape(metric, (metric.shape[0], -1))
         weight_reshaped = ops.reshape(weight, (weight.shape[0], -1))
@@ -162,7 +162,7 @@ class Wanda(keras.layers.Layer):
     def call(self, weight):
         return ops.convert_to_tensor(self.mask) * weight
 
-    def get_hard_mask(self, weight=None):  # noqa: ARG002
+    def get_hard_mask(self, weight=None):
         return ops.convert_to_tensor(self.mask)
 
     def post_pre_train_function(self):
@@ -187,7 +187,7 @@ class Wanda(keras.layers.Layer):
     def get_layer_sparsity(self, weight):
         pass
 
-    def post_epoch_function(self, epoch, total_epochs, **kwargs):  # noqa: ARG002
+    def post_epoch_function(self, epoch, total_epochs, **kwargs):
         if not self._is_pretraining:
             self.t.assign_add(1)
 

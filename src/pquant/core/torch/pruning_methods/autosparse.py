@@ -29,6 +29,7 @@ def get_threshold_size(config, weight_shape):
         return (weight_shape[0], 1)
     if config.pruning_parameters.threshold_type == "weightwise":
         return (weight_shape[0], int(np.prod(weight_shape[1:])))
+    return None
 
 
 class _AutoSparsePrune(torch.autograd.Function):
@@ -101,10 +102,9 @@ class AutoSparse(nn.Module):
         with torch.no_grad():
             self.mask.copy_(new_binary_mask)
 
-        sparse = torch.sign(weight) * autosparse_prune(
+        return torch.sign(weight) * autosparse_prune(
             w_t, self.alpha, self._backward_sparsity_flag, self._backward_sparsity
         ).reshape(weight.shape)
-        return sparse
 
     def get_hard_mask(self, weight=None):
         return self.mask

@@ -21,11 +21,11 @@ class PQWeightBiasBase(nn.Module):
         layer_type,
         quantize_input=True,
         quantize_output=False,
-        enable_pruning: bool = None,
-        in_quant_bits: tuple[T, T, T] = None,
-        weight_quant_bits: tuple[T, T, T] = None,
-        bias_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
+        enable_pruning: bool | None = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        weight_quant_bits: tuple[T, T, T] | None = None,
+        bias_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -155,7 +155,7 @@ class PQWeightBiasBase(nn.Module):
         self.n_parallel = ops.prod(tuple(input_shape)[1:-1])
         self.parallelization_factor = self.parallelization_factor if self.parallelization_factor > 0 else self.n_parallel
         self.built = True
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
 
     def get_weight_quantization_bits(self):
         return self.weight_quantizer.get_quantization_bits()
@@ -245,13 +245,13 @@ class PQDense(PQWeightBiasBase, nn.Linear):
         bias: bool = True,
         quantize_input=True,
         quantize_output=False,
-        enable_pruning: bool = None,
+        enable_pruning: bool | None = None,
         device=None,
         dtype=None,
-        in_quant_bits: tuple[T, T, T] = None,
-        weight_quant_bits: tuple[T, T, T] = None,
-        bias_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        weight_quant_bits: tuple[T, T, T] | None = None,
+        bias_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -306,8 +306,7 @@ class PQDense(PQWeightBiasBase, nn.Linear):
             bw_bias = self.bias_quantizer.get_total_bits(ops.shape(self._bias))
             size = ops.cast(ops.prod(self.input_shape[:-1]) * self.out_features, self._weight.dtype)
             ebops += ops.mean(bw_bias) * size
-        ebops = ebops * self.parallelization_factor / self.n_parallel
-        return ebops
+        return ebops * self.parallelization_factor / self.n_parallel
 
     @property
     def weight(self):
@@ -323,8 +322,7 @@ class PQDense(PQWeightBiasBase, nn.Linear):
     def bias(self):
         if self.final_compression_done or self.is_fitcompress_pretraining():
             return self._bias
-        bias = self.quantize(self._bias, self.bias_quantizer)
-        return bias
+        return self.quantize(self._bias, self.bias_quantizer)
 
     def apply_final_compression(self):
         self._weight.data = self.weight
@@ -335,8 +333,7 @@ class PQDense(PQWeightBiasBase, nn.Linear):
     def forward(self, x):
         x = self.pre_forward(x)
         x = super().forward(x)
-        x = self.post_forward(x)
-        return x
+        return self.post_forward(x)
 
     def extra_repr(self) -> str:
         """
@@ -368,11 +365,11 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
         dtype=None,
         quantize_input=True,
         quantize_output=False,
-        enable_pruning: bool = None,
-        in_quant_bits: tuple[T, T, T] = None,
-        weight_quant_bits: tuple[T, T, T] = None,
-        bias_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
+        enable_pruning: bool | None = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        weight_quant_bits: tuple[T, T, T] | None = None,
+        bias_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -429,7 +426,7 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
             ebops = ops.sum(F.conv2d(bw_inp, bw_ker, stride=self.stride, padding=self.padding, dilation=self.dilation))
         else:
             reduce_axis_kernel = tuple(range(2, 4))
-            reduce_axis_input = (0,) + tuple(range(2, 4))
+            reduce_axis_input = (0, *tuple(range(2, 4)))
 
             bw_inp = ops.max(bw_inp, axis=reduce_axis_input)
             bw_ker = ops.sum(bw_ker, axis=reduce_axis_kernel)
@@ -454,8 +451,7 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
     def bias(self):
         if self.final_compression_done:
             return self._bias
-        bias = self.quantize(self._bias, self.bias_quantizer)
-        return bias
+        return self.quantize(self._bias, self.bias_quantizer)
 
     def apply_final_compression(self):
         self._weight.data = self.weight
@@ -476,8 +472,7 @@ class PQConv2d(PQWeightBiasBase, nn.Conv2d):
             self.dilation,
             self.groups,
         )
-        x = self.post_forward(x)
-        return x
+        return self.post_forward(x)
 
     def extra_repr(self):
         s = "{in_channels}, {out_channels}, kernel_size={kernel_size}, stride={stride}"
@@ -516,11 +511,11 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
         dtype=None,
         quantize_input=True,
         quantize_output=False,
-        enable_pruning: bool = None,
-        in_quant_bits: tuple[T, T, T] = None,
-        weight_quant_bits: tuple[T, T, T] = None,
-        bias_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
+        enable_pruning: bool | None = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        weight_quant_bits: tuple[T, T, T] | None = None,
+        bias_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -577,7 +572,7 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
             ebops = ops.sum(F.conv1d(bw_inp, bw_ker, stride=self.stride, padding=self.padding, dilation=self.dilation))
         else:
             reduce_axis_kernel = tuple(range(2, 3))
-            reduce_axis_input = (0,) + tuple(range(2, 3))
+            reduce_axis_input = (0, *tuple(range(2, 3)))
 
             bw_inp = ops.max(bw_inp, axis=reduce_axis_input)
             bw_ker = ops.sum(bw_ker, axis=reduce_axis_kernel)
@@ -602,8 +597,7 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
     def bias(self):
         if self.final_compression_done:
             return self._bias
-        bias = self.quantize(self._bias, self.bias_quantizer)
-        return bias
+        return self.quantize(self._bias, self.bias_quantizer)
 
     def apply_final_compression(self):
         self._weight.data = self.weight
@@ -614,8 +608,7 @@ class PQConv1d(PQWeightBiasBase, nn.Conv1d):
     def forward(self, x):
         x = self.pre_forward(x)
         x = super().forward(x)
-        x = self.post_forward(x)
-        return x
+        return self.post_forward(x)
 
     def extra_repr(self):
         s = "{in_channels}, {out_channels}, kernel_size={kernel_size}, stride={stride}"
@@ -658,8 +651,8 @@ class PQAvgPoolBase(nn.Module):
         config,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -723,7 +716,7 @@ class PQAvgPoolBase(nn.Module):
             dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
             granularity=self.out_quant_granularity,
         )
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
 
     def get_input_quantization_bits(self):
         return self.input_quantizer.get_quantization_bits()
@@ -770,7 +763,7 @@ class PQAvgPoolBase(nn.Module):
         return x
 
     def extra_repr(self) -> str:
-        return f"kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, quantize_input={self.quantize_input}, quantize_output={self.quantize_output}"  # noqa: 501
+        return f"kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, quantize_input={self.quantize_input}, quantize_output={self.quantize_output}"
 
 
 class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
@@ -784,8 +777,8 @@ class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
         count_include_pad: bool = True,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -809,8 +802,7 @@ class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
     def forward(self, x):
         x = self.pre_pooling(x)
         x = super().forward(x)
-        x = self.post_pooling(x)
-        return x
+        return self.post_pooling(x)
 
 
 class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
@@ -825,8 +817,8 @@ class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
         divisor_override: int | None = None,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -851,8 +843,7 @@ class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
     def forward(self, x):
         x = self.pre_pooling(x)
         x = super().forward(x)
-        x = self.post_pooling(x)
-        return x
+        return self.post_pooling(x)
 
 
 class PQBatchNorm2d(nn.BatchNorm2d):
@@ -867,9 +858,9 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         device=None,
         dtype=None,
         quantize_input=True,
-        in_quant_bits: tuple[T, T, T] = None,
-        weight_quant_bits: tuple[T, T, T] = None,
-        bias_quant_bits: tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        weight_quant_bits: tuple[T, T, T] | None = None,
+        bias_quant_bits: tuple[T, T, T] | None = None,
         in_quant_granularity=None,
         weight_quant_granularity=None,
         bias_quant_granularity=None,
@@ -965,7 +956,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         shape = [1] * len(input_shape)
         shape[1] = input_shape[1]
         self._shape = tuple(shape)
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
 
     def apply_final_compression(self):
         self.final_compression_done = True
@@ -1001,8 +992,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         bw_ker = ops.reshape(self.weight_quantizer.get_total_bits(self.running_mean.shape), self._shape)
         bw_bias = ops.reshape(self.bias_quantizer.get_total_bits(self.running_mean.shape), self._shape)
         size = ops.cast(ops.prod(list(self.input_shape)), self._weight.dtype)
-        ebops = ops.sum(bw_inp * bw_ker) + ops.mean(bw_bias) * size
-        return ebops
+        return ops.sum(bw_inp * bw_ker) + ops.mean(bw_bias) * size
 
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:
@@ -1040,9 +1030,9 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         device=None,
         dtype=None,
         quantize_input=True,
-        in_quant_bits: tuple[T, T, T] = None,
-        weight_quant_bits: tuple[T, T, T] = None,
-        bias_quant_bits: tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        weight_quant_bits: tuple[T, T, T] | None = None,
+        bias_quant_bits: tuple[T, T, T] | None = None,
         in_quant_granularity=None,
         weight_quant_granularity=None,
         bias_quant_granularity=None,
@@ -1139,7 +1129,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         shape = [1] * len(input_shape)
         shape[1] = input_shape[1]
         self._shape = tuple(shape)
-        self.input_shape = (1,) + input_shape[1:]
+        self.input_shape = (1, *input_shape[1:])
 
     def apply_final_compression(self):
         self.final_compression_done = True
@@ -1175,8 +1165,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         bw_ker = ops.reshape(self.weight_quantizer.get_total_bits(self.running_mean.shape), self._shape)
         bw_bias = ops.reshape(self.bias_quantizer.get_total_bits(self.running_mean.shape), self._shape)
         size = ops.cast(ops.prod(list(self.input_shape)), self._weight.dtype)
-        ebops = ops.sum(bw_inp * bw_ker) + ops.mean(bw_bias) * size
-        return ebops
+        return ops.sum(bw_inp * bw_ker) + ops.mean(bw_bias) * size
 
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:
@@ -1214,10 +1203,10 @@ class PQLayerNorm(nn.LayerNorm):
         dtype=None,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
-        weight_quant_bits: tuple[T, T, T] = None,
-        bias_quant_bits: tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
+        weight_quant_bits: tuple[T, T, T] | None = None,
+        bias_quant_bits: tuple[T, T, T] | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         weight_quant_granularity=None,
@@ -1341,7 +1330,7 @@ class PQLayerNorm(nn.LayerNorm):
         if self.use_hgq:
             self.input_quantizer.quantizer.build(input_shape)
             self.output_quantizer.quantizer.build(input_shape)
-        self.input_shape = (1,) + tuple(input_shape[1:])
+        self.input_shape = (1, *tuple(input_shape[1:]))
 
     def apply_final_compression(self):
         self.final_compression_done = True
@@ -1458,17 +1447,17 @@ class PQMultiheadAttention(nn.Module):
         num_heads: int,
         dropout: float = 0.0,
         bias: bool = True,
-        kdim: int = None,
-        vdim: int = None,
+        kdim: int | None = None,
+        vdim: int | None = None,
         batch_first: bool = False,
         quantize_input: bool = True,
         quantize_output: bool = False,
         approximate_softmax: bool = False,
-        in_quant_bits: tuple[T, T, T] = None,
-        weight_quant_bits: tuple[T, T, T] = None,
-        bias_quant_bits: tuple[T, T, T] = None,
-        out_quant_bits: tuple[T, T, T] = None,
-        attn_quant_bits: tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] | None = None,
+        weight_quant_bits: tuple[T, T, T] | None = None,
+        bias_quant_bits: tuple[T, T, T] | None = None,
+        out_quant_bits: tuple[T, T, T] | None = None,
+        attn_quant_bits: tuple[T, T, T] | None = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         param_quant_granularity=None,
@@ -1492,15 +1481,15 @@ class PQMultiheadAttention(nn.Module):
         self.in_quant_granularity = in_quant_granularity
         self.out_quant_granularity = out_quant_granularity
         self.param_quant_granularity = param_quant_granularity
-        proj_kwargs = dict(
-            bias=bias,
-            in_quant_bits=in_quant_bits,
-            weight_quant_bits=weight_quant_bits,
-            bias_quant_bits=bias_quant_bits,
-            out_quant_bits=out_quant_bits,
-            weight_quant_granularity=param_quant_granularity,
-            bias_quant_granularity=param_quant_granularity,
-        )
+        proj_kwargs = {
+            "bias": bias,
+            "in_quant_bits": in_quant_bits,
+            "weight_quant_bits": weight_quant_bits,
+            "bias_quant_bits": bias_quant_bits,
+            "out_quant_bits": out_quant_bits,
+            "weight_quant_granularity": param_quant_granularity,
+            "bias_quant_granularity": param_quant_granularity,
+        }
 
         qkv_kwargs = dict(
             quantize_input=quantize_input, quantize_output=True, in_quant_granularity=in_quant_granularity, **proj_kwargs
@@ -1838,13 +1827,13 @@ def add_quantized_activations_to_model_layer(module, config, prefix=""):
             new_layer = add_layer_specific_quantization_to_model(full_name, new_layer, config)
             setattr(module, name, new_layer)
         elif layer.__class__ == nn.LayerNorm:
-            ln_kwargs = dict(
-                normalized_shape=layer.normalized_shape,
-                eps=layer.eps,
-                elementwise_affine=layer.elementwise_affine,
-                quantize_input=quantize_input,
-                quantize_output=quantize_output,
-            )
+            ln_kwargs = {
+                "normalized_shape": layer.normalized_shape,
+                "eps": layer.eps,
+                "elementwise_affine": layer.elementwise_affine,
+                "quantize_input": quantize_input,
+                "quantize_output": quantize_output,
+            }
             new_layer = PQLayerNorm(config, **ln_kwargs)
             if layer.elementwise_affine:
                 if layer.weight is not None and new_layer._weight is not None:
@@ -2021,7 +2010,7 @@ def pre_finetune_functions(model):
 def post_pretrain_functions(model, config, train_loader=None, loss_function=None, input_shape=None):
 
     if config.fitcompress_parameters.enable_fitcompress:
-        from pquant.core.torch.fit_compress import call_fitcompress  # noqa: 811
+        from pquant.core.torch.fit_compress import call_fitcompress
 
         for layer in model.modules():
             if isinstance(
@@ -2126,7 +2115,7 @@ def get_layer_keep_ratio(model):
 
 
 def is_training_stage(layer):
-    return False if layer.pruning_layer._is_finetuning or layer.pruning_layer._is_pretraining else True
+    return not (layer.pruning_layer._is_finetuning or layer.pruning_layer._is_pretraining)
 
 
 def get_model_losses(model, losses):
@@ -2252,14 +2241,14 @@ def remove_compression_layers(module, config):
         if isinstance(layer, PQDense):
             out_features = layer.out_features
             in_features = layer.in_features
-            bias = True if layer.bias is not None else False
+            bias = layer.bias is not None
             setattr(module, name, nn.Linear(in_features=in_features, out_features=out_features, bias=bias))
             getattr(module, name).weight.data.copy_(layer.weight)
             if getattr(module, name).bias is not None:
                 getattr(module, name).bias.data.copy_(layer.bias)
         elif isinstance(layer, (PQConv1d, PQConv2d)):
             bias_values = layer.bias if layer.bias is not None else None
-            bias = True if bias_values is not None else False
+            bias = bias_values is not None
             conv = nn.Conv2d if isinstance(layer, PQConv2d) else nn.Conv1d
             setattr(
                 module,

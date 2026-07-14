@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from math import prod
+from typing import TYPE_CHECKING
 
 import keras
 import numpy as np
@@ -9,7 +10,6 @@ from alkaid.converter.builtin.keras.layers.activation import keras_numpy_unary_m
 from alkaid.converter.builtin.keras.layers.batchnorm import ReplayBatchNormalization
 from alkaid.converter.builtin.keras.layers.conv import _conv
 from alkaid.converter.builtin.keras.layers.pool import ReplayPool
-from alkaid.trace import FVArray
 from alkaid.trace.ops import einsum, extract_patches
 from keras.layers import DepthwiseConv1D, DepthwiseConv2D
 
@@ -34,6 +34,9 @@ from pquant.core.keras.layers import (
     PQSoftmax,
 )
 from pquant.core.keras.quantizer import Quantizer
+
+if TYPE_CHECKING:
+    from alkaid.trace import FVArray
 
 
 def _assert_final_compression(layer) -> None:
@@ -133,14 +136,8 @@ class ReplayPQuantBatchNormalization(ReplayBatchNormalization):
         _assert_final_compression(layer)
         mean = to_numpy(keras.ops.cast(layer.moving_mean, layer.dtype))
         variance = to_numpy(keras.ops.cast(layer.moving_variance, layer.dtype))
-        if layer.scale:
-            gamma = to_numpy(keras.ops.cast(layer.gamma, layer.dtype))
-        else:
-            gamma = np.ones_like(mean)
-        if layer.center:
-            beta = to_numpy(keras.ops.cast(layer.beta, layer.dtype))
-        else:
-            beta = np.zeros_like(mean)
+        gamma = to_numpy(keras.ops.cast(layer.gamma, layer.dtype)) if layer.scale else np.ones_like(mean)
+        beta = to_numpy(keras.ops.cast(layer.beta, layer.dtype)) if layer.center else np.zeros_like(mean)
         scale = gamma / np.sqrt(variance + layer.epsilon)
         offset = beta - mean * scale
         return scale, offset

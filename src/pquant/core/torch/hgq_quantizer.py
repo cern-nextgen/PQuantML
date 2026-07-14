@@ -366,8 +366,10 @@ if __name__ == "__main__":
     x2 = torch.randn(4, 3, requires_grad=True)
     out2 = q_sat2(x2, training=True)
     out2.sum().backward()
-    assert q_sat2._f.grad is not None and q_sat2._f.grad.abs().sum() > 0
-    assert x2.grad is not None and x2.grad.abs().sum() > 0
+    assert q_sat2._f.grad is not None
+    assert q_sat2._f.grad.abs().sum() > 0
+    assert x2.grad is not None
+    assert x2.grad.abs().sum() > 0
     logger.debug("SAT backward: gradients w.r.t. f and input OK")
     logger.debug(f"  f grad mean: {q_sat2._f.grad.mean():.6f}\n")
 
@@ -384,7 +386,8 @@ if __name__ == "__main__":
     x4 = torch.randn(4, 3, requires_grad=True)
     out4 = q_wrap2(x4, training=True)
     out4.sum().backward()
-    assert q_wrap2._f.grad is not None and q_wrap2._f.grad.abs().sum() > 0
+    assert q_wrap2._f.grad is not None
+    assert q_wrap2._f.grad.abs().sum() > 0
     assert q_wrap2._i_raw.grad is None, "_i_raw must not accumulate gradient"
     logger.debug("WRAP backward: f has gradient, _i_raw has none OK\n")
 

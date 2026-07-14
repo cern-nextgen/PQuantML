@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
 import tempfile
-from collections.abc import Callable, Iterable
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -18,6 +18,9 @@ from pquant.core.torch.layers import (
     pre_epoch_functions,
     pre_finetune_functions,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 
 def get_module(model: nn.Module, name: str) -> nn.Module:
@@ -39,8 +42,8 @@ class CachedDataset(torch.utils.data.Dataset):
     Since each file has one batch, uses batch_size of 1 here.
     """
 
-    def __init__(self, cache_dir: str, n_batches: int) -> None:
-        self.cache_dir = cache_dir
+    def __init__(self, cache_dir: str | Path, n_batches: int) -> None:
+        self.cache_dir = Path(cache_dir)
         self.n_batches = n_batches
 
     def __len__(self) -> int:
@@ -48,7 +51,7 @@ class CachedDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return torch.load(
-            os.path.join(self.cache_dir, f"{idx:08d}.pt"),
+            self.cache_dir / f"{idx:08d}.pt",
             weights_only=True,
         )
 
@@ -131,7 +134,7 @@ class LayerwiseDistiller:
                     self.teacher(x)
                     torch.save(
                         (teacher_captured_data["inp"], teacher_captured_data["out"]),
-                        os.path.join(cache_dir, f"{n_batches:08d}.pt"),
+                        Path(cache_dir) / f"{n_batches:08d}.pt",
                     )
                     n_batches += 1
         finally:
@@ -246,7 +249,7 @@ class LayerwiseDistiller:
 
         try:
             if self.precompute_layer_inputs:
-                tmpdir = tempfile.TemporaryDirectory(prefix="ldistil_", dir=self.cache_dir or os.getcwd())
+                tmpdir = tempfile.TemporaryDirectory(prefix="ldistil_", dir=self.cache_dir or str(Path.cwd()))
                 dataloader = self.precompute_layer_io(teacher_layer, dataloader, self.device, tmpdir.name)
             else:
                 teacher_out: dict[str, torch.Tensor] = {}
@@ -474,7 +477,7 @@ class ModelDistiller:
                 teacher_out = self.teacher_transform(teacher_logits) if self.teacher_transform else teacher_logits
                 torch.save(
                     (x.cpu(), teacher_out.cpu(), y.cpu()),
-                    os.path.join(cache_dir, f"{n_batches:08d}.pt"),
+                    Path(cache_dir) / f"{n_batches:08d}.pt",
                 )
                 n_batches += 1
 
@@ -631,10 +634,10 @@ class ModelDistiller:
 
         try:
             if self._precompute_teacher_outputs:
-                tmpdir = tempfile.TemporaryDirectory(prefix="mdistil_", dir=self.cache_dir or os.getcwd())
+                tmpdir = tempfile.TemporaryDirectory(prefix="mdistil_", dir=self.cache_dir or str(Path.cwd()))
                 dataloader = self.precompute_teacher_outputs(dataloader, tmpdir.name)
                 if val_dataloader is not None:
-                    tmpdir_val = tempfile.TemporaryDirectory(prefix="mdistil_val_", dir=self.cache_dir or os.getcwd())
+                    tmpdir_val = tempfile.TemporaryDirectory(prefix="mdistil_val_", dir=self.cache_dir or str(Path.cwd()))
                     val_dataloader = self.precompute_teacher_outputs(val_dataloader, tmpdir_val.name, shuffle=False)
 
             for e in range(training_parameters.pretraining_epochs):

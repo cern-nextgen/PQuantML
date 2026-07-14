@@ -46,7 +46,7 @@ class PDP(nn.Module):
         else:
             mask_shape = tuple(input_shape)
 
-        self.softmax_shape = list(input_shape) + [1]
+        self.softmax_shape = [*list(input_shape), 1]
         self._mask_numel = math.prod(mask_shape)
         self.flat_weight_size = float(self._mask_numel)
 

@@ -105,8 +105,7 @@ def sat(x, k, i, f):
     __max = 2.0**i
     _max = __max - f_eps
     _min = -__max * k
-    r = _clip(x, _min, _max)
-    return r
+    return _clip(x, _min, _max)
 
 
 @sat_mode("SAT_SYM")
@@ -114,8 +113,7 @@ def sat_sym(x, k, i, f):
     f_eps = 2.0 ** (-f)
     _max = 2.0**i - f_eps
     _min = -_max * k
-    r = _clip(x, _min, _max)
-    return r
+    return _clip(x, _min, _max)
 
 
 @sat_mode("WRAP_SM")
@@ -133,9 +131,7 @@ def wrap_sm_fn(x, k, i, f, training=None, quant_fn: Callable = lambda x: x):
     mapped = ((qx - high - eps) % interval) + low
 
     mapped = torch.where(c2, -mapped - eps, mapped)  # type: ignore
-    mapped = torch.where(c1, -mapped - eps, mapped)  # type: ignore
-
-    return mapped
+    return torch.where(c1, -mapped - eps, mapped)  # type: ignore
 
 
 class FixedPointQuantizer:
@@ -143,8 +139,7 @@ class FixedPointQuantizer:
         scale = 2.0**f
         x = x * scale
         xq = self.round_fn(x)
-        xq = xq / scale
-        return xq
+        return xq / scale
 
     def saturate(self, x, k, i, f):
         return self.sat_fn(x, k, i, f)
@@ -188,8 +183,7 @@ class FixedPointQuantizer:
         def quant_fn(x):
             return self.round(x, f, training and self.stochastic)
 
-        x = wrap_sm_fn(x, k, i, f, training, quant_fn)
-        return x
+        return wrap_sm_fn(x, k, i, f, training, quant_fn)
 
     def __call__(self, x, k, i, f, training=False, seed_gen=None):
         i = torch.maximum(i, -f).detach() + (i - i.detach())  # type: ignore
@@ -207,5 +201,4 @@ def get_fixed_quantizer(round_mode: str = "TRN", overflow_mode: str = "WRAP"):
     Args:
         round_mode: round mode, one of
     """
-    quantizer = FixedPointQuantizer(round_mode, overflow_mode)
-    return quantizer  # type: ignore
+    return FixedPointQuantizer(round_mode, overflow_mode)

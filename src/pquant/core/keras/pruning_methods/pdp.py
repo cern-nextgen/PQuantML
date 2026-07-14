@@ -19,7 +19,7 @@ class PDP(keras.layers.Layer):
         self._is_finetuning = False
 
     def build(self, input_shape):
-        self.softmax_shape = list(input_shape) + [1]
+        self.softmax_shape = [*list(input_shape), 1]
 
         structured = self.config.pruning_parameters.structured_pruning
         if structured:
@@ -130,7 +130,7 @@ class PDP(keras.layers.Layer):
         norm = ops.expand_dims(norm, -1)
         t = ops.ones(norm.shape) * 0.5 * (Wh + Wt)
         soft_input = ops.concatenate((t**2, norm**2), axis=-1) / self.temp
-        zw, mw = ops.unstack(ops.softmax(soft_input, axis=-1), axis=-1)
+        _zw, mw = ops.unstack(ops.softmax(soft_input, axis=-1), axis=-1)
         for _ in range(len(weight.shape) - len(mw.shape)):
             mw = ops.expand_dims(mw, -1)
         return mw

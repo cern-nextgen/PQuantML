@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated
 
 import keras
@@ -29,12 +30,14 @@ from pquant.data_models.pruning_model import (
 from pquant.data_models.quantization_model import BaseQuantizationModel
 from pquant.data_models.training_model import BaseTrainingModel
 
+CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
+
 
 def get_sampler(sampler_type, **kwargs):
     try:
         return constants.SAMPLER_REGISTRY[sampler_type](**kwargs)
-    except KeyError:
-        raise ValueError(f"Unknown sampler type: {sampler_type}")
+    except KeyError as err:
+        raise ValueError(f"Unknown sampler type: {sampler_type}") from err
 
 
 def log_model_by_backend(model, name, backend, signature=None, registered_model_name=None):
@@ -57,6 +60,7 @@ class MetricFunction(BaseModel):
     direction: str
 
     @field_validator("direction")
+    @classmethod
     def validate_direction(cls, direction):
         if direction not in constants.FINETUNING_DIRECTION:
             raise ValueError("Direction must be 'maximize' or 'minimize'")
@@ -66,7 +70,14 @@ class MetricFunction(BaseModel):
 class PQConfig(BaseModel):
     hpo_parameters: BaseHyperparameterOptimizationModel
     pruning_parameters: Annotated[
-        CSPruningModel | DSTPruningModel | FITCompressPruningModel | PDPPruningModel | WandaPruningModel | AutoSparsePruningModel | ActivationPruningModel | MDMMPruningModel,
+        CSPruningModel
+        | DSTPruningModel
+        | FITCompressPruningModel
+        | PDPPruningModel
+        | WandaPruningModel
+        | AutoSparsePruningModel
+        | ActivationPruningModel
+        | MDMMPruningModel,
         Field(discriminator="pruning_method"),
     ]
     quantization_parameters: BaseQuantizationModel
@@ -75,11 +86,12 @@ class PQConfig(BaseModel):
 
     @classmethod
     def load_from_file(cls, path_to_config_file):
-        if path_to_config_file.endswith((".yaml", ".yml")):
-            with open(path_to_config_file) as f:
+        config_path = Path(path_to_config_file)
+        if config_path.suffix in {".yaml", ".yml"}:
+            with config_path.open() as f:
                 config_data = yaml.safe_load(f)
-        elif path_to_config_file.endswith(".json"):
-            with open(path_to_config_file) as f:
+        elif config_path.suffix == ".json":
+            with config_path.open() as f:
                 config_data = json.load(f)
         else:
             raise ValueError("Unsupported file type. Use .yaml, .yml, or .json")
@@ -116,6 +128,7 @@ class BackendAdapter:
             new_model = keras.models.clone_model(model)
             new_model.set_weights(model.get_weights())
             return new_model
+        return None
 
     def get_backend(self):
         return self.backend
@@ -146,6 +159,7 @@ class BackendAdapter:
             return tensor.detach().cpu().numpy()
         if self.backend == constants.TF_BACKEND:
             return tensor.numpy()
+        return None
 
     def forward(self, model, x):
         if self.backend == constants.TORCH_BACKEND:
@@ -153,6 +167,7 @@ class BackendAdapter:
             return model(x)
         if self.backend == constants.TF_BACKEND:
             return model(x, training=False)
+        return None
 
 
 class TuningTask:
@@ -344,7 +359,7 @@ class TuningTask:
 
             with mlflow.start_run(nested=True):
                 mlflow.log_params(applied_parameters)
-                mlflow.log_metrics({key: val for key, val in zip(self.objectives.keys(), objectives)})
+                mlflow.log_metrics(dict(zip(self.objectives.keys(), objectives, strict=False)))
                 signature = infer_signature(
                     self.adapter.tensor_to_numpy(sample_input), self.adapter.tensor_to_numpy(sample_output)
                 )
@@ -397,60 +412,40 @@ class TuningTask:
         return study.best_trials
 
 
+def _load_default_config(yaml_name):
+    return PQConfig.load_from_file(CONFIG_DIR / yaml_name)
+
+
 def ap_config():
-    yaml_name = "config_ap.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_ap.yaml")
 
 
 def autosparse_config():
-    yaml_name = "config_autosparse.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_autosparse.yaml")
 
 
 def cs_config():
-    yaml_name = "config_cs.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_cs.yaml")
 
 
 def dst_config():
-    yaml_name = "config_dst.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_dst.yaml")
 
 
 def fitcompress_config():
-    yaml_name = "config_fitcompress.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_fitcompress.yaml")
 
 
 def mdmm_config():
-    yaml_name = "config_mdmm.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_mdmm.yaml")
 
 
 def pdp_config():
-    yaml_name = "config_pdp.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_pdp.yaml")
 
 
 def wanda_config():
-    yaml_name = "config_wanda.yaml"
-    parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(parent, "configs", yaml_name)
-    return PQConfig.load_from_file(path)
+    return _load_default_config("config_wanda.yaml")
 
 
 def load_from_file(path):
