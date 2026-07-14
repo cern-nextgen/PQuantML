@@ -1,3 +1,5 @@
+from typing import Any
+
 import keras
 from keras import ops
 
@@ -22,6 +24,7 @@ class PDP(keras.layers.Layer):
         self.softmax_shape = [*list(input_shape), 1]
 
         structured = self.config.pruning_parameters.structured_pruning
+        mask_shape: tuple[Any, ...]
         if structured:
             if self.layer_type == "linear":
                 mask_shape = (input_shape[0], 1)

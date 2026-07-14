@@ -198,7 +198,7 @@ def _analyze_quantization(model):
             return modules.get(node.target)
         return None
 
-    quantized = {}
+    quantized: dict = {}
     node_issues = defaultdict(list)
     edges_to_quantize = set()
 

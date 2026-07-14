@@ -39,8 +39,8 @@ class PDPPruningModel(BasePruningModel):
 
 class WandaPruningModel(BasePruningModel):
     pruning_method: Literal["wanda"] = "wanda"
-    M: int | None = (Field(default=None),)
-    N: int | None = (Field(default=None),)
+    M: int | None = Field(default=None)
+    N: int | None = Field(default=None)
     sparsity: float = Field(default=0.9)
     t_delta: int = Field(default=100)
     t_start_collecting_batch: int = Field(default=100)

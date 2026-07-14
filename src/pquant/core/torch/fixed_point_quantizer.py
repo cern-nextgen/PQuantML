@@ -135,7 +135,7 @@ def wrap_sm_fn(x, k, i, f, training=None, quant_fn: Callable = lambda x: x):
 
 
 class FixedPointQuantizer:
-    def round(self, x, f: Any = 1.0):
+    def round(self, x, f: Any = 1.0, stochastic: bool = False):
         scale = 2.0**f
         x = x * scale
         xq = self.round_fn(x)

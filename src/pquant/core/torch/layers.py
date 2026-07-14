@@ -1,4 +1,4 @@
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import torch
 import torch.nn as nn
@@ -83,15 +83,15 @@ class PQWeightBiasBase(nn.Module):
         self.in_quant_granularity = in_quant_granularity if in_quant_granularity is not None else self.granularity
         self.bias_quant_granularity = bias_quant_granularity if bias_quant_granularity is not None else self.granularity
         self.out_quant_granularity = out_quant_granularity if out_quant_granularity is not None else self.granularity
-        self.final_compression_done = False
+        self.final_compression_done: Any = False
         self.built = False
         self.parallelization_factor = -1
         self.hgq_beta = config.quantization_parameters.hgq_beta
-        self.input_shape = None
+        self.input_shape: tuple[Any, ...] | None = None
         self.is_pretraining = True
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
-        self.saved_outputs = []
+        self.saved_inputs: list[Any] = []
+        self.saved_outputs: list[Any] = []
         self.config = config
 
     def check_is_built(self, input_shape):
@@ -185,7 +185,7 @@ class PQWeightBiasBase(nn.Module):
             return
         self._weight.data = self.init_weight.clone()
 
-    def ebops(self):
+    def ebops(self, include_mask=False):
         return 0.0
 
     def hgq_loss(self):
@@ -681,7 +681,7 @@ class PQAvgPoolBase(nn.Module):
         self.hgq_beta = config.quantization_parameters.hgq_beta
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
         # Optional per-quantizer granularity override; None → inherit config granularity.
@@ -910,7 +910,7 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         self.final_compression_done = False
         self.is_pretraining = True
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
 
     def check_is_built(self, input_shape):
         if self.built:
@@ -1083,7 +1083,7 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         self.final_compression_done = False
         self.is_pretraining = True
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
 
     def check_is_built(self, input_shape):
         if self.built:
@@ -1273,7 +1273,7 @@ class PQLayerNorm(nn.LayerNorm):
         self.final_compression_done = False
         self.is_pretraining = True
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
 
     def check_is_built(self, input_shape):
         if self.built:

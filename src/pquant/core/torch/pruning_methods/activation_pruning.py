@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch
 import torch.nn as nn
 
@@ -23,6 +25,7 @@ class ActivationPruning(nn.Module):
     def build(self, input_shape):
         if self.built:
             return
+        shape: tuple[Any, ...]
         if self.layer_type in ("conv", "depthwise_conv"):
             shape = (input_shape[0], 1, 1) if len(input_shape) == 3 else (input_shape[0], 1, 1, 1)
         else:

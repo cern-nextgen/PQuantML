@@ -1,5 +1,5 @@
 from math import prod
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import keras
 from keras import constraints, initializers, ops, regularizers
@@ -110,7 +110,7 @@ class PQWeightBiasBase(keras.layers.Layer):
         self.built = False
         self.parallelization_factor = -1
         self.hgq_beta = config.quantization_parameters.hgq_beta
-        self.input_shape = None
+        self.input_shape: Any = None
         self._is_pretraining = True
         self._is_finetuning = False
         self.config = config
@@ -252,7 +252,7 @@ class PQWeightBiasBase(keras.layers.Layer):
     def rewind_weights(self):
         self._kernel.assign(self.init_weight)
 
-    def ebops(self):
+    def ebops(self, include_mask=False):
         return 0.0
 
     def hgq_loss(self):
@@ -419,8 +419,8 @@ class PQDepthwiseConv2d(PQWeightBiasBase, keras.layers.DepthwiseConv2D):
         self.weight_transpose_back = (2, 3, 0, 1)
         self.data_transpose = (0, 3, 1, 2)
         self.do_transpose_data = self.data_format == "channels_last"
-        self._weight = None
-        self._bias = None
+        self._weight: Any = None
+        self._bias: Any = None
 
     def build(self, input_shape):
         super().build(input_shape)
@@ -2445,7 +2445,7 @@ def add_compression_layers(model, config, input_shape=None):
             enable_pruning = get_enable_pruning(layer, config)
             new_layer.set_enable_pruning(enable_pruning)
             pruning_layer_input = layer.kernel
-            transpose_shape = new_layer.weight_transpose
+            transpose_shape: tuple[int, ...] = new_layer.weight_transpose
             pruning_layer_input = ops.transpose(pruning_layer_input, transpose_shape)
             new_layer.pruning_layer.build(pruning_layer_input.shape)
 
@@ -2810,7 +2810,7 @@ def populate_config_with_all_layers(model, config):
     """Create a default config, where all the layers are added to the disable_pruning list, and have their
     own default quantization bits in layer_specific. By default input/output quantization is disabled.
     """
-    custom_scheme = {"layer_specific": {}, "disable_pruning_for_layers": []}
+    custom_scheme: dict[str, Any] = {"layer_specific": {}, "disable_pruning_for_layers": []}
     for layer in model.layers:
         if isinstance(layer, (Dense, Conv2D, Conv1D, DepthwiseConv2D, PQWeightBiasBase, PQDepthwiseConv2d)):
             if layer.use_bias:

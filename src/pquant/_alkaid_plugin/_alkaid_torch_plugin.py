@@ -3,7 +3,7 @@ from __future__ import annotations
 import builtins
 import operator
 from functools import wraps
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -82,8 +82,8 @@ def _patch_weight_bias_properties() -> None:
         marker = "__alkaid_pquant_patched_weight_bias__"
         if getattr(cls, marker, False):
             continue
-        original_weight = cls.weight.fget
-        original_bias = cls.bias.fget
+        original_weight = cast("property", cls.weight).fget
+        original_bias = cast("property", cls.bias).fget
 
         def weight(self, _original_weight=original_weight):
             if not is_fx_symbolic_tracing():
@@ -97,8 +97,8 @@ def _patch_weight_bias_properties() -> None:
             _assert_final_compression(self)
             return _module_parameter(self, "_bias")
 
-        cls.weight = property(weight)
-        cls.bias = property(bias)
+        cls.weight = property(weight)  # type: ignore[method-assign,assignment]
+        cls.bias = property(bias)  # type: ignore[method-assign,assignment]
         setattr(cls, marker, True)
 
 

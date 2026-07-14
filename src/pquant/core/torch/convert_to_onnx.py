@@ -1527,12 +1527,15 @@ def convert_to_onnx_fx(
 
     onnx_nodes: list[onnx.NodeProto] = []
     initializers: list[onnx.TensorProto] = []
-    node_to_name: dict[_fx.Node, str] = {}
+    node_to_name: dict[_fx.Node, str | tuple[str, str]] = {}
     output_names: list[str] = []
 
     def _res(arg) -> str:
         if isinstance(arg, _fx.Node):
-            return node_to_name[arg]
+            name = node_to_name[arg]
+            if isinstance(name, tuple):
+                raise TypeError(f"Expected tensor node name, got tuple output for {arg.name!r}")
+            return name
         raise TypeError(f"Expected fx.Node, got {type(arg)}")
 
     def _binop_inputs(node: _fx.Node) -> list[str]:
@@ -1541,7 +1544,7 @@ def convert_to_onnx_fx(
         names: list[str] = []
         for i, a in enumerate(node.args[:2]):
             if isinstance(a, _fx.Node):
-                names.append(node_to_name[a])
+                names.append(_res(a))
             elif isinstance(a, (int, float, bool)):
                 cname = f"{node.name}_arg{i}_const"
                 initializers.append(onh.from_array(np.array(float(a), dtype=np.float32), name=cname))
@@ -1587,9 +1590,9 @@ def convert_to_onnx_fx(
             mod_prefix = node.name.replace(".", "_")
             if isinstance(mod, PQMultiheadAttention):
                 # node.args = (query, key, value[, key_padding_mask, attn_mask, ...])
-                q_name = node_to_name[node.args[0]]
-                k_name = node_to_name[node.args[1]] if len(node.args) > 1 else q_name
-                v_name = node_to_name[node.args[2]] if len(node.args) > 2 else q_name
+                q_name = _res(node.args[0])
+                k_name = _res(node.args[1]) if len(node.args) > 1 else q_name
+                v_name = _res(node.args[2]) if len(node.args) > 2 else q_name
                 out_name, avg_attn_name = _add_mha(
                     mod,
                     mod_prefix,
@@ -1608,7 +1611,7 @@ def convert_to_onnx_fx(
                 current = _emit_module(
                     mod,
                     mod_prefix,
-                    node_to_name[node.args[0]],
+                    _res(node.args[0]),
                     onnx_nodes,
                     initializers,
                     quant_fn,

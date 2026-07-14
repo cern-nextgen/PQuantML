@@ -1,11 +1,13 @@
 from math import prod
-from typing import TypeVar as T
+from typing import Any
 
 import keras
 from keras import ops
 from keras.ops import maximum, minimum, relu, tanh
 
 from pquant.core.keras.quantizer import Quantizer
+
+QuantBits = tuple[Any, Any, Any]
 
 
 def hard_sigmoid(x):
@@ -29,8 +31,8 @@ class PQActivation(keras.layers.Layer):
         self,
         config,
         activation="relu",
-        in_quant_bits: tuple[T, T, T] | None = None,
-        out_quant_bits: tuple[T, T, T] | None = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         quantize_input=True,
         quantize_output=False,
         enable_ebops=True,
@@ -78,7 +80,7 @@ class PQActivation(keras.layers.Layer):
         self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
 
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
         self.enable_ebops = enable_ebops
@@ -228,12 +230,12 @@ class PQSoftmax(keras.layers.Layer):
         parallelization_factor: int = -1,
         quantize_input: bool = True,
         quantize_output: bool = False,
-        in_quant_bits: tuple[T, T, T] | None = None,
-        out_quant_bits: tuple[T, T, T] | None = None,
-        exp_in_quant_bits: tuple[T, T, T] | None = None,
-        exp_out_quant_bits: tuple[T, T, T] | None = None,
-        inv_in_quant_bits: tuple[T, T, T] | None = None,
-        inv_out_quant_bits: tuple[T, T, T] | None = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
+        exp_in_quant_bits: QuantBits | None = None,
+        exp_out_quant_bits: QuantBits | None = None,
+        inv_in_quant_bits: QuantBits | None = None,
+        inv_out_quant_bits: QuantBits | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)

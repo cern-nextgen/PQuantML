@@ -250,7 +250,7 @@ class LayerwiseDistiller:
         try:
             if self.precompute_layer_inputs:
                 tmpdir = tempfile.TemporaryDirectory(prefix="ldistil_", dir=self.cache_dir or str(Path.cwd()))
-                dataloader = self.precompute_layer_io(teacher_layer, dataloader, self.device, tmpdir.name)
+                dataloader = self.precompute_layer_io(teacher_layer, dataloader, tmpdir.name)
             else:
                 teacher_out: dict[str, torch.Tensor] = {}
                 student_out: dict[str, torch.Tensor] = {}

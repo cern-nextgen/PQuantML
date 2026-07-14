@@ -1,3 +1,5 @@
+from typing import Any
+
 import keras
 from keras import ops
 
@@ -19,12 +21,13 @@ class ActivationPruning(keras.layers.Layer):
         self.t_start_collecting_batch = self.config.pruning_parameters.t_start_collecting_batch
 
     def build(self, input_shape):
-        self.shape = (input_shape[0], 1)
+        shape: tuple[Any, ...] = (input_shape[0], 1)
         if self.layer_type in ("conv", "depthwise_conv"):
             if len(input_shape) == 3:
-                self.shape = (input_shape[0], 1, 1)
+                shape = (input_shape[0], 1, 1)
             else:
-                self.shape = (input_shape[0], 1, 1, 1)
+                shape = (input_shape[0], 1, 1, 1)
+        self.shape = shape
         n_channels = input_shape[0]
         self.mask = self.add_weight(shape=self.shape, initializer="ones", trainable=False)
         self.mask_placeholder = self.add_weight(shape=self.shape, initializer="ones", trainable=False)

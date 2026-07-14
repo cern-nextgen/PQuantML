@@ -173,15 +173,15 @@ class BackendAdapter:
 class TuningTask:
     def __init__(self, config: PQConfig):
         self.config = config
-        self.hyperparameters = {}
+        self.hyperparameters: dict[str, tuple[Callable, tuple, dict]] = {}
         self.objectives: dict[str, MetricFunction] = {}
         self._training_function: Callable | None = None
         self._validation_function: Callable | None = None
         self._optimizer_function: Callable | None = None
         self._scheduler_function: Callable | None = None
         self.enable_mlflow = False
-        self.tracking_uri = None
-        self.storage_db = None
+        self.tracking_uri: str | None = None
+        self.storage_db: str | None = None
 
     def set_tracking_uri(self, tracking_uri: str):
         self.tracking_uri = tracking_uri

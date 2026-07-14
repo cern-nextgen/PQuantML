@@ -1,5 +1,5 @@
 from math import prod
-from typing import TypeVar
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -7,7 +7,7 @@ from torch import maximum, minimum, relu, tanh
 
 from pquant.core.torch.quantizer import Quantizer
 
-T = TypeVar("T")
+QuantBits = tuple[Any, Any, Any]
 
 
 def hard_sigmoid(x):
@@ -36,8 +36,8 @@ class PQActivation(nn.Module):
         self,
         config,
         activation="relu",
-        in_quant_bits: tuple[T, T, T] | None = None,
-        out_quant_bits: tuple[T, T, T] | None = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
         quantize_input=True,
         quantize_output=False,
         enable_ebops=True,
@@ -84,7 +84,7 @@ class PQActivation(nn.Module):
         self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
 
         self.post_fitcompress_calibration = False
-        self.saved_inputs = []
+        self.saved_inputs: list[Any] = []
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
         self.enable_ebops = enable_ebops
@@ -228,12 +228,12 @@ class PQSoftmax(nn.Module):
         parallelization_factor: int = -1,
         quantize_input: bool = True,
         quantize_output: bool = False,
-        in_quant_bits: tuple[T, T, T] | None = None,
-        out_quant_bits: tuple[T, T, T] | None = None,
-        exp_in_quant_bits: tuple[T, T, T] | None = None,
-        exp_out_quant_bits: tuple[T, T, T] | None = None,
-        inv_in_quant_bits: tuple[T, T, T] | None = None,
-        inv_out_quant_bits: tuple[T, T, T] | None = None,
+        in_quant_bits: QuantBits | None = None,
+        out_quant_bits: QuantBits | None = None,
+        exp_in_quant_bits: QuantBits | None = None,
+        exp_out_quant_bits: QuantBits | None = None,
+        inv_in_quant_bits: QuantBits | None = None,
+        inv_out_quant_bits: QuantBits | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)

@@ -1,4 +1,5 @@
 import math
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -36,6 +37,7 @@ class PDP(nn.Module):
         if self.built:
             return
         structured = self.config.pruning_parameters.structured_pruning
+        mask_shape: tuple[Any, ...]
         if structured:
             if self.layer_type == "linear":
                 mask_shape = (input_shape[0], 1)
