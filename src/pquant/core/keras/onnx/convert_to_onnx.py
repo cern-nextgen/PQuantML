@@ -21,7 +21,6 @@ import keras
 import numpy as np
 import onnx
 import onnx.helper as oh
-import onnx.numpy_helper as onh
 from keras import ops
 from onnx import TensorProto
 
@@ -34,15 +33,7 @@ from pquant.core.keras.layers import (
     PQDepthwiseConv2d,
     PQMultiheadAttention,
 )
-from pquant.core.keras.onnx.helpers import (
-    emit_getitem,
-    emit_squeeze,
-    emit_unsqueeze,
-    keras_dtype_to_tp,
-    qdq_node,
-    quant_node,
-    to_np,
-)
+from pquant.core.keras.onnx.helpers import keras_dtype_to_tp
 from pquant.core.keras.onnx.layer_builders import (
     add_avgpool,
     add_batchnorm,
@@ -53,17 +44,104 @@ from pquant.core.keras.onnx.layer_builders import (
     add_mha,
     add_pq_activation,
 )
+from pquant.core.onnx_common import (
+    add_initializer,
+    add_int64_array,
+    emit_getitem,
+    emit_squeeze,
+    emit_unsqueeze,
+    qdq_node,
+    quant_node,
+    save_model,
+    to_np,
+)
+
+_ACTIVATION_OPS = {"relu": "Relu", "sigmoid": "Sigmoid", "tanh": "Tanh"}
 
 
 def resolve_mask_arg(mask, prefix, kind, tensor_to_onnx, initializers):
+    """Resolve an MHA mask call argument to an ONNX name (constant masks become initializers)."""
     if mask is None:
         return None
     if tensor_to_onnx is not None and id(mask) in tensor_to_onnx:
         return tensor_to_onnx[id(mask)]
-    arr = np.asarray(to_np(mask))
-    name = f"{prefix}_{kind}_const"
-    initializers.append(onh.from_array(arr, name=name))
-    return name
+    return add_initializer(initializers, f"{prefix}_{kind}_const", np.asarray(to_np(mask)))
+
+
+def call_arguments(layer):
+    """The recorded call arguments of the layer's first inbound node."""
+    return layer._inbound_nodes[0].arguments if layer._inbound_nodes else None
+
+
+def add_mha_layer(layer, prefix, input_onnx_names, nodes, initializers, quant_fn, use_qonnx, store_int, tensor_to_onnx):
+    if len(input_onnx_names) >= 3:
+        q_in, k_in, v_in = input_onnx_names[:3]
+    elif len(input_onnx_names) == 2:
+        q_in, k_in, v_in = input_onnx_names[0], input_onnx_names[1], input_onnx_names[1]
+    else:
+        q_in = k_in = v_in = input_onnx_names[0]
+
+    arguments = call_arguments(layer)
+    kwargs = arguments.kwargs if arguments else {}
+    kpm = resolve_mask_arg(kwargs.get("key_padding_mask"), prefix, "kpm", tensor_to_onnx, initializers)
+    attn_mask = resolve_mask_arg(kwargs.get("attn_mask"), prefix, "attn_mask", tensor_to_onnx, initializers)
+    return add_mha(
+        layer,
+        prefix,
+        q_in,
+        k_in,
+        v_in,
+        nodes,
+        initializers,
+        quant_fn,
+        use_qonnx,
+        store_int,
+        key_padding_mask=kpm,
+        attn_mask=attn_mask,
+    )
+
+
+def add_getitem_op(layer, prefix, current, nodes, initializers):
+    """keras.ops GetItem operation recorded by ``x[...]`` KerasTensor syntax."""
+    arguments = call_arguments(layer)
+    spec = arguments.args[1] if len(arguments.args) > 1 else arguments.kwargs["key"]
+    rank = len(arguments.args[0].shape)
+    return emit_getitem(prefix, current, spec, rank, nodes, initializers)
+
+
+def add_expand_dims_op(layer, prefix, current, nodes, initializers):
+    """keras.ops.expand_dims operation; the axis is stored on the op."""
+    rank = len(call_arguments(layer).args[0].shape)
+    return emit_unsqueeze(prefix, current, [int(layer.axis) % (rank + 1)], nodes, initializers)
+
+
+def add_squeeze_op(layer, prefix, current, nodes, initializers):
+    """keras.ops.squeeze operation; axis=None squeezes every size-1 axis
+    (the batch axis is None in the symbolic shape, so it is never squeezed)."""
+    in_shape = call_arguments(layer).args[0].shape
+    axis = layer.axis
+    if axis is None:
+        axes = [i for i, s in enumerate(in_shape) if s == 1]
+    else:
+        axis = axis if isinstance(axis, (list, tuple)) else (axis,)
+        axes = [a for a in (int(a) % len(in_shape) for a in axis) if in_shape[a] == 1]
+    return emit_squeeze(prefix, current, axes, nodes, initializers)
+
+
+def add_standard_activation(layer, prefix, current, nodes):
+    """keras.layers.ReLU or keras.layers.Activation with a supported activation."""
+    activation = (
+        layer.activation.__name__
+        if isinstance(layer, keras.layers.Activation) and callable(layer.activation)
+        else getattr(layer, "activation", "relu")
+    )
+    act_name = activation if isinstance(activation, str) else "relu"
+    op_type = next((op for key, op in _ACTIVATION_OPS.items() if key in act_name.lower()), None)
+    if op_type is None:
+        raise TypeError(f"Unsupported Activation for ONNX export: {act_name!r}")
+    out = f"{prefix}_act"
+    nodes.append(oh.make_node(op_type, inputs=[current], outputs=[out]))
+    return out
 
 
 def emit_layer(
@@ -81,28 +159,8 @@ def emit_layer(
     """Emit ONNX nodes for a single Keras layer.  Returns the ONNX output name."""
 
     if isinstance(layer, PQMultiheadAttention):
-        if len(input_onnx_names) >= 3:
-            q_in, k_in, v_in = input_onnx_names[0], input_onnx_names[1], input_onnx_names[2]
-        elif len(input_onnx_names) == 2:
-            q_in, k_in, v_in = input_onnx_names[0], input_onnx_names[1], input_onnx_names[1]
-        else:
-            q_in = k_in = v_in = input_onnx_names[0]
-        kwargs = layer._inbound_nodes[0].arguments.kwargs if layer._inbound_nodes else {}
-        kpm = resolve_mask_arg(kwargs.get("key_padding_mask"), prefix, "kpm", tensor_to_onnx, initializers)
-        attn_mask = resolve_mask_arg(kwargs.get("attn_mask"), prefix, "attn_mask", tensor_to_onnx, initializers)
-        return add_mha(
-            layer,
-            prefix,
-            q_in,
-            k_in,
-            v_in,
-            nodes,
-            initializers,
-            quant_fn,
-            use_qonnx,
-            store_integer_weights,
-            key_padding_mask=kpm,
-            attn_mask=attn_mask,
+        return add_mha_layer(
+            layer, prefix, input_onnx_names, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, tensor_to_onnx
         )
 
     if isinstance(layer, PQActivation):
@@ -114,27 +172,15 @@ def emit_layer(
     if isinstance(layer, PQDepthwiseConv2d):
         return add_depthwise_conv(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights)
 
-    if isinstance(layer, PQConv2d):
+    if isinstance(layer, (PQConv2d, PQConv1d)):
+        ndim = 2 if isinstance(layer, PQConv2d) else 1
         return add_conv(
             layer,
             prefix,
             current,
             nodes,
             initializers,
-            ndim=2,
-            quant_fn=quant_fn,
-            use_qonnx=use_qonnx,
-            store_integer_weights=store_integer_weights,
-        )
-
-    if isinstance(layer, PQConv1d):
-        return add_conv(
-            layer,
-            prefix,
-            current,
-            nodes,
-            initializers,
-            ndim=1,
+            ndim=ndim,
             quant_fn=quant_fn,
             use_qonnx=use_qonnx,
             store_integer_weights=store_integer_weights,
@@ -144,47 +190,16 @@ def emit_layer(
         return add_batchnorm(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights)
 
     if type(layer).__name__ == "GetItem":
-        # keras.ops GetItem operation recorded by ``x[...]`` KerasTensor syntax.
-        node = layer._inbound_nodes[0]
-        args = node.arguments.args
-        spec = args[1] if len(args) > 1 else node.arguments.kwargs["key"]
-        rank = len(args[0].shape)
-        return emit_getitem(prefix, current, spec, rank, nodes, initializers)
+        return add_getitem_op(layer, prefix, current, nodes, initializers)
 
     if type(layer).__name__ == "ExpandDims":
-        # keras.ops.expand_dims operation; the axis is stored on the op.
-        rank = len(layer._inbound_nodes[0].arguments.args[0].shape)
-        return emit_unsqueeze(prefix, current, [int(layer.axis) % (rank + 1)], nodes, initializers)
+        return add_expand_dims_op(layer, prefix, current, nodes, initializers)
 
     if type(layer).__name__ == "Squeeze":
-        # keras.ops.squeeze operation; axis=None squeezes every size-1 axis
-        # (the batch axis is None in the symbolic shape, so it is never squeezed).
-        in_shape = layer._inbound_nodes[0].arguments.args[0].shape
-        axis = layer.axis
-        if axis is None:
-            axes = [i for i, s in enumerate(in_shape) if s == 1]
-        else:
-            axis = axis if isinstance(axis, (list, tuple)) else (axis,)
-            axes = [a for a in (int(a) % len(in_shape) for a in axis) if in_shape[a] == 1]
-        return emit_squeeze(prefix, current, axes, nodes, initializers)
+        return add_squeeze_op(layer, prefix, current, nodes, initializers)
 
     if isinstance(layer, (keras.layers.ReLU, keras.layers.Activation)):
-        activation = (
-            layer.activation.__name__
-            if isinstance(layer, keras.layers.Activation) and callable(layer.activation)
-            else getattr(layer, "activation", "relu")
-        )
-        act_name = activation if isinstance(activation, str) else "relu"
-        out = f"{prefix}_act"
-        if "relu" in act_name.lower():
-            nodes.append(oh.make_node("Relu", inputs=[current], outputs=[out]))
-        elif "sigmoid" in act_name.lower():
-            nodes.append(oh.make_node("Sigmoid", inputs=[current], outputs=[out]))
-        elif "tanh" in act_name.lower():
-            nodes.append(oh.make_node("Tanh", inputs=[current], outputs=[out]))
-        else:
-            raise TypeError(f"Unsupported Activation for ONNX export: {act_name!r}")
-        return out
+        return add_standard_activation(layer, prefix, current, nodes)
 
     if isinstance(layer, keras.layers.Flatten):
         out = f"{prefix}_flatten"
@@ -192,12 +207,9 @@ def emit_layer(
         return out
 
     if isinstance(layer, keras.layers.Reshape):
-        target_shape = list(layer.target_shape)
-        # Prepend batch dim (-1 means dynamic)
-        full_shape = [-1] + target_shape
-        shape_name = f"{prefix}_shape"
+        full_shape = [-1] + list(layer.target_shape)  # -1 keeps the batch dim dynamic
+        shape_name = add_int64_array(initializers, f"{prefix}_shape", full_shape)
         out = f"{prefix}_reshape"
-        initializers.append(onh.from_array(np.array(full_shape, dtype=np.int64), name=shape_name))
         nodes.append(oh.make_node("Reshape", inputs=[current, shape_name], outputs=[out]))
         return out
 
@@ -207,71 +219,66 @@ def emit_layer(
         nodes.append(oh.make_node("Add", inputs=input_onnx_names, outputs=[out]))
         return out
 
-    if isinstance(layer, keras.layers.Concatenate):
-        assert input_onnx_names is not None
-        axis = layer.axis
-        # Negative axis: leave as-is; onnx Concat supports negative axes
-        out = f"{prefix}_concat"
-        nodes.append(oh.make_node("Concat", inputs=input_onnx_names, outputs=[out], axis=axis))
-        return out
-
     if isinstance(layer, keras.layers.Multiply):
         assert input_onnx_names is not None and len(input_onnx_names) == 2
         out = f"{prefix}_mul"
         nodes.append(oh.make_node("Mul", inputs=input_onnx_names, outputs=[out]))
         return out
 
-    if isinstance(layer, keras.layers.AveragePooling2D):
-        return add_avgpool(layer, prefix, current, nodes, initializers, ndim=2, quant_fn=quant_fn)
+    if isinstance(layer, keras.layers.Concatenate):
+        assert input_onnx_names is not None
+        out = f"{prefix}_concat"
+        # Negative axes are fine: ONNX Concat supports them.
+        nodes.append(oh.make_node("Concat", inputs=input_onnx_names, outputs=[out], axis=layer.axis))
+        return out
 
-    if isinstance(layer, keras.layers.AveragePooling1D):
-        return add_avgpool(layer, prefix, current, nodes, initializers, ndim=1, quant_fn=quant_fn)
+    if isinstance(layer, (keras.layers.AveragePooling2D, keras.layers.AveragePooling1D)):
+        ndim = 2 if isinstance(layer, keras.layers.AveragePooling2D) else 1
+        return add_avgpool(layer, prefix, current, nodes, initializers, ndim=ndim, quant_fn=quant_fn)
 
-    if isinstance(layer, keras.layers.GlobalAveragePooling2D):
-        return add_global_avgpool(layer, prefix, current, nodes, ndim=2)
+    if isinstance(layer, (keras.layers.GlobalAveragePooling2D, keras.layers.GlobalAveragePooling1D)):
+        ndim = 2 if isinstance(layer, keras.layers.GlobalAveragePooling2D) else 1
+        return add_global_avgpool(layer, prefix, current, nodes, ndim=ndim)
 
-    if isinstance(layer, keras.layers.GlobalAveragePooling1D):
-        return add_global_avgpool(layer, prefix, current, nodes, ndim=1)
-
-    if isinstance(layer, (keras.layers.Dropout,)):
+    if isinstance(layer, keras.layers.Dropout):
         return current  # identity at inference
 
     raise TypeError(f"Unsupported Keras layer type for ONNX export: {type(layer).__name__!r}")
 
 
 def build_tensor_onnx_map(model):
-    tensor_to_onnx = {}
-    for i, inp in enumerate(model.inputs):
-        name = "input" if len(model.inputs) == 1 else f"input_{i}"
-        tensor_to_onnx[id(inp)] = name
-    return tensor_to_onnx
+    """Seed the KerasTensor-id → ONNX-name map with the model inputs."""
+    return {id(inp): name for inp, name in zip(model.inputs, model_input_names(model))}
+
+
+def model_input_names(model):
+    if len(model.inputs) == 1:
+        return ["input"]
+    return [f"input_{i}" for i in range(len(model.inputs))]
 
 
 def inbound_input_names(layer, tensor_to_onnx):
     """Return the list of ONNX input names for this layer based on its inbound node."""
     if not layer._inbound_nodes:
         return []
-    node = layer._inbound_nodes[0]
-    input_tensors = node.input_tensors
+    input_tensors = layer._inbound_nodes[0].input_tensors
     if not isinstance(input_tensors, (list, tuple)):
         input_tensors = [input_tensors]
     result = []
     for t in input_tensors:
-        key = id(t)
-        if key not in tensor_to_onnx:
+        if id(t) not in tensor_to_onnx:
             raise RuntimeError(
                 f"Layer {layer.name!r}: input tensor not found in tensor_to_onnx map. "
                 "Ensure model.layers is in topological order."
             )
-        result.append(tensor_to_onnx[key])
+        result.append(tensor_to_onnx[id(t)])
     return result
 
 
 def register_layer_output(layer, onnx_name, tensor_to_onnx):
     if not layer._inbound_nodes:
         return
-    node = layer._inbound_nodes[0]
-    out_tensors = node.output_tensors
+    out_tensors = layer._inbound_nodes[0].output_tensors
     if not isinstance(out_tensors, (list, tuple)):
         out_tensors = [out_tensors]
     if isinstance(onnx_name, (list, tuple)):
@@ -327,7 +334,6 @@ def convert_to_onnx(
 
     onnx_nodes: list[onnx.NodeProto] = []
     initializers: list[onnx.TensorProto] = []
-
     tensor_to_onnx = build_tensor_onnx_map(model)
     last_output_name: str = ""
 
@@ -339,13 +345,11 @@ def convert_to_onnx(
         if not input_onnx_names:
             continue
 
-        current = input_onnx_names[0]
         prefix = layer.name.replace("/", "_").replace(":", "_")
-
         output_name = emit_layer(
             layer,
             prefix,
-            current,
+            input_onnx_names[0],
             onnx_nodes,
             initializers,
             quant_fn,
@@ -358,26 +362,23 @@ def convert_to_onnx(
         register_layer_output(layer, output_name, tensor_to_onnx)
         last_output_name = output_name[0] if isinstance(output_name, tuple) else output_name
 
-    n_in = len(model.inputs)
-    if n_in == 1:
-        input_names = ["input"]
+    input_names = model_input_names(model)
+    if len(model.inputs) == 1:
         input_shapes = [tuple(input_shape)]
     else:
-        input_names = [f"input_{i}" for i in range(n_in)]
         input_shapes = [tuple(t.shape[1:]) for t in model.inputs]
     np_dtypes = [np.dtype(str(t.dtype)) for t in model.inputs]
     tp_dtypes = [keras_dtype_to_tp(t.dtype) for t in model.inputs]
 
     dummies = [np.zeros((1, *shp), dtype=dt) for shp, dt in zip(input_shapes, np_dtypes)]
-    dummy_out = model(dummies[0] if n_in == 1 else dummies, training=False)
+    dummy_out = model(dummies[0] if len(dummies) == 1 else dummies, training=False)
     dummy_out_np = np.array(ops.convert_to_numpy(dummy_out))
-    batch_dim = batch_size  # None → dynamic, int → fixed
-    output_shape = [batch_dim] + list(dummy_out_np.shape[1:])
 
+    batch_dim = batch_size  # None → dynamic, int → fixed
     input_vis = [
         oh.make_tensor_value_info(name, tp, [batch_dim, *shp]) for name, shp, tp in zip(input_names, input_shapes, tp_dtypes)
     ]
-    output_vi = oh.make_tensor_value_info(last_output_name, TensorProto.FLOAT, output_shape)
+    output_vi = oh.make_tensor_value_info(last_output_name, TensorProto.FLOAT, [batch_dim] + list(dummy_out_np.shape[1:]))
 
     graph = oh.make_graph(
         nodes=onnx_nodes,
@@ -386,20 +387,6 @@ def convert_to_onnx(
         outputs=[output_vi],
         initializer=initializers,
     )
-
-    opset_imports = [oh.make_opsetid("", opset)]
-    if use_qonnx:
-        opset_imports.append(oh.make_opsetid("qonnx.custom_op.general", 1))
-    model_proto = oh.make_model(graph, opset_imports=opset_imports)
-    model_proto.ir_version = 6
-
-    _init_names = {t.name for t in model_proto.graph.initializer}
-    _data_inputs = [vi for vi in model_proto.graph.input if vi.name not in _init_names]
-    del model_proto.graph.input[:]
-    model_proto.graph.input.extend(_data_inputs)
-
-    onnx.checker.check_model(model_proto)
-    onnx.save(model_proto, output_path)
-    fmt = "QONNX" if use_qonnx else "ONNX (QDQ)"
-    logging.info("Saved %s Keras model → %s", fmt, output_path)
+    model_proto = save_model(graph, output_path, opset, use_qonnx=use_qonnx)
+    logging.info("Saved %s Keras model → %s", "QONNX" if use_qonnx else "ONNX (QDQ)", output_path)
     return model_proto

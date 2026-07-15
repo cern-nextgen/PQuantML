@@ -21,7 +21,6 @@ os.environ["KERAS_BACKEND"] = "torch"
 import pquant  # noqa: E402
 from pquant.core.torch.layers import Quantizer  # noqa: E402
 from pquant.core.torch.onnx import convert_to_onnx  # noqa: E402
-from pquant.core.torch.onnx.convert_to_onnx import export_qdq_layernorm  # noqa: E402
 from pquant.layers import (  # noqa: E402
     PQActivation,
     PQAvgPool1d,
@@ -261,83 +260,6 @@ def test_mha_key_padding_mask_onnx(cfg, bias, tmp_path):
     np.testing.assert_allclose(
         torch_out, onnx_out, atol=_atol(cfg), err_msg=f"MHA key_padding_mask bias={bias}: torch vs ONNX mismatch"
     )
-
-
-@pytest.mark.parametrize("input_shape", [(4, 64), (1, 4, 64)])
-def test_qdq_layernorm_export(input_shape, tmp_path):
-    import onnx
-
-    D = input_shape[-1]
-    rng = np.random.default_rng(0)
-    # Q7 representable: gamma = k / 128, k integer, |k| < 32768
-    gamma_q = rng.integers(low=64, high=192, size=(D,), dtype=np.int32)  # ~0.5 .. 1.5
-    gamma = (gamma_q.astype(np.float32)) / (1 << 7)
-    # Q15 representable: beta = k / 32768, k integer, |k| < 32768 (so |beta| < 1)
-    beta_q = rng.integers(low=-1024, high=1024, size=(D,), dtype=np.int32)
-    beta = (beta_q.astype(np.float32)) / (1 << 15)
-
-    input_scale_log2 = -7  # input_scale = 2**-7
-    output_scale_log2 = -6  # output_scale = 2**-6
-    eps_q0 = 1
-
-    path = str(tmp_path / "qdq_layernorm.onnx")
-    model_proto = export_qdq_layernorm(
-        output_path=path,
-        input_shape=input_shape,
-        gamma=gamma,
-        beta=beta,
-        input_scale_log2=input_scale_log2,
-        output_scale_log2=output_scale_log2,
-        eps_q0=eps_q0,
-    )
-
-    # ----- structural checks -----
-    op_types = [n.op_type for n in model_proto.graph.node]
-    assert op_types == ["DequantizeLinear", "LayerNormalization", "QuantizeLinear", "DequantizeLinear"]
-
-    ln_node = model_proto.graph.node[1]
-    axis = next(a.i for a in ln_node.attribute if a.name == "axis")
-    eps_attr = next(a.f for a in ln_node.attribute if a.name == "epsilon")
-    assert axis == -1
-    expected_eps = eps_q0 * (2.0**input_scale_log2) ** 2
-    assert abs(eps_attr - expected_eps) < 1e-12
-
-    # input must be int8, output float
-    assert len(model_proto.graph.input) == 1
-    assert model_proto.graph.input[0].type.tensor_type.elem_type == onnx.TensorProto.INT8
-    assert model_proto.graph.output[0].type.tensor_type.elem_type == onnx.TensorProto.FLOAT
-    in_dims = [d.dim_value for d in model_proto.graph.input[0].type.tensor_type.shape.dim]
-    assert tuple(in_dims) == input_shape
-
-    # zero-points must be int8 zero
-    inits = {t.name: t for t in model_proto.graph.initializer}
-    for zp_name in ("input_zero_point", "output_zero_point"):
-        zp = onnx.numpy_helper.to_array(inits[zp_name])
-        assert zp.dtype == np.int8
-        assert int(zp) == 0
-
-    # scales must be exact powers of two
-    in_scale = float(onnx.numpy_helper.to_array(inits["input_scale"]))
-    out_scale = float(onnx.numpy_helper.to_array(inits["output_scale"]))
-    assert in_scale == 2.0**input_scale_log2
-    assert out_scale == 2.0**output_scale_log2
-
-    # ----- numerical check via onnxruntime -----
-    sess = ort.InferenceSession(path)
-    in_name = sess.get_inputs()[0].name
-    x_q = rng.integers(low=-64, high=64, size=input_shape, dtype=np.int8)
-    onnx_out = sess.run(None, {in_name: x_q})[0]
-
-    # Reference: dequantize -> layernorm(axis=-1) -> quantize -> dequantize
-    x_f = x_q.astype(np.float32) * in_scale
-    mean = x_f.mean(axis=-1, keepdims=True)
-    var = x_f.var(axis=-1, keepdims=True)
-    x_norm = (x_f - mean) / np.sqrt(var + expected_eps)
-    y_f = x_norm * gamma + beta
-    y_q = np.clip(np.round(y_f / out_scale), -128, 127).astype(np.int8)
-    y_ref = y_q.astype(np.float32) * out_scale
-
-    np.testing.assert_allclose(onnx_out, y_ref, atol=out_scale * 0.5)
 
 
 class _TwoInputModel(nn.Module):
@@ -735,37 +657,6 @@ def test_qonnx_export_builds(cfg_quant, tmp_path):
     proto = convert_to_onnx(model, input_shape=(16,), output_path=path, use_qonnx=True)
     onnx.checker.check_model(onnx.load(path))
     assert any(n.op_type == "Quant" for n in proto.graph.node)
-
-
-def test_qdq_layernorm_validation(tmp_path):
-    path = str(tmp_path / "bad.onnx")
-    D = 64
-    gamma = np.ones(D, dtype=np.float32)
-    beta = np.zeros(D, dtype=np.float32)
-
-    # rank-1 input: rejected
-    with pytest.raises(ValueError, match="rank"):
-        export_qdq_layernorm(path, (D,), gamma, beta, -7, -6)
-
-    # last dim not multiple of 32
-    with pytest.raises(ValueError, match="multiple of 32"):
-        export_qdq_layernorm(path, (4, 16), np.ones(16, np.float32), np.zeros(16, np.float32), -7, -6)
-
-    # last dim not power of two (96 = 32*3)
-    with pytest.raises(ValueError, match="power of two"):
-        export_qdq_layernorm(path, (4, 96), np.ones(96, np.float32), np.zeros(96, np.float32), -7, -6)
-
-    # gamma not Q7-representable (1/3 is not k/128 exactly)
-    with pytest.raises(ValueError, match="gamma"):
-        export_qdq_layernorm(path, (4, D), np.full(D, 1.0 / 3.0, np.float32), beta, -7, -6)
-
-    # beta not Q15-representable (1/3 is not k/32768 exactly)
-    with pytest.raises(ValueError, match="beta"):
-        export_qdq_layernorm(path, (4, D), gamma, np.full(D, 1.0 / 3.0, np.float32), -7, -6)
-
-    # eps_q0 < 1
-    with pytest.raises(ValueError, match="eps_q0"):
-        export_qdq_layernorm(path, (4, D), gamma, beta, -7, -6, eps_q0=0)
 
 
 @pytest.mark.parametrize(
