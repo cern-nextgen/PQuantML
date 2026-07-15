@@ -292,7 +292,7 @@ MHA_EMBED_DIM = 4
 MHA_NUM_HEADS = 2
 
 
-class _MHANet(nn.Module):
+class MHANet(nn.Module):
     """Self-attention PQMultiheadAttention with every data quantizer enabled.
 
     The MHA lives inside a wrapper module so torch.fx inlines its forward with
@@ -320,7 +320,7 @@ def test_alkaid_multihead_attention(tmp_path):
     config.quantization_parameters.enable_quantization = True
 
     rng = np.random.default_rng(0)
-    model = _MHANet(config)
+    model = MHANet(config)
     with torch.no_grad():
         model(torch.tensor(rng.standard_normal((4, MHA_SEQ_LEN, MHA_EMBED_DIM)), dtype=torch.float32))  # build
     apply_final_compression(model)

@@ -41,7 +41,7 @@ SEQ_SHAPE = (SEQ_LEN, IN_FEATURES)
 
 
 @pytest.fixture(autouse=True)
-def _channels_last():
+def channels_last():
     # We assume Keras models are channels_last
     keras.backend.set_image_data_format("channels_last")
 
@@ -146,7 +146,7 @@ ALL_KERAS_LAYER_TYPES = {
 }
 
 
-def _build_all_layers_model(config):
+def build_all_layers_model(config):
     """Model exercising every PQ layer type the keras Alkaid plugin handles."""
     img_in = keras.Input(shape=ALL_IMG_SHAPE, name="img")
     a = PQConv2d(config, ALL_C, KERNEL_SIZE, padding="same")(img_in)
@@ -173,7 +173,7 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
     config = pdp_config()
     config.quantization_parameters.enable_quantization = True
 
-    model = _build_all_layers_model(config)
+    model = build_all_layers_model(config)
     rng = np.random.default_rng(0)
 
     model(
