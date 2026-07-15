@@ -186,7 +186,7 @@ def resolve_perm_dims(args, rank: int) -> list[int]:
     return [int(d) % rank for d in dims]
 
 
-class _FxGraphEmitter:
+class FxGraphEmitter:
     """Translate a shape-propagated fx.Graph into ONNX nodes and initializers.
 
     ``node_to_name`` maps each fx.Node to the name of the ONNX tensor holding
@@ -563,7 +563,7 @@ def convert_to_onnx(
     with torch.no_grad():
         ShapeProp(gm).propagate(*probes)
 
-    emitter = _FxGraphEmitter(gm, ph_to_name, quant_fn, use_qonnx, store_integer_weights, integer_ops)
+    emitter = FxGraphEmitter(gm, ph_to_name, quant_fn, use_qonnx, store_integer_weights, integer_ops)
     output_names = emitter.run()
     route_input_passthrough_outputs(output_names, input_names, emitter.nodes)
 
