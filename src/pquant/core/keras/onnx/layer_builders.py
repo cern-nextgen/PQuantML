@@ -4,7 +4,11 @@ import numpy as np
 import onnx.helper as oh
 
 from pquant.core.keras.layers import PQBatchNormalization
-from pquant.core.keras.onnx.helpers import bn_transpose_info, channels_last, nchw_perms
+from pquant.core.keras.onnx.helpers import (
+    _bn_transpose_info,
+    _channels_last,
+    _nchw_perms,
+)
 from pquant.core.onnx_common import (
     add_float_scalar,
     add_initializer,
@@ -19,7 +23,7 @@ from pquant.core.onnx_common import (
 )
 
 
-def add_dense(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
+def _add_dense(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
     current = maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
 
     kernel_np = to_np(layer._kernel).T  # [in, out] → [out, in] for Gemm (transB=1)
@@ -48,7 +52,7 @@ def add_dense(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, 
     return maybe_quant_output(layer, prefix, gemm_out, nodes, initializers, quant_fn)
 
 
-def add_dense_nd(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
+def _add_dense_nd(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
     """Dense layer as MatMul + Add, for inputs of rank > 2 (Gemm only takes rank-2)."""
     current = maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
 
@@ -79,7 +83,7 @@ def add_dense_nd(layer, prefix, current, nodes, initializers, quant_fn, use_qonn
     return maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn)
 
 
-def add_conv_node(layer, prefix, conv_inputs, groups, ndim, nodes):
+def _add_conv_node(layer, prefix, conv_inputs, groups, ndim, nodes):
     """Emit the Conv node shared by the regular and depthwise builders."""
     auto_pad, pads = conv_padding_attrs(layer.padding, ndim)
     conv_attrs = dict(
@@ -97,11 +101,11 @@ def add_conv_node(layer, prefix, conv_inputs, groups, ndim, nodes):
     return conv_out
 
 
-def add_conv_common(layer, prefix, current, kernel_onnx, groups, ndim, nodes, initializers, quant_fn, use_qonnx, store_int):
+def _add_conv_common(layer, prefix, current, kernel_onnx, groups, ndim, nodes, initializers, quant_fn, use_qonnx, store_int):
     """Shared body of the conv builders: layout transposes, param emission, Conv, quantization."""
-    is_channels_last = channels_last(layer)
+    is_channels_last = _channels_last(layer)
     if is_channels_last:
-        perm_to_nchw, perm_to_nhwx = nchw_perms(ndim)
+        perm_to_nchw, perm_to_nhwx = _nchw_perms(ndim)
         current = add_transpose(f"{prefix}_pre", current, perm_to_nchw, nodes)
 
     current = maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
@@ -113,7 +117,7 @@ def add_conv_common(layer, prefix, current, kernel_onnx, groups, ndim, nodes, in
             emit_param(prefix, "bias", to_np(layer._bias), layer.bias_quantizer, nodes, initializers, use_qonnx, store_int)
         )
 
-    current = add_conv_node(layer, prefix, conv_inputs, groups, ndim, nodes)
+    current = _add_conv_node(layer, prefix, conv_inputs, groups, ndim, nodes)
     current = maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn)
 
     if is_channels_last:
@@ -121,7 +125,7 @@ def add_conv_common(layer, prefix, current, kernel_onnx, groups, ndim, nodes, in
     return current
 
 
-def add_conv(layer, prefix, current, nodes, initializers, ndim, quant_fn, use_qonnx, store_integer_weights):
+def _add_conv(layer, prefix, current, nodes, initializers, ndim, quant_fn, use_qonnx, store_integer_weights):
     kernel_np = to_np(layer._kernel)
     # Transpose kernel from Keras HWIO to ONNX OIHW
     if ndim == 2:
@@ -129,25 +133,25 @@ def add_conv(layer, prefix, current, nodes, initializers, ndim, quant_fn, use_qo
     else:
         kernel_onnx = np.transpose(kernel_np, (2, 1, 0))  # [kL,in,out]    → [out,in,kL]
     groups = getattr(layer, "groups", 1)
-    return add_conv_common(
+    return _add_conv_common(
         layer, prefix, current, kernel_onnx, groups, ndim, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
 
 
-def add_depthwise_conv(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
+def _add_depthwise_conv(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
     kernel_np = to_np(layer._kernel)  # [kH, kW, in, depth_mult]
     in_ch, depth_mult = kernel_np.shape[2], kernel_np.shape[3]
     # ONNX depthwise = Conv with groups=in and weight [in*depth_mult, 1, kH, kW]
     kernel_onnx = np.transpose(kernel_np, (2, 3, 0, 1)).reshape(in_ch * depth_mult, 1, *kernel_np.shape[:2])
-    return add_conv_common(
+    return _add_conv_common(
         layer, prefix, current, kernel_onnx, in_ch, 2, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
 
 
-def add_batchnorm(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
+def _add_batchnorm(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
     """PQBatchNormalization (also handles plain keras BatchNormalization,
-    but emit_layer currently only dispatches the PQ variant here)."""
-    need_transpose, perm_to_nchw, perm_to_nhwx = bn_transpose_info(layer)
+    but _emit_layer currently only dispatches the PQ variant here)."""
+    need_transpose, perm_to_nchw, perm_to_nhwx = _bn_transpose_info(layer)
     if need_transpose:
         current = add_transpose(f"{prefix}_pre", current, perm_to_nchw, nodes)
 
@@ -185,7 +189,7 @@ def add_batchnorm(layer, prefix, current, nodes, initializers, quant_fn, use_qon
     return current
 
 
-def add_mha(
+def _add_mha(
     layer,
     prefix,
     q_input,
@@ -200,13 +204,13 @@ def add_mha(
     attn_mask=None,
 ):
     # Q / K / V projections: (B, L, E) → (B, L, E)
-    q_proj_out = add_dense_nd(
+    q_proj_out = _add_dense_nd(
         layer.q_proj, f"{prefix}_q_proj", q_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
-    k_proj_out = add_dense_nd(
+    k_proj_out = _add_dense_nd(
         layer.k_proj, f"{prefix}_k_proj", k_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
-    v_proj_out = add_dense_nd(
+    v_proj_out = _add_dense_nd(
         layer.v_proj, f"{prefix}_v_proj", v_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
 
@@ -215,16 +219,16 @@ def add_mha(
     )
 
     # Output projection: (B, T, E) → (B, T, E)
-    out = add_dense_nd(
+    out = _add_dense_nd(
         layer.out_proj, f"{prefix}_out_proj", context, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
     return out, avg_attn
 
 
-def add_avgpool(layer, prefix, current, nodes, initializers, ndim, quant_fn):
-    is_channels_last = channels_last(layer)
+def _add_avgpool(layer, prefix, current, nodes, initializers, ndim, quant_fn):
+    is_channels_last = _channels_last(layer)
     if is_channels_last:
-        perm_to_nchw, perm_to_nhwx = nchw_perms(ndim)
+        perm_to_nchw, perm_to_nhwx = _nchw_perms(ndim)
         current = add_transpose(f"{prefix}_pre", current, perm_to_nchw, nodes)
 
     current = maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
@@ -248,10 +252,10 @@ def add_avgpool(layer, prefix, current, nodes, initializers, ndim, quant_fn):
     return current
 
 
-def add_global_avgpool(layer, prefix, current, nodes, ndim):
-    is_channels_last = channels_last(layer)
+def _add_global_avgpool(layer, prefix, current, nodes, ndim):
+    is_channels_last = _channels_last(layer)
     if is_channels_last:
-        perm_to_nchw, _ = nchw_perms(ndim)
+        perm_to_nchw, _ = _nchw_perms(ndim)
         current = add_transpose(f"{prefix}_pre", current, perm_to_nchw, nodes)
 
     pool_out = f"{prefix}_global_pool"
@@ -265,7 +269,7 @@ def add_global_avgpool(layer, prefix, current, nodes, ndim):
     return current
 
 
-def add_pq_activation(layer, prefix, current, nodes, initializers, quant_fn):
+def _add_pq_activation(layer, prefix, current, nodes, initializers, quant_fn):
     current = maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn)
 
     if layer.use_multiplier and layer.activation_name == "relu" and hasattr(layer, "multiplier"):

@@ -7,7 +7,7 @@ import keras
 from onnx import TensorProto
 
 
-def keras_dtype_to_tp(dtype):
+def _keras_dtype_to_tp(dtype):
     """Map a Keras/numpy dtype string to an ONNX TensorProto dtype (default float32)."""
     return {
         "float32": TensorProto.FLOAT,
@@ -19,18 +19,18 @@ def keras_dtype_to_tp(dtype):
     }.get(str(dtype), TensorProto.FLOAT)
 
 
-def channels_last(layer):
+def _channels_last(layer):
     return getattr(layer, "data_format", keras.config.image_data_format()) == "channels_last"
 
 
-def nchw_perms(ndim):
+def _nchw_perms(ndim):
     """Permutations between the Keras channels_last and ONNX channels_first layouts."""
     if ndim == 2:
         return [0, 3, 1, 2], [0, 2, 3, 1]
     return [0, 2, 1], [0, 2, 1]
 
 
-def bn_transpose_info(layer):
+def _bn_transpose_info(layer):
     """
     Return (need_transpose, perm_fwd, perm_bwd) for a BatchNormalization layer.
 
