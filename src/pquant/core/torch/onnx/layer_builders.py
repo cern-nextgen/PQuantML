@@ -20,7 +20,7 @@ from pquant.core.onnx_common import (
 )
 
 
-def quantize_input_to_int(quantizer, prefix, current, nodes, initializers):
+def _quantize_input_to_int(quantizer, prefix, current, nodes, initializers):
     """Clip + QuantizeLinear the input to int8/uint8, stopping before DequantizeLinear.
 
     Returns (int_tensor_name, zero_point_name, input_scale).
@@ -44,7 +44,7 @@ def quantize_input_to_int(quantizer, prefix, current, nodes, initializers):
     return int_name, zp_name, scale
 
 
-def integer_weights_transposed(module, prefix, initializers):
+def _integer_weights_transposed(module, prefix, initializers):
     """Quantize the dense weight to int8/uint8, pre-transposed to [in, out] so
     MatMulInteger needs no runtime Transpose node.
 
@@ -73,7 +73,7 @@ def integer_weights_transposed(module, prefix, initializers):
     return weight_name, zp_name, scale_1d, per_channel
 
 
-def dequantize_accumulator(prefix, current, combined_scale_1d, per_channel, nodes, initializers):
+def _dequantize_accumulator(prefix, current, combined_scale_1d, per_channel, nodes, initializers):
     """DequantizeLinear the int32 accumulator back to float32 with the combined scale s_x * s_w.
 
     Per-channel: axis=1 because the output tensor is [batch, out] and out is axis 1.
@@ -94,13 +94,13 @@ def dequantize_accumulator(prefix, current, combined_scale_1d, per_channel, node
     return out
 
 
-def add_dense_integer(module, prefix, current, nodes, initializers):
+def _add_dense_integer(module, prefix, current, nodes, initializers):
     """Dense layer whose inner product runs in int32 via MatMulInteger."""
     if getattr(module, "input_quantizer", None) is None or not module.quantize_input:
         raise ValueError(f"{prefix}: integer_ops requires quantize_input=True on the layer")
 
-    x_int, x_zp, input_scale = quantize_input_to_int(module.input_quantizer, prefix, current, nodes, initializers)
-    w_int, w_zp, weight_scale_1d, per_channel = integer_weights_transposed(module, prefix, initializers)
+    x_int, x_zp, input_scale = _quantize_input_to_int(module.input_quantizer, prefix, current, nodes, initializers)
+    w_int, w_zp, weight_scale_1d, per_channel = _integer_weights_transposed(module, prefix, initializers)
     combined_scale_1d = input_scale * weight_scale_1d
 
     current = f"{prefix}_matmul_int"  # MatMulInteger([batch, in], [in, out]) → int32 [batch, out]
@@ -114,13 +114,13 @@ def add_dense_integer(module, prefix, current, nodes, initializers):
         nodes.append(oh.make_node("Add", inputs=[current, bias_name], outputs=[biased_name]))
         current = biased_name
 
-    current = dequantize_accumulator(prefix, current, combined_scale_1d, per_channel, nodes, initializers)
+    current = _dequantize_accumulator(prefix, current, combined_scale_1d, per_channel, nodes, initializers)
 
     # Optional output quantization (e.g. last layer with quantize_output=True)
     return maybe_quant_output(module, prefix, current, nodes, initializers, qdq_node)
 
 
-def add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
+def _add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
     """Dense layer as MatMul + Add, for inputs of rank > 2 (Gemm only takes rank-2)."""
     current = maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
@@ -151,9 +151,9 @@ def add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qon
     return maybe_quant_output(module, prefix, current, nodes, initializers, quant_fn)
 
 
-def add_dense(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops=False):
+def _add_dense(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops=False):
     if integer_ops and not use_qonnx:
-        return add_dense_integer(module, prefix, current, nodes, initializers)
+        return _add_dense_integer(module, prefix, current, nodes, initializers)
     current = maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     q_weight = emit_param(
@@ -188,7 +188,7 @@ def add_dense(module, prefix, current, nodes, initializers, quant_fn, use_qonnx,
     return maybe_quant_output(module, prefix, gemm_out, nodes, initializers, quant_fn)
 
 
-def add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_qonnx, store_integer_weights):
+def _add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_qonnx, store_integer_weights):
     current = maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     q_weight = emit_param(
@@ -234,7 +234,7 @@ def add_conv(module, prefix, current, nodes, initializers, ndim, quant_fn, use_q
     return maybe_quant_output(module, prefix, conv_out, nodes, initializers, quant_fn)
 
 
-def add_batchnorm(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
+def _add_batchnorm(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
     current = maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     q_gamma = emit_param(
@@ -265,7 +265,7 @@ def add_batchnorm(module, prefix, current, nodes, initializers, quant_fn, use_qo
     return bn_out
 
 
-def add_layernorm(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
+def _add_layernorm(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights):
     current = maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     normalized_shape = tuple(to_list(module.normalized_shape, 1))
@@ -296,7 +296,7 @@ def add_layernorm(module, prefix, current, nodes, initializers, quant_fn, use_qo
     return maybe_quant_output(module, prefix, ln_out, nodes, initializers, quant_fn)
 
 
-def add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
+def _add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
     current = maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
     pool_out = f"{prefix}_pool"
@@ -315,7 +315,7 @@ def add_avgpool(module, prefix, current, nodes, initializers, ndim, quant_fn):
     return maybe_quant_output(module, prefix, pool_out, nodes, initializers, quant_fn)
 
 
-def add_maxpool(module, prefix, current, nodes):
+def _add_maxpool(module, prefix, current, nodes):
     out = f"{prefix}_maxpool"
     nodes.append(
         oh.make_node(
@@ -330,7 +330,7 @@ def add_maxpool(module, prefix, current, nodes):
     return out
 
 
-def add_upsample(module, prefix, current, nodes, initializers):
+def _add_upsample(module, prefix, current, nodes, initializers):
     """Emit a Resize node with nearest/linear mode and constant scale factors."""
     roi_name = add_initializer(initializers, f"{prefix}_upsample_roi", np.array([], dtype=np.float32))
     scale_factor = module.scale_factor
@@ -353,7 +353,7 @@ def add_upsample(module, prefix, current, nodes, initializers):
     return out
 
 
-def add_activation(module, prefix, current, nodes, initializers, quant_fn):
+def _add_activation(module, prefix, current, nodes, initializers, quant_fn):
     """PQActivation: optional input quantization, the activation itself, optional output quantization."""
     current = maybe_quant_input(module, prefix, current, nodes, initializers, quant_fn)
 
@@ -371,14 +371,14 @@ def add_activation(module, prefix, current, nodes, initializers, quant_fn):
         alpha = module.activation_function.negative_slope
         nodes.append(oh.make_node("LeakyRelu", inputs=[current], outputs=[act_out], alpha=alpha))
     elif activation == "gelu":
-        add_gelu(module, prefix, current, act_out, nodes, initializers)
+        _add_gelu(module, prefix, current, act_out, nodes, initializers)
     else:
         raise TypeError(f"PQActivation: unsupported activation {activation!r} for ONNX export")
 
     return maybe_quant_output(module, prefix, act_out, nodes, initializers, quant_fn)
 
 
-def add_gelu(module, prefix, current, act_out, nodes, initializers):
+def _add_gelu(module, prefix, current, act_out, nodes, initializers):
     """Decompose gelu so the default opset (13) works; ONNX added a Gelu op only in opset 20."""
     approximate = getattr(module.activation_function, "approximate", "none")
     half_name = add_float_scalar(initializers, f"{prefix}_gelu_half", 0.5)
@@ -421,7 +421,7 @@ def add_gelu(module, prefix, current, act_out, nodes, initializers):
     ]
 
 
-def add_mha(
+def _add_mha(
     module,
     prefix,
     q_input,
@@ -441,20 +441,20 @@ def add_mha(
         v_input = add_transpose(f"{prefix}_v_in", v_input, [1, 0, 2], nodes)
 
     # Q / K / V projections: (B, L, E) → (B, L, E) via MatMul (input is rank-3)
-    q_proj_out = add_dense_nd(
+    q_proj_out = _add_dense_nd(
         module.q_proj, f"{prefix}_q_proj", q_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
-    k_proj_out = add_dense_nd(
+    k_proj_out = _add_dense_nd(
         module.k_proj, f"{prefix}_k_proj", k_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
-    v_proj_out = add_dense_nd(
+    v_proj_out = _add_dense_nd(
         module.v_proj, f"{prefix}_v_proj", v_input, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
 
     context, avg_attn = emit_mha_core(
         module, prefix, q_proj_out, k_proj_out, v_proj_out, nodes, initializers, quant_fn, key_padding_mask, attn_mask
     )
-    out = add_dense_nd(
+    out = _add_dense_nd(
         module.out_proj, f"{prefix}_out_proj", context, nodes, initializers, quant_fn, use_qonnx, store_integer_weights
     )
 
