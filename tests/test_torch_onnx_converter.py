@@ -630,6 +630,39 @@ def test_integer_weight_storage_onnx(cfg_quant, integer_ops, tmp_path):
     np.testing.assert_allclose(torch_output, onnx_out, atol=ATOL, err_msg=f"integer_ops={integer_ops}: mismatch")
 
 
+def rank3_dense_model(cfg):
+    """PQDense applied to a [batch, seq, dim] input (F.linear maps over the last axis)."""
+    SEQ, DIM, OUT = 5, 16, 8
+    model = nn.Sequential(PQDense(cfg, in_features=DIM, out_features=OUT), nn.ReLU())
+    x = torch.randn(4, SEQ, DIM)
+    with torch.no_grad():
+        model(x)
+    apply_compression(model)
+    return model, x, (SEQ, DIM)
+
+
+def test_dense_rank3_input_onnx(cfg, tmp_path):
+    """A standalone PQDense on a rank-3 input must export as MatMul + Add (Gemm is rank-2 only)."""
+    model, x, input_shape = rank3_dense_model(cfg)
+    torch_output = torch_out(model, x)
+    onnx_out = onnx_run(model, x, input_shape=input_shape, tmp_path=tmp_path)
+    np.testing.assert_allclose(torch_output, onnx_out, atol=atol(cfg), err_msg="rank-3 dense: torch vs ONNX mismatch")
+
+
+@pytest.mark.parametrize("integer_ops", [False, True])
+def test_dense_rank3_integer_onnx(cfg_quant, integer_ops, tmp_path):
+    """Integer weight storage and MatMulInteger must also handle rank-3 dense inputs."""
+    model, x, input_shape = rank3_dense_model(cfg_quant)
+    torch_output = torch_out(model, x)
+
+    path = str(tmp_path / f"rank3_int_{integer_ops}.onnx")
+    kwargs = {"integer_ops": True} if integer_ops else {"store_integer_weights": True}
+    convert_to_onnx(model, input_shape=input_shape, output_path=path, **kwargs)
+    sess = ort.InferenceSession(path)
+    onnx_out = sess.run(None, {sess.get_inputs()[0].name: x.cpu().numpy()})[0]
+    np.testing.assert_allclose(torch_output, onnx_out, atol=ATOL, err_msg=f"rank-3 integer_ops={integer_ops}: mismatch")
+
+
 def test_include_clip_toggle_structure(cfg_quant, tmp_path):
     """include_clip controls whether a Clip node precedes each input QuantizeLinear."""
     model, _ = quantized_dense_model(cfg_quant)
