@@ -293,3 +293,40 @@ def test_squeeze_unsqueeze_onnx(cfg, reshaper, tmp_path):
     onnx_out = onnx_run(model, x_np, input_shape=(IN,), tmp_path=tmp_path)
     assert keras_output.shape == onnx_out.shape
     np.testing.assert_allclose(keras_output, onnx_out, atol=atol(cfg), err_msg="squeeze/expand_dims: keras vs ONNX mismatch")
+
+
+def rank3_dense_model(cfg):
+    """PQDense applied to a [batch, seq, dim] input (Dense maps over the last axis)."""
+    SEQ, DIM, OUT = 5, 16, 8
+    inputs = keras.Input(shape=(SEQ, DIM))
+    out = PQDense(cfg, units=OUT)(inputs)
+    model = keras.Model(inputs, out)
+    model(np.zeros((1, SEQ, DIM), dtype=np.float32))
+    apply_final_compression(model)
+    return model, (SEQ, DIM)
+
+
+def test_dense_rank3_input_onnx(cfg, tmp_path):
+    """A standalone PQDense on a rank-3 input must export as MatMul + Add (Gemm is rank-2 only)."""
+    model, input_shape = rank3_dense_model(cfg)
+
+    x_np = np.random.randn(4, *input_shape).astype(np.float32)
+    keras_output = keras_out(model, x_np)
+    onnx_out = onnx_run(model, x_np, input_shape=input_shape, tmp_path=tmp_path)
+    np.testing.assert_allclose(keras_output, onnx_out, atol=atol(cfg), err_msg="rank-3 dense: keras vs ONNX mismatch")
+
+
+def test_dense_rank3_integer_weights_onnx(tmp_path):
+    """store_integer_weights on a rank-3 dense exercises the quantized-weight Transpose branch."""
+    cfg = pquant.cs_config()
+    cfg.quantization_parameters.enable_quantization = True
+    model, input_shape = rank3_dense_model(cfg)
+
+    x_np = np.random.randn(4, *input_shape).astype(np.float32)
+    keras_output = keras_out(model, x_np)
+
+    path = str(tmp_path / "rank3_int.onnx")
+    convert_to_onnx(model, input_shape=input_shape, output_path=path, store_integer_weights=True)
+    sess = ort.InferenceSession(path)
+    onnx_out = sess.run(None, {sess.get_inputs()[0].name: x_np})[0]
+    np.testing.assert_allclose(keras_output, onnx_out, atol=QUANT_ATOL, err_msg="rank-3 dense int weights: mismatch")

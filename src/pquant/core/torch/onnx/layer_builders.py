@@ -76,12 +76,13 @@ def _integer_weights_transposed(module, prefix, initializers):
 def _dequantize_accumulator(prefix, current, combined_scale_1d, per_channel, nodes, initializers):
     """DequantizeLinear the int32 accumulator back to float32 with the combined scale s_x * s_w.
 
-    Per-channel: axis=1 because the output tensor is [batch, out] and out is axis 1.
+    Per-channel: axis=-1 because out features are the last axis of the accumulator
+    ([batch, out] for rank-2 inputs, [batch, ..., out] otherwise).
     """
     if per_channel:
         scale_np = combined_scale_1d.astype(np.float32)
         zp_np = np.zeros(len(combined_scale_1d), dtype=np.int32)
-        dql_kwargs = {"axis": 1}
+        dql_kwargs = {"axis": -1}
     else:
         scale_np = np.array(float(combined_scale_1d[0]), dtype=np.float32)
         zp_np = np.array(np.int32(0))

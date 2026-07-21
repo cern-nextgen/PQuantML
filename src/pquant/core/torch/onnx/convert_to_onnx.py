@@ -53,6 +53,7 @@ from pquant.core.torch.onnx.layer_builders import (  # noqa: E402
     _add_batchnorm,
     _add_conv,
     _add_dense,
+    _add_dense_nd,
     _add_layernorm,
     _add_maxpool,
     _add_mha,
@@ -62,10 +63,23 @@ from pquant.core.torch.quantizer import Quantizer  # noqa: E402
 
 
 def _emit_module(
-    module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops=False
+    module,
+    prefix,
+    current,
+    nodes,
+    initializers,
+    quant_fn,
+    use_qonnx,
+    store_integer_weights,
+    integer_ops=False,
+    input_rank=None,
 ):
     """Emit ONNX nodes for a single PQuant or standard torch.nn module."""
     if isinstance(module, PQDense):
+        # Gemm only accepts rank-2 inputs; higher ranks (e.g. [batch, seq, dim]) go through
+        # MatMul + Add.  The integer_ops path is already MatMul-based and handles any rank.
+        if input_rank is not None and input_rank > 2 and not (integer_ops and not use_qonnx):
+            return _add_dense_nd(module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights)
         return _add_dense(
             module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops
         )
@@ -295,6 +309,7 @@ class FxGraphEmitter:
             self.use_qonnx,
             self.store_integer_weights,
             self.integer_ops,
+            input_rank=self._node_rank(node.args[0]),
         )
 
     def _emit_mha_module(self, module, node, prefix) -> tuple:

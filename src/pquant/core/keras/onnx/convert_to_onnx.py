@@ -39,6 +39,7 @@ from pquant.core.keras.onnx.layer_builders import (
     _add_batchnorm,
     _add_conv,
     _add_dense,
+    _add_dense_nd,
     _add_depthwise_conv,
     _add_global_avgpool,
     _add_mha,
@@ -71,6 +72,13 @@ def _resolve_mask_arg(mask, prefix, kind, tensor_to_onnx, initializers):
 def _call_arguments(layer):
     """The recorded call arguments of the layer's first inbound node."""
     return layer._inbound_nodes[0].arguments if layer._inbound_nodes else None
+
+
+def _input_rank(layer):
+    """Rank (batch dim included) of the layer's first symbolic input tensor."""
+    tensors = layer._inbound_nodes[0].input_tensors
+    tensor = tensors[0] if isinstance(tensors, (list, tuple)) else tensors
+    return len(tensor.shape)
 
 
 def _add_mha_layer(layer, prefix, input_onnx_names, nodes, initializers, quant_fn, use_qonnx, store_int, tensor_to_onnx):
@@ -167,7 +175,9 @@ def _emit_layer(
         return _add_pq_activation(layer, prefix, current, nodes, initializers, quant_fn)
 
     if isinstance(layer, PQDense):
-        return _add_dense(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights)
+        # Gemm only accepts rank-2 inputs; higher ranks (e.g. [batch, seq, dim]) go through MatMul + Add.
+        add_fn = _add_dense_nd if _input_rank(layer) > 2 else _add_dense
+        return add_fn(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights)
 
     if isinstance(layer, PQDepthwiseConv2d):
         return _add_depthwise_conv(layer, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights)
