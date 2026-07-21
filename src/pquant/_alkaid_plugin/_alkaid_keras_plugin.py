@@ -15,10 +15,14 @@ from keras.layers import DepthwiseConv1D, DepthwiseConv2D
 
 from pquant._alkaid_plugin._alkaid_common import (
     PQuantAlkaidError,
-    replay_quantizer,
-    replay_quantizer_if_enabled,
-    to_bool,
-    to_numpy,
+    _assert_final_compression,
+    _final_bias,
+    _mark_plugin_loaded,
+    _replay_quantizer,
+    _replay_quantizer_if_enabled,
+    _replay_softmax,
+    _scale_by_relu_multiplier,
+    _to_numpy,
 )
 from pquant.core.keras.activations import PQActivation
 from pquant.core.keras.layers import (
@@ -36,24 +40,31 @@ from pquant.core.keras.layers import (
 from pquant.core.keras.quantizer import Quantizer
 
 
-def _assert_final_compression(layer) -> None:
-    if not to_bool(getattr(layer, 'final_compression_done', False)):
-        raise PQuantAlkaidError(
-            f'{layer.__class__.__name__} must have apply_final_compression() applied before Alkaid conversion.'
-        )
-
-
-def _weight(layer) -> np.ndarray:
+def _final_kernel(layer) -> np.ndarray:
+    """The layer's final (compressed) kernel as numpy. Asserts compression was applied."""
     _assert_final_compression(layer)
-    return to_numpy(layer._kernel)
+    return _to_numpy(layer._kernel)
 
 
-def _bias(layer) -> np.ndarray:
-    _assert_final_compression(layer)
-    bias = getattr(layer, '_bias', None)
-    if bias is None:
-        return np.array(0.0)
-    return to_numpy(bias)
+def _table_fn(table):
+    """Numpy-callable for a PQActivation lookup table, evaluated in float32 like the keras runtime."""
+    fn = table.activation_function
+
+    def apply_fn(v: np.ndarray) -> np.ndarray:
+        t = keras.ops.cast(keras.ops.convert_to_tensor(v), 'float32')
+        return np.asarray(keras.ops.convert_to_numpy(fn(t)), dtype=np.float64)
+
+    return apply_fn
+
+
+def _unpack_query_key_value(inputs):
+    if not isinstance(inputs, (list, tuple)):
+        return inputs, inputs, inputs
+    if len(inputs) == 3:
+        return inputs[0], inputs[1], inputs[2]
+    if len(inputs) == 2:
+        return inputs[0], inputs[1], inputs[1]
+    return inputs[0], inputs[0], inputs[0]
 
 
 class ReplayPQuantQuantizer(ReplayOperationBase):
@@ -61,7 +72,7 @@ class ReplayPQuantQuantizer(ReplayOperationBase):
     handles = (Quantizer,)
 
     def call(self, x: FVArray) -> FVArray:
-        return replay_quantizer(self.op, x)
+        return _replay_quantizer(self.op, x)
 
 
 class ReplayPQuantDense(ReplayOperationBase):
@@ -69,9 +80,9 @@ class ReplayPQuantDense(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
-        out = np.einsum('...c,cC->...C', inputs, _weight(layer)) + _bias(layer)
-        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        out = np.einsum('...c,cC->...C', inputs, _final_kernel(layer)) + _final_bias(layer)
+        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
 
 
 class ReplayPQuantConv(ReplayOperationBase):
@@ -79,9 +90,9 @@ class ReplayPQuantConv(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
-        kernel = _weight(layer)
-        bias = _bias(layer)
+        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        kernel = _final_kernel(layer)
+        bias = _final_bias(layer)
 
         if isinstance(layer, (DepthwiseConv1D, DepthwiseConv2D)):
             ch_in, dm = kernel.shape[-2:]
@@ -113,7 +124,7 @@ class ReplayPQuantConv(ReplayOperationBase):
             out = out + bias
         if layer.data_format == 'channels_first':
             out = np.moveaxis(out, -1, 1)  # type: ignore
-        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
 
 
 class ReplayPQuantSeparableConv(ReplayOperationBase):
@@ -131,14 +142,14 @@ class ReplayPQuantBatchNormalization(ReplayBatchNormalization):
     def fused_scale_offset(self) -> tuple[np.ndarray, np.ndarray]:
         layer = self.op
         _assert_final_compression(layer)
-        mean = to_numpy(keras.ops.cast(layer.moving_mean, layer.dtype))
-        variance = to_numpy(keras.ops.cast(layer.moving_variance, layer.dtype))
+        mean = _to_numpy(keras.ops.cast(layer.moving_mean, layer.dtype))
+        variance = _to_numpy(keras.ops.cast(layer.moving_variance, layer.dtype))
         if layer.scale:
-            gamma = to_numpy(keras.ops.cast(layer.gamma, layer.dtype))
+            gamma = _to_numpy(keras.ops.cast(layer.gamma, layer.dtype))
         else:
             gamma = np.ones_like(mean)
         if layer.center:
-            beta = to_numpy(keras.ops.cast(layer.beta, layer.dtype))
+            beta = _to_numpy(keras.ops.cast(layer.beta, layer.dtype))
         else:
             beta = np.zeros_like(mean)
         scale = gamma / np.sqrt(variance + layer.epsilon)
@@ -147,7 +158,7 @@ class ReplayPQuantBatchNormalization(ReplayBatchNormalization):
 
     def call(self, inputs: FVArray, mask=None) -> FVArray:
         layer = self.op
-        inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
         scale, offset = self.fused_scale_offset()
         shape = [1] * inputs.ndim
         axis = layer.axis if isinstance(layer.axis, (list, tuple)) else [layer.axis]
@@ -168,9 +179,9 @@ class ReplayPQuantAvgPool(ReplayPool):
 
     def call(self, inputs: FVArray, mask: None = None) -> FVArray:
         layer = self.op
-        inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
         out = super().call(inputs, mask=mask)
-        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
 
 
 class ReplayPQuantActivation(ReplayOperationBase):
@@ -179,57 +190,22 @@ class ReplayPQuantActivation(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        if (
-            not bool(getattr(layer, 'use_hgq', False))
-            and bool(getattr(layer, 'use_multiplier', False))
-            and layer.activation_name == 'relu'
-            and hasattr(layer, 'multiplier')
-        ):
-            inputs = inputs * (2.0 ** np.rint(to_numpy(layer.multiplier)))
-        inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        inputs = _scale_by_relu_multiplier(layer, inputs)
+        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
         if layer.activation_name not in keras_numpy_unary_map:
             raise PQuantAlkaidError(f'Unsupported PQuant activation for Alkaid conversion: {layer.activation_name!r}')
         out = keras_numpy_unary_map[layer.activation_name](inputs)
-        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
-
-
-def _table_fn(table):
-    """Numpy-callable for a PQActivation lookup table, evaluated in float32 like the keras runtime."""
-    fn = table.activation_function
-
-    def apply_fn(v: np.ndarray) -> np.ndarray:
-        t = keras.ops.cast(keras.ops.convert_to_tensor(v), 'float32')
-        return np.asarray(keras.ops.convert_to_numpy(fn(t)), dtype=np.float64)
-
-    return apply_fn
+        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
 
 
 class ReplayPQuantSoftmax(ReplayOperationBase):
     __activation_handled__ = True
     handles = (PQSoftmax,)
 
-    @staticmethod
-    def _replay_table(table, x: FVArray) -> FVArray:
-        if not (table.quantize_output and table.enable_quantization):
-            raise PQuantAlkaidError(
-                f'PQSoftmax table {table.name!r} must have an enabled output quantizer for Alkaid conversion.'
-            )
-        x = replay_quantizer_if_enabled(table, 'input_quantizer', x, 'quantize_input')
-        out = x.apply(_table_fn(table))
-        return replay_quantizer(table.output_quantizer, out)
-
     def call(self, inputs: FVArray, mask=None) -> FVArray:
-        layer = self.op
         if mask is not None:
             raise PQuantAlkaidError('PQSoftmax masks are not supported in Alkaid conversion.')
-        inputs = replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
-        if layer.stable:
-            inputs = np.max(inputs, axis=layer.axes, keepdims=True) - inputs  # type: ignore
-        exp_inp = self._replay_table(layer.exp_table, inputs)
-        sums = np.sum(exp_inp, axis=layer.axes, keepdims=True)
-        divisor = self._replay_table(layer.inv_table, sums)
-        out = exp_inp * divisor
-        return replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_softmax(self.op, inputs, _table_fn)
 
 
 class ReplayPQuantMultiheadAttention(ReplayOperationBase):
@@ -241,17 +217,7 @@ class ReplayPQuantMultiheadAttention(ReplayOperationBase):
         if key_padding_mask is not None or attn_mask is not None:
             raise PQuantAlkaidError('Attention masks are not supported in Alkaid conversion.')
 
-        if isinstance(inputs, (list, tuple)):
-            if len(inputs) == 3:
-                query, key, value = inputs
-            elif len(inputs) == 2:
-                query, key = inputs
-                value = key
-            else:
-                query = key = value = inputs[0]
-        else:
-            query = key = value = inputs
-
+        query, key, value = _unpack_query_key_value(inputs)
         batch_size, query_len = query.shape[0], query.shape[1]
         key_len = key.shape[1]
         num_heads, head_dim = layer.num_heads, layer.head_dim
@@ -286,10 +252,4 @@ class ReplayPQuantMultiheadAttention(ReplayOperationBase):
 
 def register() -> None:
     """Entry point for Alkaid's ``alkaid_keras`` second-level plugin group."""
-    try:
-        from alkaid.converter import _plugin_loader
-
-        _plugin_loader._LOADED.add(('pquant', 'keras'))
-    except Exception:
-        pass
-    return None
+    _mark_plugin_loaded('keras')

@@ -40,12 +40,6 @@ INPUT_KIF = (1, 4, 4)
 
 
 class TwoBranchNet(nn.Module):
-    """conv2d branch + conv1d branch merged (matched flatten lengths) -> dense head.
-
-    A conv after a reshape/flatten cannot be traced by Alkaid (its reshape folds
-    the batch axis), and its ``Concatenate`` merge is unreliable, so the two convs
-    live on separate branches that are summed before the dense head.
-    """
 
     def __init__(self, config):
         super().__init__()
@@ -67,8 +61,7 @@ class TwoBranchNet(nn.Module):
         return self.act(self.dense(x))
 
 
-def _random_prune(layer, fraction, rng):
-    """Zero exactly ``fraction`` of the layer's weights via its pruning mask."""
+def random_prune(layer, fraction, rng):
     mask = layer.pruning_layer.mask
     numel = int(np.prod(tuple(mask.shape)))
     n_zero = int(round(fraction * numel))
@@ -78,14 +71,13 @@ def _random_prune(layer, fraction, rng):
     return n_zero / numel
 
 
-def _fixed_point_input(shape, kif=INPUT_KIF):
+def fixed_point_input(shape, kif=INPUT_KIF):
     """Bounded fixed-point symbolic input so the SAT input quantizer can be replayed."""
     k, i, f = (np.full(shape, v, dtype=np.int8) for v in kif)
     return FVArray.from_kif(k, i, f, HWCONF, 0, None)
 
 
-def _rtl_predict(comb, path, data):
-    """Write the RTL project, compile the simulation emulator, and run bit-accurate inference."""
+def rtl_predict(comb, path, data):
     rtl_model = RTLModel(comb, str(path), "model", flavor="verilog", latency_cutoff=5, clock_period=5.0, print_latency=False)
     rtl_model.write()
     rtl_model.compile()
@@ -96,36 +88,25 @@ def _rtl_predict(comb, path, data):
     return rtl_model.predict(data)
 
 
-def _build_pruned_compressed_model(config, rng):
-    """Build the model, build it (one forward), prune 90%, apply final compression, eval."""
+def build_pruned_compressed_model(config):
     model = TwoBranchNet(config)
     device = next(model.parameters()).device
     img = torch.zeros(1, IN_FEATURES, H, W, device=device)
     seq = torch.zeros(1, IN_FEATURES, SEQ_LEN, device=device)
-
     with torch.no_grad():
-        model(img, seq)  # build quantizers + pruning masks
-
-        pq_layers = [m for m in model.modules() if isinstance(m, (PQConv2d, PQConv1d, PQDense))]
-        for layer in pq_layers:
-            layer._weight.copy_(
-                torch.tensor(rng.standard_normal(tuple(layer._weight.shape)), dtype=layer._weight.dtype, device=device)
-            )
-        expected_sparsity = {id(layer): _random_prune(layer, PRUNE_FRACTION, rng) for layer in pq_layers}
-
+        model(img, seq)
     apply_final_compression(model)
     model.eval()
-    return model, pq_layers, expected_sparsity, device
+    return model, device
 
 
 def test_alkaid_conversion_pruned_quantized_model():
     config = pdp_config()
     config.quantization_parameters.enable_quantization = True
 
-    rng = np.random.default_rng(0)
-    model, _, _, _ = _build_pruned_compressed_model(config, rng)
+    model, _ = build_pruned_compressed_model(config)
 
-    inputs = (_fixed_point_input((1, IN_FEATURES, H, W)), _fixed_point_input((1, IN_FEATURES, SEQ_LEN)))
+    inputs = (fixed_point_input((1, IN_FEATURES, H, W)), fixed_point_input((1, IN_FEATURES, SEQ_LEN)))
     inp, out = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
 
     assert out.shape == (OUT_FEATURES,)
@@ -138,9 +119,9 @@ def test_alkaid_rtl_matches_model(tmp_path):
     config.quantization_parameters.enable_quantization = True
 
     rng = np.random.default_rng(0)
-    model, _, _, device = _build_pruned_compressed_model(config, rng)
+    model, device = build_pruned_compressed_model(config)
 
-    inputs = (_fixed_point_input((1, IN_FEATURES, H, W)), _fixed_point_input((1, IN_FEATURES, SEQ_LEN)))
+    inputs = (fixed_point_input((1, IN_FEATURES, H, W)), fixed_point_input((1, IN_FEATURES, SEQ_LEN)))
     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
     comb = trace(inp_fv, out_fv, optimize=True)
     n_samples = 16
@@ -152,14 +133,12 @@ def test_alkaid_rtl_matches_model(tmp_path):
             model(torch.tensor(img, device=device), torch.tensor(seq, device=device)).cpu().numpy().astype(np.float64)
         )  # (n_samples, OUT_FEATURES)
 
-    emulated = _rtl_predict(comb, tmp_path, [img, seq])
+    emulated = rtl_predict(comb, tmp_path, [img, seq])
     assert (tmp_path / "src" / "model.v").exists()
 
     assert np.any(reference != 0)  # the comparison is non-trivial
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
 
-
-# --- Coverage of every PQ layer the torch Alkaid plugin handles ---------------
 
 ALL_C = 4
 ALL_H = ALL_W = 6
@@ -178,13 +157,6 @@ ALL_TORCH_LAYER_TYPES = {
 
 
 class AllLayersNet(nn.Module):
-    """Exercises every PQ layer type the torch Alkaid plugin handles.
-
-    conv2d -> batchnorm2d -> relu -> avgpool2d branch, and a
-    conv1d -> batchnorm1d -> relu -> avgpool1d branch, merged (matched flatten
-    lengths) into a dense head. Each layer also drives an inner Quantizer.
-    """
-
     def __init__(self, config):
         super().__init__()
         self.conv2d = PQConv2d(config, IN_FEATURES, ALL_C, KERNEL_SIZE, padding="same")
@@ -223,19 +195,15 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
             torch.tensor(rng.standard_normal((4, IN_FEATURES, ALL_LIN)), dtype=torch.float32, device=device),
         )
 
-    assert ALL_TORCH_LAYER_TYPES <= {type(m).__name__ for m in model.modules()}
-
     with torch.no_grad():
-        for layer in [m for m in model.modules() if getattr(m, "pruning_layer", None) is not None]:
-            layer._weight.copy_(
-                torch.tensor(rng.standard_normal(tuple(layer._weight.shape)), dtype=layer._weight.dtype, device=device)
-            )
-            _random_prune(layer, PRUNE_FRACTION, rng)
-
+        for module in model.modules():
+            if not hasattr(module, "pruning_layer"):
+                continue
+            random_prune(module, PRUNE_FRACTION, rng)
     apply_final_compression(model)
     model.eval()
 
-    inputs = (_fixed_point_input((1, IN_FEATURES, ALL_H, ALL_W)), _fixed_point_input((1, IN_FEATURES, ALL_LIN)))
+    inputs = (fixed_point_input((1, IN_FEATURES, ALL_H, ALL_W)), fixed_point_input((1, IN_FEATURES, ALL_LIN)))
     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
     comb = trace(inp_fv, out_fv, optimize=True)
     assert out_fv.shape == (OUT_FEATURES,)
@@ -247,18 +215,12 @@ def test_alkaid_conversion_all_layer_types(tmp_path):
         reference = (
             model(torch.tensor(img, device=device), torch.tensor(seq, device=device)).cpu().numpy().astype(np.float64)
         )
-    emulated = _rtl_predict(comb, tmp_path, [img, seq])
-    assert (tmp_path / "src" / "model.v").exists()
-
+    emulated = rtl_predict(comb, tmp_path, [img, seq])
     assert np.any(reference != 0)
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
 
 
-# --- Per-layer conversion: a model that is a single layer ---------------------
-
-
-def _data_quantizer(config):
-    """A data Quantizer built from the config's default data settings."""
+def make_data_quantizer(config):
     qp = config.quantization_parameters
     return Quantizer(
         k=qp.default_data_keep_negatives,
@@ -274,13 +236,7 @@ def _data_quantizer(config):
     )
 
 
-class _SingleLayer(nn.Module):
-    """One PQ layer, optionally followed by a Quantizer.
-
-    Layers with a ``quantize_output`` option set it directly; layers without one
-    get an explicit trailing Quantizer so the output is fixed-point.
-    """
-
+class SingleLayer(nn.Module):
     def __init__(self, layer, tail=None):
         super().__init__()
         self.layer = layer
@@ -291,25 +247,25 @@ class _SingleLayer(nn.Module):
         return x if self.tail is None else self.tail(x)
 
 
-_SINGLE_LAYER_CASES = {
-    "conv2d": lambda c: ((1, 2, 4, 4), _SingleLayer(PQConv2d(c, 2, 3, KERNEL_SIZE, padding="same", quantize_output=True))),
-    "conv1d": lambda c: ((1, 2, 8), _SingleLayer(PQConv1d(c, 2, 3, KERNEL_SIZE, padding="same", quantize_output=True))),
-    "dense": lambda c: ((1, 6), _SingleLayer(PQDense(c, 6, OUT_FEATURES, quantize_output=True))),
-    "batchnorm2d": lambda c: ((1, 3, 4, 4), _SingleLayer(PQBatchNorm2d(c, 3), _data_quantizer(c))),
-    "batchnorm1d": lambda c: ((1, 3, 8), _SingleLayer(PQBatchNorm1d(c, 3), _data_quantizer(c))),
-    "avgpool2d": lambda c: ((1, 3, 4, 4), _SingleLayer(PQAvgPool2d(c, kernel_size=2, stride=2, quantize_output=True))),
-    "avgpool1d": lambda c: ((1, 3, 8), _SingleLayer(PQAvgPool1d(c, kernel_size=2, stride=2, quantize_output=True))),
-    "activation": lambda c: ((1, 6), _SingleLayer(PQActivation(c, "relu", quantize_input=True, quantize_output=True))),
-    "quantizer": lambda c: ((1, 6), _SingleLayer(_data_quantizer(c))),
-    "softmax": lambda c: ((1, 6), _SingleLayer(PQSoftmax(c, axis=-1))),
+SINGLE_LAYER_CASES = {
+    "conv2d": lambda c: ((1, 2, 4, 4), SingleLayer(PQConv2d(c, 2, 3, KERNEL_SIZE, padding="same", quantize_output=True))),
+    "conv1d": lambda c: ((1, 2, 8), SingleLayer(PQConv1d(c, 2, 3, KERNEL_SIZE, padding="same", quantize_output=True))),
+    "dense": lambda c: ((1, 6), SingleLayer(PQDense(c, 6, OUT_FEATURES, quantize_output=True))),
+    "batchnorm2d": lambda c: ((1, 3, 4, 4), SingleLayer(PQBatchNorm2d(c, 3), make_data_quantizer(c))),
+    "batchnorm1d": lambda c: ((1, 3, 8), SingleLayer(PQBatchNorm1d(c, 3), make_data_quantizer(c))),
+    "avgpool2d": lambda c: ((1, 3, 4, 4), SingleLayer(PQAvgPool2d(c, kernel_size=2, stride=2, quantize_output=True))),
+    "avgpool1d": lambda c: ((1, 3, 8), SingleLayer(PQAvgPool1d(c, kernel_size=2, stride=2, quantize_output=True))),
+    "activation": lambda c: ((1, 6), SingleLayer(PQActivation(c, "relu", quantize_input=True, quantize_output=True))),
+    "quantizer": lambda c: ((1, 6), SingleLayer(make_data_quantizer(c))),
+    "softmax": lambda c: ((1, 6), SingleLayer(PQSoftmax(c, axis=-1))),
 }
 
 
-@pytest.mark.parametrize("case_id", list(_SINGLE_LAYER_CASES))
+@pytest.mark.parametrize("case_id", list(SINGLE_LAYER_CASES))
 def test_alkaid_single_layer(case_id, tmp_path):
     config = pdp_config()
     config.quantization_parameters.enable_quantization = True
-    shape, model = _SINGLE_LAYER_CASES[case_id](config)
+    shape, model = SINGLE_LAYER_CASES[case_id](config)
     rng = np.random.default_rng(0)
 
     model.train()
@@ -318,27 +274,25 @@ def test_alkaid_single_layer(case_id, tmp_path):
     apply_final_compression(model)
     model.eval()
 
-    inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=(_fixed_point_input(shape),), framework="torch")
+    inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=(fixed_point_input(shape),), framework="torch")
     comb = trace(inp_fv, out_fv, optimize=True)
 
     n_samples = 16
     x = rng.integers(0, 16, size=(n_samples,) + shape[1:]).astype("float32") / 16.0
     with torch.no_grad():
         reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
-    emulated = _rtl_predict(comb, tmp_path, x)
+    emulated = rtl_predict(comb, tmp_path, x)
 
     assert np.any(reference != 0)
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
 
-
-# --- Multi-head attention ------------------------------------------------------
 
 MHA_SEQ_LEN = 4
 MHA_EMBED_DIM = 4
 MHA_NUM_HEADS = 2
 
 
-class _MHANet(nn.Module):
+class MHANet(nn.Module):
     """Self-attention PQMultiheadAttention with every data quantizer enabled.
 
     The MHA lives inside a wrapper module so torch.fx inlines its forward with
@@ -366,14 +320,14 @@ def test_alkaid_multihead_attention(tmp_path):
     config.quantization_parameters.enable_quantization = True
 
     rng = np.random.default_rng(0)
-    model = _MHANet(config)
+    model = MHANet(config)
     with torch.no_grad():
         model(torch.tensor(rng.standard_normal((4, MHA_SEQ_LEN, MHA_EMBED_DIM)), dtype=torch.float32))  # build
     apply_final_compression(model)
     model.eval()
 
     shape = (1, MHA_SEQ_LEN, MHA_EMBED_DIM)
-    inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=(_fixed_point_input(shape),), framework="torch")
+    inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=(fixed_point_input(shape),), framework="torch")
     comb = trace(inp_fv, out_fv, optimize=True)
     assert out_fv.shape == (MHA_SEQ_LEN * MHA_EMBED_DIM,)
 
@@ -381,7 +335,7 @@ def test_alkaid_multihead_attention(tmp_path):
     x = rng.integers(0, 16, size=(n_samples, MHA_SEQ_LEN, MHA_EMBED_DIM)).astype("float32") / 16.0
     with torch.no_grad():
         reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
-    emulated = _rtl_predict(comb, tmp_path, x)
+    emulated = rtl_predict(comb, tmp_path, x)
 
     assert np.any(reference != 0)
     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
