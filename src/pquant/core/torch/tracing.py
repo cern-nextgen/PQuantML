@@ -3,6 +3,7 @@ import logging
 import torch
 import torch.nn.functional as F
 
+from pquant.core.constants import QuantizationGranularity
 from pquant.core.torch.activations import PQActivation
 from pquant.core.torch.layers import (
     PQAvgPoolBase,
@@ -263,7 +264,7 @@ def _insert_missing_quantizers(traced, edges_to_quantize, config):
             round_mode=qp.round_mode,
             is_heterogeneous=False,
             is_data=True,
-            granularity="per_tensor",
+            granularity=QuantizationGranularity.PER_TENSOR,
             hgq_gamma=qp.hgq_gamma,
         )
 

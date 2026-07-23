@@ -15,6 +15,7 @@ import math
 import torch
 import torch.nn as nn
 
+from pquant.core.constants import QuantizationGranularity
 from pquant.core.torch.fixed_point_quantizer import get_fixed_quantizer, round_conv
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ class HGQQuantizer(nn.Module):
         overflow_mode: str,
         round_mode: str,
         is_data: bool,
-        granularity: str = "per_weight",
+        granularity: str = QuantizationGranularity.PER_WEIGHT,
         gamma: float = 1e-8,
         i_decay_speed: float = float("inf"),
         i_min: float = -23.0,
@@ -97,7 +98,7 @@ class HGQQuantizer(nn.Module):
         self.overflow_mode = overflow_mode.upper()
         self.round_mode = round_mode.upper()
         self.is_data = is_data
-        self.granularity = granularity
+        self.granularity = QuantizationGranularity(granularity).value
         self.gamma = gamma
         self.i_decay_speed = i_decay_speed
         self.i_min = i_min
@@ -157,11 +158,11 @@ class HGQQuantizer(nn.Module):
         HGQ supports only per_tensor and per_weight (data always shares the batch axis 0).
         per_channel is intentionally unsupported (the channel axis is layout-dependent).
         """
-        if self.granularity == "per_tensor":
+        if self.granularity == QuantizationGranularity.PER_TENSOR:
             return tuple(range(ndim))
-        if self.granularity == "per_weight":
+        if self.granularity == QuantizationGranularity.PER_WEIGHT:
             return (0,) if self.is_data else ()
-        if self.granularity == "per_channel":
+        if self.granularity == QuantizationGranularity.PER_CHANNEL:
             raise ValueError("per_channel granularity is not supported for HGQ. Use 'per_tensor' or 'per_weight'.")
         raise ValueError(f"Unsupported granularity: {self.granularity}")
 
