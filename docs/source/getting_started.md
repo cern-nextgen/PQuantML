@@ -1,19 +1,19 @@
 # Quick User Guide
 
-```{note}
-This section provides an overview of how to use the PQuantML library: defining models with pruning and quantization, running fine-tuning, and optionally converting the final model to hls4ml.
-```
+{note}
+This section provides an overview of how to use the PQuantML library: defining models with pruning and quantization, running hyperparameters optimization, and optionally converting the final model to hls4ml.
+
 
 ## Model definition & training
+To enable pruning and quantization, a model must use PQuantML layers. This can be done in one of two ways:
 
+- Direct layer definition, by building the model with PQuantML layers such as PQDense and PQActivation.
+- Automatic layer replacement, by converting an existing PyTorch model using add_compression_layers(...).
 
-To compress a model with PQuantML, all layers must be replaced with their PQuantML equivalents. For example, replace `Dense` by `PQDense`, `ReLU` by `PQActivation`, etc.
+Model compression behaviour such as pruning strength, quantization bit-widths, training parameters, etc. is controlled through the configuration object, which is a Pydantic model to provide an automatic type checking.
 
-
-Model compression behaviour such as pruning strength, quantization bit-widths, training parameters, etc. is controlled through the configuration object, which is a Pydantic model.
-
-### Load a default configuration
-``` python
+### Load the default DST configuration
+ python
 from pquant import dst_config
 
 # Upload a default DST config
@@ -24,14 +24,14 @@ config.quantization_parameters.default_data_integer_bit = 3.
 config.quantization_parameters.default_data_fractional_bits = 2.
 config.quantization_parameters.default_weight_fractional_bits = 3.
 config.quantization_parameters.use_relu_multiplier = False
-```
+
 
 ### Building a model
 PQuantML supports two ways of defining compressed models. Below we illustrate both approaches using a simple jet-tagging architecture.
 
 ### Direct layer usage
 
-```python
+python
 from pquant.layers import PQDense
 from pquant.activations import PQActivation
 
@@ -56,11 +56,11 @@ def build_model(config):
             return x
 
     return Model(config)
-```
 
+This approach is recommended when developing a new architecture from scratch.
 
 ### Layer-replacement usage
-```python
+python
 
 def build_model():
     class Model(nn.Module):
@@ -84,10 +84,11 @@ def build_model():
 
 # Convert to PQuantML-compressed model
 model = add_compression_layers(model, config)
-```
 
-### Fine-Tuning with PQuantML
-PQuantML provides an automated fine-tuning and hyperparameter-optimization workflow through the `TuningTask API`. This allows you to search for optimal pruning, quantization, and training parameters using your own training, validation, and objective functions.
+If you already have a model, it can be converted automatically by replacing supported layers with their PQuantML equivalents.
+
+### Hyperparameters optimization with PQuantML
+PQuantML provides an automated hyperparameter-optimization workflow through the TuningTask API. This allows you to search for optimal pruning, quantization, and training parameters using your own training, validation, and objective functions.
 
 ```python
 from pquant.core.finetuning import TuningTask, TuningConfig
@@ -112,9 +113,9 @@ tuner.set_objective_function(name="accuracy", fn=calculate_accuracy, direction="
 tuner.set_hyperparameters()
 tuner.set_optimizer_function(get_optimizer)
 tuner.set_scheduler_function(get_scheduler)
-```
 
-To run optimization:
+
+Run optimization:
 ```python
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device)
@@ -123,23 +124,23 @@ best_params = tuner.run_optimization(model,
                         trainloader=...,
                         testloader=...,
                         loss_func=...)
-```
-```{note}
-`tuner.run_optimization()` automatically runs multiple compression–fine-tuning cycles, evaluates each trial using your objective function, and returns the best hyperparameters.
-```
+
+{note}
+`tuner.run_optimization()` automatically runs multiple compression cycles, evaluates each trial using your objective function, and returns the best hyperparameter configuration.
+
 
 All other training code remains unchanged.
 
 ### Train a model
 
-```python
+python
 loss_func = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(lr=1e-2, weight_decay=1e-4, params=model.parameters())
 scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[600, 800], gamma=0.1
-```
-Training is handled through the `train_model(...)` wrapper:
 
-```python
+Training is handled through the train_model(...) wrapper:
+
+python
 from pquant import train_model
 
 trained_model = train_model(model = model,
@@ -153,13 +154,13 @@ trained_model = train_model(model = model,
                                 optimizer = optimizer,
                                 scheduler=scheduler
                                 )
-```
+
 
 ### Using different quantization settings per layer
-```{note}
-For FITCompress, HGQ, or architectures, where activations require different quantization bit-widths, each activation layer must be instantiated separately.
-```
-```python
+{note}
+If different activation layers require different quantization settings (for example when using FITCompress or HGQ), instantiate each `PQActivation` layer separately instead of reusing a single activation module.
+
+python
 def build_model(config):
     class Model(torch.nn.Module):
         def __init__(self):
@@ -183,13 +184,13 @@ def build_model(config):
             return x
 
     return Model(config)
-```
+
 
 
 ## Conversion to hls4ml
 After training, the PQuantML model can be exported to hls4ml for HLS synthesis.
 
-```python
+python
 from hls4ml.converters import convert_from_pytorch_model
 from hls4ml.utils import config_from_pytorch_model
 
@@ -206,6 +207,5 @@ hls_model = convert_from_pytorch_model(
         hls_config=hls_config,
         )
 hls_model.compile()
-```
 
 For a complete example, please refer to this [notebook](https://github.com/nroope/PQuant/blob/dev/examples/example_jet_tagging.ipynb).

@@ -201,7 +201,9 @@ Optionally, there is also FITCompress method implemented for PyTorch:
 - `PQAvgPool*D`: Average pooling layers.
 - `PQBatchNorm*D`: BatchNorm layers.
 - `PQDense`: Linear layer.
-- `PQActivation`: Activation layers (ReLU, Tanh)
+- `PQActivation`: Activation layers (ReLU, Tanh, Leaky Relu, Gelu, Hard Tanh, activation function provided by a user(Torch only))
+- `MultiHeadAttention`: 
+- `LayerNorm`: (Currently Torch only)
 
 ```{note}
 Currently, PQuantML supports two quantization modes: layer-wise fixed-point quantization, where each tensor uses a single
