@@ -9,13 +9,13 @@ html body nav.wy-nav-top,
 }
 
 .wy-nav-content {
-    max-width: 2000px !important;
+    max-width: none !important;
     width: 100% !important;
 }
 
 .rst-content,
 .rst-content .section {
-    max-width: 2000px !important;
+    max-width: none!important;
     width: 100% !important;
 }
 
@@ -47,7 +47,7 @@ html body nav.wy-nav-top,
 .rst-content .literal-block,
 .rst-content .line-block,
 .rst-content .topic {
-    max-width: 2000px !important;
+    max-width: none !important;
 }
 
 .wy-body-for-nav {
@@ -56,7 +56,7 @@ html body nav.wy-nav-top,
 
 .wy-nav-content {
     background-color: #ffffff !important;
-    max-width: 1200px !important;
+    max-width: none !important;
 }
 
 .wy-side-nav-search {
