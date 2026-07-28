@@ -80,13 +80,9 @@ def test_fpga_handles_1d_weight():
 
 
 def test_fpga_invalid_target_resource_raises_on_call():
-    with pytest.raises(ValueError):
+    """Config values are validated by Pydantic; direct misuse fails as a registry miss."""
+    with pytest.raises(KeyError):
         FPGAAwareSparsityMetric(target_resource="LUT")(torch.ones(4, 8))
-
-
-def test_fpga_bram_packing_impossible_raises_on_call():
-    with pytest.raises(ValueError):
-        FPGAAwareSparsityMetric(precision=128, bram_width=16, target_resource="BRAM")(torch.ones(4, 16))
 
 
 def test_paca_returns_zero_for_non_4d():
@@ -134,7 +130,8 @@ def test_paca_projection_mask_identity_when_no_patterns():
 
 
 def test_paca_invalid_distance_metric_raises_on_call():
-    with pytest.raises(ValueError):
+    """Config values are validated by Pydantic; direct misuse fails as a registry miss."""
+    with pytest.raises(KeyError):
         PACAPatternMetric(distance_metric="manhattan")(_conv_weight())
 
 

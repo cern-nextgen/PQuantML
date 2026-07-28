@@ -18,8 +18,6 @@ pruning_parameters:
   constraint_lr: 1.0e-3
   metric:
     metric_type: "PACAPatternSparsity"
-    # Hand-tuned on the SmartPixels workload; the code defaults (0.75 / valued_hamming)
-    # are the generic starting point.
     num_patterns_to_keep: 16
     beta: 0.85                 # cumulative pattern-frequency coverage kept (0..1)
     distance_metric: "cosine"  # "hamming", "valued_hamming", or "cosine"

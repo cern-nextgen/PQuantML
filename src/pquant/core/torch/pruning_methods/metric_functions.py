@@ -4,7 +4,6 @@ import torch
 
 from pquant.core.constants import (
     DISTANCE_VALUED_HAMMING,
-    FPGA_TARGET_RESOURCES,
     TARGET_RESOURCE_BRAM,
     TARGET_RESOURCE_DSP,
 )
@@ -133,13 +132,9 @@ class FPGAAwareSparsityMetric(BaseSparsityMetric):
     def __call__(self, weight):
         prepared = self._prepare_weights(weight)
         dsp_groups = prepared.reshape(prepared.shape[0], -1, self.rf)
-        try:
-            sparsity_fn = self._resource_sparsity[self.target_resource]
-        except KeyError:
-            raise ValueError(
-                f"target_resource must be one of {FPGA_TARGET_RESOURCES}, got {self.target_resource!r}"
-            ) from None
-        return sparsity_fn(dsp_groups)
+        # target_resource is validated by the Pydantic config model; direct misuse fails
+        # here as a missing registry key.
+        return self._resource_sparsity[self.target_resource](dsp_groups)
 
     def _dsp_sparsity(self, dsp_groups):
         group_norms = torch.sqrt(dsp_groups.square().sum(dim=-1))
@@ -147,11 +142,7 @@ class FPGAAwareSparsityMetric(BaseSparsityMetric):
         return zero_groups.sum() / float(group_norms.numel())
 
     def _bram_sparsity(self, dsp_groups):
-        if self.c < 1:
-            raise ValueError(
-                f"BRAM packing needs precision <= 2*bram_width (got precision={self.precision}, "
-                f"bram_width={self.bram_width} -> c={self.c})."
-            )
+        # c >= 1 is guaranteed by FPGAAwareSparsityModel at config load.
         num_dsp_groups = dsp_groups.shape[1]
         padding = (self.c - num_dsp_groups % self.c) % self.c
         if padding:

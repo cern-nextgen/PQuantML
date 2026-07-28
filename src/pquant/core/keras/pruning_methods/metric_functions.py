@@ -4,7 +4,6 @@ from keras import ops
 
 from pquant.core.constants import (
     DISTANCE_VALUED_HAMMING,
-    FPGA_TARGET_RESOURCES,
     TARGET_RESOURCE_BRAM,
     TARGET_RESOURCE_DSP,
 )
@@ -127,9 +126,7 @@ class FPGAAwareSparsityMetric(BaseSparsityMetric):
         self.epsilon = epsilon
         self.alpha = float(alpha)
         self.c = self._calculate_c()
-        # Bound-method dispatch, same pattern as UnstructuredSparsityMetric.l0_fn. Built
-        # with both keys regardless of target_resource so construction never raises; a bad
-        # resource surfaces at call time as a clear ValueError.
+        # Bound-method dispatch, same pattern as UnstructuredSparsityMetric.l0_fn.
         self._resource_sparsity = {
             TARGET_RESOURCE_DSP: self._dsp_sparsity,
             TARGET_RESOURCE_BRAM: self._bram_sparsity,
@@ -167,13 +164,9 @@ class FPGAAwareSparsityMetric(BaseSparsityMetric):
     def __call__(self, weight):
         prepared = self._prepare_weights(weight)
         dsp_groups = ops.reshape(prepared, (prepared.shape[0], -1, self.rf))
-        try:
-            sparsity_fn = self._resource_sparsity[self.target_resource]
-        except KeyError:
-            raise ValueError(
-                f"target_resource must be one of {FPGA_TARGET_RESOURCES}, got {self.target_resource!r}"
-            ) from None
-        return sparsity_fn(dsp_groups)
+        # target_resource is validated by the Pydantic config model; direct misuse fails
+        # here as a missing registry key.
+        return self._resource_sparsity[self.target_resource](dsp_groups)
 
     def _dsp_sparsity(self, dsp_groups):
         """A DSP block is pruned when the L2-norm of its weight group is below epsilon."""
@@ -183,12 +176,10 @@ class FPGAAwareSparsityMetric(BaseSparsityMetric):
         return ops.sum(ops.cast(zero_groups, dsp_groups.dtype)) / num_groups
 
     def _bram_sparsity(self, dsp_groups):
-        """A BRAM block is pruned when the L2-norm of all weights stored in it is below epsilon."""
-        if self.c < 1:
-            raise ValueError(
-                f"BRAM packing needs precision <= 2*bram_width (got precision={self.precision}, "
-                f"bram_width={self.bram_width} -> c={self.c})."
-            )
+        """A BRAM block is pruned when the L2-norm of all weights stored in it is below epsilon.
+
+        c >= 1 is guaranteed by FPGAAwareSparsityModel at config load.
+        """
         num_dsp_groups = ops.shape(dsp_groups)[1]
         bram_padding = (self.c - num_dsp_groups % self.c) % self.c
         dsp_padded = ops.pad(dsp_groups, [[0, 0], [0, bram_padding], [0, 0]])

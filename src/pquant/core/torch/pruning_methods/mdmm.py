@@ -71,10 +71,10 @@ class MDMM(nn.Module):
             **pruning_parameters.metric.model_dump(exclude={"metric_type"}),
         }
 
-        metric_cls = METRIC_REGISTRY.get(metric_type)
-        if metric_cls is None:
-            raise ValueError(f"Unknown metric_type: {metric_type}")
-        sig = inspect.signature(getattr(metric_cls, "__init__", metric_cls))
+        # metric_type/constraint_type are enums validated by the config model, so plain
+        # registry indexing is safe; an unregistered value fails as a missing key.
+        metric_cls = METRIC_REGISTRY[metric_type]
+        sig = inspect.signature(metric_cls.__init__)
         metric_kwargs = {k: v for k, v in candidate_kwargs.items() if v is not None and k in sig.parameters}
         metric_fn = metric_cls(**metric_kwargs)
 
@@ -87,10 +87,7 @@ class MDMM(nn.Module):
             "lr": pruning_parameters.constraint_lr,
         }
 
-        constraint_type_cls = CONSTRAINT_REGISTRY.get(constraint_type)
-        if constraint_type_cls is None:
-            raise ValueError(f"Unknown constraint_type: {constraint_type}")
-        self.constraint_layer = constraint_type_cls(**common_args)
+        self.constraint_layer = CONSTRAINT_REGISTRY[constraint_type](**common_args)
 
         self.register_buffer("mask", torch.ones(tuple(input_shape)))
         self.built = True

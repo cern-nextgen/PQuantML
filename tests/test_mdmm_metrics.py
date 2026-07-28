@@ -94,17 +94,10 @@ def test_fpga_dtype_propagates_for_float64():
 
 
 def test_fpga_invalid_target_resource_raises_on_call():
-    """Validation now lives in Pydantic, so a bad target_resource surfaces at call time."""
+    """Config values are validated by Pydantic; direct misuse fails as a registry miss."""
     metric = FPGAAwareSparsityMetric(target_resource="LUT")
-    with pytest.raises(ValueError):
+    with pytest.raises(KeyError):
         metric(ops.ones((4, 8), dtype="float32"))
-
-
-def test_fpga_bram_packing_impossible_raises_on_call():
-    """precision > 2*bram_width -> c=0 -> clear error when BRAM sparsity is computed."""
-    metric = FPGAAwareSparsityMetric(precision=128, bram_width=16, target_resource="BRAM")
-    with pytest.raises(ValueError):
-        metric(ops.ones((4, 16), dtype="float32"))
 
 
 # --- PACAPatternMetric ---
@@ -151,8 +144,9 @@ def test_paca_projection_mask_identity_on_dense_weight():
 
 
 def test_paca_invalid_distance_metric_raises_on_call():
+    """Config values are validated by Pydantic; direct misuse fails as a registry miss."""
     metric = PACAPatternMetric(distance_metric="manhattan")
-    with pytest.raises(ValueError):
+    with pytest.raises(KeyError):
         metric(_make_conv_weight())
 
 

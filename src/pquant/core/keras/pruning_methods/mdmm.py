@@ -80,13 +80,12 @@ class MDMM(keras.layers.Layer):
             **pruning_parameters.metric.model_dump(exclude={"metric_type"}),
         }
 
-        metric_cls = METRIC_REGISTRY.get(metric_type)
-        sig = inspect.signature(getattr(metric_cls, "__init__", metric_cls))
+        # metric_type/constraint_type are enums validated by the config model, so plain
+        # registry indexing is safe; an unregistered value fails as a missing key.
+        metric_cls = METRIC_REGISTRY[metric_type]
+        sig = inspect.signature(metric_cls.__init__)
         metric_kwargs = {k: v for k, v in candidate_kwargs.items() if v is not None and k in sig.parameters}
-        if metric_cls:
-            metric_fn = metric_cls(**metric_kwargs)
-        else:
-            raise ValueError(f"Unknown metric_type: {metric_type}")
+        metric_fn = metric_cls(**metric_kwargs)
 
         common_args = {
             "metric_fn": metric_fn,
@@ -97,11 +96,7 @@ class MDMM(keras.layers.Layer):
             "lr": self.config.pruning_parameters.constraint_lr,
         }
 
-        constraint_type_cls = CONSTRAINT_REGISTRY.get(constraint_type)
-        if constraint_type_cls:
-            self.constraint_layer = constraint_type_cls(**common_args)
-        else:
-            raise ValueError(f"Unknown constraint_type: {constraint_type}")
+        self.constraint_layer = CONSTRAINT_REGISTRY[constraint_type](**common_args)
 
         self.mask = self.add_weight(name="mask", shape=input_shape, initializer="ones", trainable=False)
         self.is_pretraining = self.add_weight(

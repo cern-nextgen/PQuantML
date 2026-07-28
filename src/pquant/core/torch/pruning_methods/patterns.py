@@ -101,11 +101,9 @@ def _kernel_pattern_distances(kernel_patterns, kernels, dominant_patterns, dista
     kernel_support = kernel_patterns.to(kernels.dtype).unsqueeze(1)        # (M, 1, K)
     kernel_values = kernels.unsqueeze(1)                                   # (M, 1, K)
     dominant_support = dominant_patterns.to(kernels.dtype).unsqueeze(0)    # (1, alpha, K)
-    try:
-        distance_fn = DISTANCE_FN_REGISTRY[distance_metric]
-    except KeyError:
-        raise ValueError(f"Unsupported distance metric: {distance_metric!r}") from None
-    return distance_fn(kernel_support, kernel_values, dominant_support)
+    # distance_metric is validated by the Pydantic config model; a bad value on the
+    # direct-construction path fails here as a missing registry key.
+    return DISTANCE_FN_REGISTRY[distance_metric](kernel_support, kernel_values, dominant_support)
 
 
 def pattern_distances(w, dominant_patterns, valid_mask, src, epsilon, distance_metric):
