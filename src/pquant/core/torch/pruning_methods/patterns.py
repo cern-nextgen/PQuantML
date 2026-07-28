@@ -11,36 +11,21 @@ import torch
 
 from pquant.core.constants import (
     CANONICAL_CONV_LAYOUT,
-    CONV_LAYOUT_AXES,
     DISTANCE_COSINE,
     DISTANCE_HAMMING,
     DISTANCE_VALUED_HAMMING,
 )
+from pquant.core.conv_layout import layout_perm
 
 _INF = 1e30
 
 
-def _layout_to_axes(layout):
-    if len(layout) != 4 or set(layout) != set("HWIO"):
-        raise ValueError(f"layout must be a permutation of 'HWIO', got {layout!r}")
-    return tuple(CONV_LAYOUT_AXES[ch] for ch in layout)
-
-
-def _perm(src, dst):
-    """Permutation tuple that reorders axes from `src` layout to `dst` layout."""
-    s = _layout_to_axes(src)
-    d = _layout_to_axes(dst)
-    return tuple(s.index(ax) for ax in d)
-
-
 def convert_conv_layout(w, src, dst=CANONICAL_CONV_LAYOUT):
     """Permute a 4D conv weight from `src` to `dst` layout (no-op if already equal)."""
-    if src == dst:
-        return w
-    perm = _perm(src, dst)
-    if perm == (0, 1, 2, 3):
-        return w
-    return w.permute(*perm).contiguous()
+    perm = layout_perm(src, dst)
+    if src != dst or perm != (0, 1, 2, 3):
+        return w.permute(*perm).contiguous()
+    return w
 
 
 def kernels_and_patterns(w, src, epsilon):
@@ -87,22 +72,40 @@ def select_dominant_patterns(patterns, num_patterns_to_keep, beta):
     return dom, valid
 
 
+def _hamming_distance(kernel_support, kernel_values, dominant_support):
+    return (kernel_support - dominant_support).abs().sum(dim=-1)
+
+
+def _valued_hamming_distance(kernel_support, kernel_values, dominant_support):
+    return ((kernel_support - dominant_support).abs() * kernel_values.abs()).sum(dim=-1)
+
+
+def _cosine_distance(kernel_support, kernel_values, dominant_support):
+    projected = kernel_values * dominant_support
+    dot = (kernel_values * projected).sum(dim=-1)
+    denom = kernel_values.norm(dim=-1) * projected.norm(dim=-1) + 1e-7
+    return 1.0 - dot / denom
+
+
+# Same keys as the keras twin (from core.constants); values are native-torch functions,
+# so the registry lives next to the implementations instead of in constants.py.
+DISTANCE_FN_REGISTRY = {
+    DISTANCE_HAMMING: _hamming_distance,
+    DISTANCE_VALUED_HAMMING: _valued_hamming_distance,
+    DISTANCE_COSINE: _cosine_distance,
+}
+
+
 def _kernel_pattern_distances(kernel_patterns, kernels, dominant_patterns, distance_metric):
     """Distance from every kernel to every dominant pattern. -> (M_kernels, alpha)."""
-    tk = kernel_patterns.to(kernels.dtype).unsqueeze(1)        # (M, 1, K)
-    k_e = kernels.unsqueeze(1)                                 # (M, 1, K)
-    p_e = dominant_patterns.to(kernels.dtype).unsqueeze(0)     # (1, alpha, K)
-
-    if distance_metric == DISTANCE_HAMMING:
-        return (tk - p_e).abs().sum(dim=-1)
-    if distance_metric == DISTANCE_VALUED_HAMMING:
-        return ((tk - p_e).abs() * k_e.abs()).sum(dim=-1)
-    if distance_metric == DISTANCE_COSINE:
-        projected = k_e * p_e
-        dot = (k_e * projected).sum(dim=-1)
-        denom = k_e.norm(dim=-1) * projected.norm(dim=-1) + 1e-7
-        return 1.0 - dot / denom
-    raise ValueError(f"Unsupported distance metric: {distance_metric!r}")
+    kernel_support = kernel_patterns.to(kernels.dtype).unsqueeze(1)        # (M, 1, K)
+    kernel_values = kernels.unsqueeze(1)                                   # (M, 1, K)
+    dominant_support = dominant_patterns.to(kernels.dtype).unsqueeze(0)    # (1, alpha, K)
+    try:
+        distance_fn = DISTANCE_FN_REGISTRY[distance_metric]
+    except KeyError:
+        raise ValueError(f"Unsupported distance metric: {distance_metric!r}") from None
+    return distance_fn(kernel_support, kernel_values, dominant_support)
 
 
 def pattern_distances(w, dominant_patterns, valid_mask, src, epsilon, distance_metric):

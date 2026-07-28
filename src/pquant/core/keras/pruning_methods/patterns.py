@@ -16,36 +16,21 @@ from keras import ops
 
 from pquant.core.constants import (
     CANONICAL_CONV_LAYOUT,
-    CONV_LAYOUT_AXES,
     DISTANCE_COSINE,
     DISTANCE_HAMMING,
     DISTANCE_VALUED_HAMMING,
 )
+from pquant.core.conv_layout import layout_perm
 
 _INF = 1e30
 
 
-def _layout_to_axes(layout):
-    if len(layout) != 4 or set(layout) != set("HWIO"):
-        raise ValueError(f"layout must be a permutation of 'HWIO', got {layout!r}")
-    return tuple(CONV_LAYOUT_AXES[ch] for ch in layout)
-
-
-def _perm(src, dst):
-    """Permutation tuple that reorders axes from `src` layout to `dst` layout."""
-    s = _layout_to_axes(src)
-    d = _layout_to_axes(dst)
-    return tuple(s.index(ax) for ax in d)
-
-
 def convert_conv_layout(w, src, dst=CANONICAL_CONV_LAYOUT):
     """Transpose a 4D conv weight from `src` to `dst` layout (no-op if already equal)."""
-    if src == dst:
-        return w
-    perm = _perm(src, dst)
-    if perm == (0, 1, 2, 3):
-        return w
-    return ops.transpose(w, perm)
+    perm = layout_perm(src, dst)
+    if src != dst or perm != (0, 1, 2, 3):
+        return ops.transpose(w, perm)
+    return w
 
 
 def kernels_and_patterns(w, src, epsilon):
@@ -69,6 +54,8 @@ def _pattern_codes(patterns):
     kernels); larger kernels are not expected for hardware-aware pattern pruning.
     """
     k = patterns.shape[1]
+    if k > 62:
+        raise ValueError(f"pattern length {k} exceeds the int64 bit-pack capacity (62 positions)")
     weights = ops.power(ops.full((k,), 2, dtype="int64"), ops.arange(k, dtype="int64"))
     return ops.sum(ops.cast(patterns, "int64") * weights, axis=1)  # (M,)
 
@@ -126,24 +113,41 @@ def select_dominant_patterns(patterns, num_patterns_to_keep, beta):
     return pat_top, valid
 
 
+def _hamming_distance(kernel_support, kernel_values, dominant_support):
+    return ops.sum(ops.abs(kernel_support - dominant_support), axis=-1)
+
+
+def _valued_hamming_distance(kernel_support, kernel_values, dominant_support):
+    return ops.sum(ops.abs(kernel_support - dominant_support) * ops.abs(kernel_values), axis=-1)
+
+
+def _cosine_distance(kernel_support, kernel_values, dominant_support):
+    projected = kernel_values * dominant_support
+    dot = ops.sum(kernel_values * projected, axis=-1)
+    denom = ops.norm(kernel_values, axis=-1) * ops.norm(projected, axis=-1) + keras.backend.epsilon()
+    return 1.0 - dot / denom
+
+
+# Key strings are defined once in core.constants; the function values are backend-specific
+# (keras.ops here, native torch in the torch twin), which is why the registry lives next to
+# the implementations instead of in constants.py.
+DISTANCE_FN_REGISTRY = {
+    DISTANCE_HAMMING: _hamming_distance,
+    DISTANCE_VALUED_HAMMING: _valued_hamming_distance,
+    DISTANCE_COSINE: _cosine_distance,
+}
+
+
 def _kernel_pattern_distances(kernel_patterns, kernels, dominant_patterns, distance_metric):
     """Distance from every kernel to every dominant pattern. -> (M_kernels, alpha)."""
-    tk = ops.cast(kernel_patterns, kernels.dtype)          # (M, K) binary support of kernels
-    p = ops.cast(dominant_patterns, kernels.dtype)         # (alpha, K)
-    tk_e = ops.expand_dims(tk, 1)                          # (M, 1, K)
-    k_e = ops.expand_dims(kernels, 1)                      # (M, 1, K)
-    p_e = ops.expand_dims(p, 0)                            # (1, alpha, K)
-
-    if distance_metric == DISTANCE_HAMMING:
-        return ops.sum(ops.abs(tk_e - p_e), axis=-1)
-    if distance_metric == DISTANCE_VALUED_HAMMING:
-        return ops.sum(ops.abs(tk_e - p_e) * ops.abs(k_e), axis=-1)
-    if distance_metric == DISTANCE_COSINE:
-        projected = k_e * p_e
-        dot = ops.sum(k_e * projected, axis=-1)
-        denom = ops.norm(k_e, axis=-1) * ops.norm(projected, axis=-1) + keras.backend.epsilon()
-        return 1.0 - dot / denom
-    raise ValueError(f"Unsupported distance metric: {distance_metric!r}")
+    kernel_support = ops.expand_dims(ops.cast(kernel_patterns, kernels.dtype), 1)      # (M, 1, K)
+    kernel_values = ops.expand_dims(kernels, 1)                                        # (M, 1, K)
+    dominant_support = ops.expand_dims(ops.cast(dominant_patterns, kernels.dtype), 0)  # (1, alpha, K)
+    try:
+        distance_fn = DISTANCE_FN_REGISTRY[distance_metric]
+    except KeyError:
+        raise ValueError(f"Unsupported distance metric: {distance_metric!r}") from None
+    return distance_fn(kernel_support, kernel_values, dominant_support)
 
 
 def pattern_distances(w, dominant_patterns, valid_mask, src, epsilon, distance_metric):
