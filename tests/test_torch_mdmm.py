@@ -93,15 +93,21 @@ def test_paca_returns_zero_for_non_4d():
     assert abs(float(PACAPatternMetric()(torch.rand(8, 4)))) < 1e-6
 
 
-def test_paca_lazy_caching():
-    metric = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75)
-    w = _conv_weight()
-    assert metric.dominant_patterns is None
-    _ = metric(w)
-    first = metric.dominant_patterns
-    assert first is not None
-    _ = metric(w)
-    assert metric.dominant_patterns is first
+def test_paca_patterns_follow_current_weights():
+    """No first-call latch: a used metric agrees with a fresh one on new weights."""
+    used = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75)
+    _ = used(_conv_weight())
+    w2 = _conv_weight(c_out=4, c_in=4)
+    fresh = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75)
+    assert torch.allclose(used(w2), fresh(w2))
+
+
+def test_fpga_smooth_mode_produces_weight_gradient():
+    """The smooth zero-count surrogate must be trainable; the coarse indicator is not."""
+    w = torch.randn(4, 16, requires_grad=True)
+    metric = FPGAAwareSparsityMetric(rf=4, l0_mode='smooth')
+    metric(w).backward()
+    assert w.grad is not None and float(w.grad.abs().sum()) > 0.0
 
 
 def test_paca_projection_mask_shape_and_binary():
@@ -198,7 +204,7 @@ def test_mdmm_paca_phase_cycle_projection_mask():
     mdmm = MDMM(cfg, "conv")
     mdmm.build(weight.shape)
     assert torch.equal(mdmm(weight), weight)            # pretraining
-    assert mdmm.constraint_layer.metric_fn.dominant_patterns is not None
+    assert torch.isfinite(mdmm.constraint_layer.metric_fn(weight))
     mdmm.post_pre_train_function()
     _ = mdmm(weight)                                    # active
     mdmm.pre_finetune_function()

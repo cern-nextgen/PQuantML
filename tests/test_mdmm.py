@@ -343,3 +343,43 @@ def test_all_large_weights(config):
     mdmm.post_pre_train_function()
     mdmm(weight)
     assert mdmm.losses[-1] > 1e-4
+
+
+@pytest.mark.parametrize("variant", ["fpga", "paca"])
+def test_model_fit_hardware_aware_metrics(variant):
+    """End-to-end fit through the real PQ layers and PQuantCallback phases.
+
+    Regression net for the tf.function path: the PACA metric must not cache trace-time
+    tensors, the fine-tuning switch must live in a backend variable, and the keep-ratio
+    logging must work eagerly at epoch end.
+    """
+    import keras
+
+    from pquant import mdmm_fpga_config, mdmm_paca_config
+    from pquant.core.keras.layers import PQConv2d
+    from pquant.core.keras.train import PQuantCallback
+
+    config = {"fpga": mdmm_fpga_config, "paca": mdmm_paca_config}[variant]()
+    config.training_parameters.pretraining_epochs = 1
+    config.training_parameters.epochs = 1
+    config.training_parameters.fine_tuning_epochs = 1
+    config.training_parameters.rounds = 1
+    config.training_parameters.save_weights_epoch = 0
+
+    channels_first = keras.backend.image_data_format() == "channels_first"
+    if channels_first and keras.backend.backend() == "tensorflow":
+        import tensorflow as tf
+
+        if not tf.config.list_physical_devices("GPU"):
+            pytest.skip("TF conv backprop on CPU supports only channels_last")
+    input_shape = (2, 8, 8) if channels_first else (8, 8, 2)
+    x_in = keras.Input(shape=input_shape)
+    out = PQConv2d(config, 4, 3, padding="same")(x_in)
+    out = keras.layers.Flatten()(out)
+    model = keras.Model(x_in, out)
+
+    x = np.random.default_rng(0).standard_normal((4, *input_shape)).astype(np.float32)
+    y = np.zeros((4, model.output_shape[-1]), dtype=np.float32)
+    model.compile(optimizer="adam", loss="mse", jit_compile=False)
+    callback = PQuantCallback(config, log_ebops=False, log_keep_ratio=True)
+    model.fit(x, y, epochs=callback.total_epochs, callbacks=[callback], verbose=0)

@@ -5,15 +5,20 @@ pruning_parameters:
   pruning_method: mdmm
   enable_pruning: true
   disable_pruning_for_layers: [] # Disable pruning for these layers, even if enable_pruning is true
-  constraint_type: "Equality"
-  target_value: 0.0
+  # The metric measures the fraction of zero DSP/BRAM groups, so the constraint must push
+  # it UP to the wanted sparsity: GreaterThanOrEqual with target_value = target fraction.
+  # (Equality at 0.0 would penalize sparsity instead.)
+  constraint_type: "GreaterThanOrEqual"
+  target_value: 0.9
   metric_type: "FPGAAwareSparsity"
-  target_sparsity: 0.9
   rf: 4
   epsilon: 1.0e-03
   scale: 50.0
   damping: 1.0
   use_grad: false
+  # smooth: differentiable zero-group count, needed for the constraint to produce a
+  # weight-gradient (the coarse indicator is piecewise-constant).
+  l0_mode: "smooth"
   constraint_lr: 1.0e-3
   # FPGAAwareSparsityMetric-specific
   precision: 16             # weight bit-width

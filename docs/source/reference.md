@@ -201,6 +201,10 @@ The `metric_type` field selects which quantity the MDMM constraint drives. The f
 
 Weights are grouped into DSP blocks of size `rf`; for `target_resource: BRAM`, `c = bram_width // precision` (or `2*bram_width // precision` when not divisible) consecutive DSP groups pack into one BRAM block. The metric reports the fraction of such groups whose L2 norm is below `epsilon`.
 
+```{note}
+The metric measures the *zero*-group fraction, so pair it with `constraint_type: GreaterThanOrEqual` and `target_value` set to the wanted sparsity (as `mdmm_fpga_config()` does). Use `l0_mode: smooth` with it: the smooth surrogate makes the group count differentiable, which the constraint needs to actually move weights.
+```
+
 **`PACAPatternSparsity` parameters** (used only when `metric_type: PACAPatternSparsity`):
 
 | **Field**              | **Type**                                        | **Default**        | **Description**                                              |

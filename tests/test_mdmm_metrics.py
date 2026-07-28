@@ -116,19 +116,19 @@ def test_paca_returns_zero_for_non_4d():
     assert ops.abs(metric(weight)) < 1e-6
 
 
-def test_paca_dominant_patterns_lazy_caching():
-    metric = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75)
-    weight = _make_conv_weight()
-    assert metric.dominant_patterns is None
-    _ = metric(weight)
-    first = metric.dominant_patterns
-    assert first is not None
-    _ = metric(weight)
-    assert metric.dominant_patterns is first  # cached, not recomputed
+def test_paca_patterns_follow_current_weights():
+    """No first-call latch: a used metric agrees with a fresh one on new weights."""
+    used = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75, src="HWIO")
+    _ = used(_make_conv_weight())
+    sparse = _conv_weight_for_mdmm()
+    fresh = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75, src="HWIO")
+    np.testing.assert_allclose(
+        ops.convert_to_numpy(used(sparse)), ops.convert_to_numpy(fresh(sparse)), rtol=1e-6
+    )
 
 
 def test_paca_get_projection_mask_shape_and_binary():
-    metric = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75)
+    metric = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75, src="HWIO")
     weight = _make_conv_weight()
     _ = metric(weight)
     mask = metric.get_projection_mask(weight)
@@ -138,14 +138,15 @@ def test_paca_get_projection_mask_shape_and_binary():
 
 @pytest.mark.parametrize("distance_metric", ["hamming", "valued_hamming", "cosine"])
 def test_paca_all_distance_metrics(distance_metric):
-    metric = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75, distance_metric=distance_metric)
+    metric = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75, distance_metric=distance_metric, src="HWIO")
     assert math.isfinite(float(ops.convert_to_numpy(metric(_make_conv_weight()))))
 
 
-def test_paca_projection_mask_identity_when_no_patterns():
-    metric = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75)
+def test_paca_projection_mask_identity_on_dense_weight():
+    """A fully dense weight has the all-ones support as its only pattern -> identity mask."""
+    metric = PACAPatternMetric(num_patterns_to_keep=4, beta=0.75, src="HWIO")
     weight = _make_conv_weight()
-    mask = metric.get_projection_mask(weight)  # never called -> identity
+    mask = metric.get_projection_mask(weight)
     np.testing.assert_array_equal(ops.convert_to_numpy(mask), np.ones_like(ops.convert_to_numpy(mask)))
 
 
@@ -213,7 +214,7 @@ def test_mdmm_paca_forces_equality_constraint(base_config):
 
 
 def test_mdmm_paca_full_phase_cycle(base_config):
-    """PACA: patterns populated once the metric is called; finetuning output = weight * binary mask."""
+    """PACA: metric evaluates on every call; finetuning output = weight * binary mask."""
     base_config["pruning_parameters"].update(
         {"metric_type": "PACAPatternSparsity", "num_patterns_to_keep": 4, "beta": 0.85, "distance_metric": "cosine"}
     )
@@ -221,9 +222,10 @@ def test_mdmm_paca_full_phase_cycle(base_config):
     mdmm = MDMM(base_config, "conv")
     mdmm.build(weight.shape)
 
-    out = mdmm(weight)  # pretraining (constraint still evaluates the metric -> selects patterns)
+    out = mdmm(weight)  # pretraining (constraint still evaluates the metric)
     assert ops.all(ops.equal(out, weight))
-    assert mdmm.constraint_layer.metric_fn.dominant_patterns is not None
+    metric_value = mdmm.constraint_layer.metric_fn(weight)
+    assert math.isfinite(float(ops.convert_to_numpy(metric_value)))
 
     mdmm.post_pre_train_function()
     _ = mdmm(weight)  # active

@@ -19,18 +19,21 @@ from pquant.core.keras.pruning_methods.metric_functions import (
     StructuredSparsityMetric,
     UnstructuredSparsityMetric,
 )
+from pquant.data_models.pruning_model import ConstraintType, MetricType
 
+# Keyed on the enum members so each name is defined once (MetricType is a str-Enum, so
+# plain-string lookups still hit the same entries).
 METRIC_REGISTRY = {
-    "UnstructuredSparsity": UnstructuredSparsityMetric,
-    "StructuredSparsity": StructuredSparsityMetric,
-    "FPGAAwareSparsity": FPGAAwareSparsityMetric,
-    "PACAPatternSparsity": PACAPatternMetric,
+    MetricType.UNSTRUCTURED: UnstructuredSparsityMetric,
+    MetricType.STRUCTURED: StructuredSparsityMetric,
+    MetricType.FPGA_AWARE: FPGAAwareSparsityMetric,
+    MetricType.PACA_PATTERN: PACAPatternMetric,
 }
 
 CONSTRAINT_REGISTRY = {
-    "Equality": EqualityConstraint,
-    "LessThanOrEqual": LessThanOrEqualConstraint,
-    "GreaterThanOrEqual": GreaterThanOrEqualConstraint,
+    ConstraintType.EQUALITY: EqualityConstraint,
+    ConstraintType.LEQ: LessThanOrEqualConstraint,
+    ConstraintType.GEQ: GreaterThanOrEqualConstraint,
 }
 
 # -------------------------------------------------------------------
@@ -126,10 +129,15 @@ class MDMM(keras.layers.Layer):
         # During fine-tuning, a metric that defines its own projection (e.g. PACA pattern
         # pruning) supplies the mask; otherwise use the magnitude threshold. The layer only
         # checks for the capability, so it stays metric-agnostic (no metric-type branching).
+        # The phase switch must be the backend variable, selected with ops.where: a Python
+        # bool is frozen into the graph at trace time under tf.function, and flipping it
+        # mid-fit (pre_finetune_functions) never triggers a retrace.
         metric_fn = getattr(self.constraint_layer, "metric_fn", None)
-        if self._is_finetuning and hasattr(metric_fn, "get_projection_mask"):
-            return ops.cast(metric_fn.get_projection_mask(weight), weight.dtype)
-        return ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+        magnitude_mask = ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+        if not hasattr(metric_fn, "get_projection_mask"):
+            return magnitude_mask
+        projection_mask = ops.cast(metric_fn.get_projection_mask(weight), weight.dtype)
+        return ops.where(ops.convert_to_tensor(self.is_finetuning), projection_mask, magnitude_mask)
 
     def call(self, weight):
         epsilon = self.config.pruning_parameters.epsilon
@@ -148,8 +156,10 @@ class MDMM(keras.layers.Layer):
     def get_hard_mask(self, weight=None):
         if weight is None:
             return ops.convert_to_tensor(self.mask)
-        epsilon = self.config.pruning_parameters.epsilon
-        return ops.cast(ops.abs(weight) > epsilon, weight.dtype)
+        # Route through _compute_hard_mask so sparsity/EBOPs reporting agrees with what the
+        # forward pass actually applies (during PACA fine-tuning that is the projection
+        # mask, not the magnitude threshold).
+        return self._compute_hard_mask(weight, self.config.pruning_parameters.epsilon)
 
     def get_layer_sparsity(self, weight):
         # Cast size to the mask dtype: ops.sum(mask) is float but ops.size is int, and the

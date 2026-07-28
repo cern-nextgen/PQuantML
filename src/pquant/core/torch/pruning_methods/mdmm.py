@@ -14,18 +14,20 @@ from pquant.core.torch.pruning_methods.metric_functions import (
     StructuredSparsityMetric,
     UnstructuredSparsityMetric,
 )
+from pquant.data_models.pruning_model import ConstraintType, MetricType
 
-_METRIC_REGISTRY = {
-    "UnstructuredSparsity": UnstructuredSparsityMetric,
-    "StructuredSparsity": StructuredSparsityMetric,
-    "FPGAAwareSparsity": FPGAAwareSparsityMetric,
-    "PACAPatternSparsity": PACAPatternMetric,
+# Public names and enum keys, matching the keras twin.
+METRIC_REGISTRY = {
+    MetricType.UNSTRUCTURED: UnstructuredSparsityMetric,
+    MetricType.STRUCTURED: StructuredSparsityMetric,
+    MetricType.FPGA_AWARE: FPGAAwareSparsityMetric,
+    MetricType.PACA_PATTERN: PACAPatternMetric,
 }
 
-_CONSTRAINT_REGISTRY = {
-    "Equality": EqualityConstraint,
-    "LessThanOrEqual": LessThanOrEqualConstraint,
-    "GreaterThanOrEqual": GreaterThanOrEqualConstraint,
+CONSTRAINT_REGISTRY = {
+    ConstraintType.EQUALITY: EqualityConstraint,
+    ConstraintType.LEQ: LessThanOrEqualConstraint,
+    ConstraintType.GEQ: GreaterThanOrEqualConstraint,
 }
 
 
@@ -73,7 +75,7 @@ class MDMM(nn.Module):
             "distance_metric": pruning_parameters.distance_metric,
         }
 
-        metric_cls = _METRIC_REGISTRY.get(metric_type)
+        metric_cls = METRIC_REGISTRY.get(metric_type)
         if metric_cls is None:
             raise ValueError(f"Unknown metric_type: {metric_type}")
         sig = inspect.signature(getattr(metric_cls, "__init__", metric_cls))
@@ -89,7 +91,7 @@ class MDMM(nn.Module):
             "lr": pruning_parameters.constraint_lr,
         }
 
-        constraint_type_cls = _CONSTRAINT_REGISTRY.get(constraint_type)
+        constraint_type_cls = CONSTRAINT_REGISTRY.get(constraint_type)
         if constraint_type_cls is None:
             raise ValueError(f"Unknown constraint_type: {constraint_type}")
         self.constraint_layer = constraint_type_cls(**common_args)
@@ -129,8 +131,10 @@ class MDMM(nn.Module):
     def get_hard_mask(self, weight=None):
         if weight is None:
             return self.mask
-        epsilon = self.config.pruning_parameters.epsilon
-        return (weight.abs() > epsilon).to(weight.dtype)
+        # Route through _compute_hard_mask so sparsity/EBOPs reporting agrees with what the
+        # forward pass actually applies (during PACA fine-tuning that is the projection
+        # mask, not the magnitude threshold).
+        return self._compute_hard_mask(weight, self.config.pruning_parameters.epsilon)
 
     def get_layer_sparsity(self, weight):
         return self.get_hard_mask(weight).sum() / weight.numel()

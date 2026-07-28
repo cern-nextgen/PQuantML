@@ -111,6 +111,23 @@ class MDMMPruningModel(BasePruningModel):
     distance_metric: Optional[Literal["hamming", "valued_hamming", "cosine"]] = Field(default=None)
 
     @model_validator(mode="after")
+    def _validate_bram_packing(self):
+        # The FPGA metric packs c = bram_width // precision DSP groups per BRAM block
+        # (2*bram_width // precision when not divisible); c < 1 exactly when
+        # precision > 2*bram_width, which would make BRAM packing impossible. Caught here
+        # at config load instead of at the first training step. Gated on the FPGA/BRAM
+        # selection: on other metrics these fields are unused and must not reject a config.
+        if self.metric_type == MetricType.FPGA_AWARE and self.target_resource == "BRAM":
+            precision = self.precision if self.precision is not None else 16
+            bram_width = self.bram_width if self.bram_width is not None else 36
+            if precision > 2 * bram_width:
+                raise ValueError(
+                    f"BRAM packing needs precision <= 2*bram_width "
+                    f"(got precision={precision}, bram_width={bram_width})."
+                )
+        return self
+
+    @model_validator(mode="after")
     def _enforce_paca_constraint(self):
         # PACA pattern pruning is defined as driving the pattern-distance metric to
         # zero, so it always pairs with an equality constraint at target 0. Enforced
