@@ -56,9 +56,8 @@ def build_model(config):
             return x
 
     return Model(config)
-
-This approach is recommended when developing a new architecture from scratch.
 ```
+This approach is recommended when developing a new architecture from scratch.
 
 ### Layer-replacement usage
 ```python
@@ -115,7 +114,7 @@ tuner.set_objective_function(name="accuracy", fn=calculate_accuracy, direction="
 tuner.set_hyperparameters()
 tuner.set_optimizer_function(get_optimizer)
 tuner.set_scheduler_function(get_scheduler)
-
+```
 
 Run optimization:
 ```python
@@ -126,11 +125,11 @@ best_params = tuner.run_optimization(model,
                         trainloader=...,
                         testloader=...,
                         loss_func=...)
+```
 
 ```{note}
 `tuner.run_optimization()` automatically runs multiple compression cycles, evaluates each trial using your objective function, and returns the best hyperparameter configuration.
 ```
-
 All other training code remains unchanged.
 
 ### Train a model
@@ -140,7 +139,7 @@ loss_func = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(lr=1e-2, weight_decay=1e-4, params=model.parameters())
 scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[600, 800], gamma=0.1
 ```
-Training is handled through the train_model(...) wrapper:
+Training is handled through the `train_model(...)` wrapper:
 
 ```python
 from pquant import train_model
@@ -160,7 +159,8 @@ trained_model = train_model(model = model,
 ```
 ### Using different quantization settings per layer
 ```{note}
-If different activation layers require different quantization settings (for example when using FITCompress or HGQ), instantiate each `PQActivation` layer separately instead of reusing a single activation module.```
+If different activation layers require different quantization settings (for example when using FITCompress or HGQ), instantiate each `PQActivation` layer separately instead of reusing a single activation module.
+```
 
 ```python
 def build_model(config):
