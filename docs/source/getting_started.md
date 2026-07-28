@@ -1,7 +1,8 @@
 # Quick User Guide
 
 ```{note}
-This section provides an overview of how to use the PQuantML library: defining models with pruning and quantization, running hyperparameters optimization, and optionally converting the final model to hls4ml.```
+This section provides an overview of how to use the PQuantML library: defining models with pruning and quantization, running hyperparameters optimization, and optionally converting the final model to hls4ml.
+```
 
 
 ## Model definition & training
