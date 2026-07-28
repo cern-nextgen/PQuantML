@@ -169,7 +169,7 @@ There are more details about every pruning method:
 | `pruning_method`   | str                   | `mdmm`                         | Selects this pruning schema.                                 |
 | `constraint_type`  | ConstraintType        | `"Equality"`               | Constraint form: equality / ≤ / ≥.                           |
 | `target_value`     | float                 | `0.0`                      | Target value for the chosen metric.                          |
-| `metric_type`      | MetricType            | `"UnstructuredSparsity"`   | Quantity the constraint acts on — see **MDMM metric types** below.                       |
+| `metric`           | metric block          | `UnstructuredSparsity`     | Nested per-metric block: `metric_type` plus that metric's own parameters; see **MDMM metric types** below. |
 | `target_sparsity`  | float                 | `0.9`                      | Target sparsity when constraining sparsity.                  |
 | `rf`               | int                   | `1`                        | Regularization / frequency parameter.                        |
 | `epsilon`          | float                 | `1.0e-03`                  | Feasibility tolerance.                                       |
@@ -182,7 +182,17 @@ There are more details about every pruning method:
 
 ##### MDMM metric types
 
-The `metric_type` field selects which quantity the MDMM constraint drives. The first two are magnitude-based; the last two are hardware-aware and act on 4D convolution kernels.
+The `metric` block selects which quantity the MDMM constraint drives via its `metric_type` discriminator; the metric's exclusive parameters sit in the same block, while shared knobs (`epsilon`, `rf`, `l0_mode`, ...) stay at the `pruning_parameters` level:
+
+```yaml
+pruning_parameters:
+  pruning_method: mdmm
+  metric:
+    metric_type: "FPGAAwareSparsity"
+    target_resource: "DSP"
+```
+
+The legacy flat layout (`metric_type` and the per-metric parameters as direct siblings of `pruning_method`) is still accepted and lifted into the nested block at load time. The first two metrics are magnitude-based; the last two are hardware-aware and act on 4D convolution kernels.
 
 | **metric_type**        | **Constrains**                                                                |
 |------------------------|-------------------------------------------------------------------------------|
@@ -191,7 +201,7 @@ The `metric_type` field selects which quantity the MDMM constraint drives. The f
 | `FPGAAwareSparsity`    | Fraction of zero DSP/BRAM weight groups, modelling FPGA resource packing.      |
 | `PACAPatternSparsity`  | Mean distance of each conv kernel to a small set of dominant binary patterns.  |
 
-**`FPGAAwareSparsity` parameters** (used only when `metric_type: FPGAAwareSparsity`):
+**`FPGAAwareSparsity` parameters** (inside the `metric` block when `metric_type: FPGAAwareSparsity`):
 
 | **Field**         | **Type**            | **Default** | **Description**                                                             |
 |-------------------|---------------------|-------------|-----------------------------------------------------------------------------|
@@ -205,7 +215,7 @@ Weights are grouped into DSP blocks of size `rf`; for `target_resource: BRAM`, `
 The metric measures the *zero*-group fraction, so pair it with `constraint_type: GreaterThanOrEqual` and `target_value` set to the wanted sparsity (as `mdmm_fpga_config()` does). Use `l0_mode: smooth` with it: the smooth surrogate makes the group count differentiable, which the constraint needs to actually move weights.
 ```
 
-**`PACAPatternSparsity` parameters** (used only when `metric_type: PACAPatternSparsity`):
+**`PACAPatternSparsity` parameters** (inside the `metric` block when `metric_type: PACAPatternSparsity`):
 
 | **Field**              | **Type**                                        | **Default**        | **Description**                                              |
 |------------------------|-------------------------------------------------|--------------------|--------------------------------------------------------------|

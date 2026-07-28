@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -77,6 +77,67 @@ class ConstraintType(str, Enum):
     GEQ = "GreaterThanOrEqual"
 
 
+class BaseMetricModel(BaseModel):
+    """Per-metric parameter block nested under MDMMPruningModel.metric.
+
+    Subclasses carry only the parameters exclusive to one metric and validate them
+    themselves; knobs shared across metrics (epsilon, rf, l0_mode, ...) stay on the
+    parent. Hooks the parent consults are overridden here, so MDMMPruningModel never
+    branches on the metric type.
+    """
+
+    def constraint_overrides(self):
+        """(constraint_type, target_value) this metric mandates, or None."""
+        return None
+
+
+class UnstructuredSparsityModel(BaseMetricModel):
+    metric_type: Literal["UnstructuredSparsity"] = "UnstructuredSparsity"
+
+
+class StructuredSparsityModel(BaseMetricModel):
+    metric_type: Literal["StructuredSparsity"] = "StructuredSparsity"
+
+
+class FPGAAwareSparsityModel(BaseMetricModel):
+    metric_type: Literal["FPGAAwareSparsity"] = "FPGAAwareSparsity"
+    precision: int = Field(default=16, ge=1)
+    target_resource: Literal["DSP", "BRAM"] = Field(default="DSP")
+    bram_width: int = Field(default=36, ge=1)
+
+    @model_validator(mode="after")
+    def _validate_bram_packing(self):
+        # The metric packs c = bram_width // precision DSP groups per BRAM block
+        # (2*bram_width // precision when not divisible); c < 1 exactly when
+        # precision > 2*bram_width, which would make BRAM packing impossible.
+        if self.target_resource == "BRAM" and self.precision > 2 * self.bram_width:
+            raise ValueError(
+                f"BRAM packing needs precision <= 2*bram_width "
+                f"(got precision={self.precision}, bram_width={self.bram_width})."
+            )
+        return self
+
+
+class PACAPatternModel(BaseMetricModel):
+    metric_type: Literal["PACAPatternSparsity"] = "PACAPatternSparsity"
+    num_patterns_to_keep: int = Field(default=16, ge=1)
+    beta: float = Field(default=0.75, ge=0.0, le=1.0)
+    distance_metric: Literal["hamming", "valued_hamming", "cosine"] = Field(default="valued_hamming")
+
+    def constraint_overrides(self):
+        # PACA drives the pattern-distance metric to zero: always Equality at 0.
+        return ConstraintType.EQUALITY, 0.0
+
+
+MetricModel = Annotated[
+    Union[UnstructuredSparsityModel, StructuredSparsityModel, FPGAAwareSparsityModel, PACAPatternModel],
+    Field(discriminator="metric_type"),
+]
+
+# Legacy flat layout: these keys used to live directly on MDMMPruningModel.
+_FLAT_METRIC_KEYS = ("precision", "target_resource", "bram_width", "num_patterns_to_keep", "beta", "distance_metric")
+
+
 class MDMMPruningModel(BasePruningModel):
     pruning_method: Literal["mdmm"] = "mdmm"
     # Defaults must be the enum members, not bare strings: Pydantic does not validate
@@ -86,7 +147,7 @@ class MDMMPruningModel(BasePruningModel):
     # serialization warnings. Using the enum members keeps serialization clean.
     constraint_type: ConstraintType = Field(default=ConstraintType.EQUALITY)
     target_value: float = Field(default=0.0)
-    metric_type: MetricType = Field(default=MetricType.UNSTRUCTURED)
+    metric: MetricModel = Field(default_factory=UnstructuredSparsityModel)
     target_sparsity: float = Field(default=0.9)
     rf: int = Field(default=1)
     epsilon: float = Field(default=1.0e-03)
@@ -96,43 +157,35 @@ class MDMMPruningModel(BasePruningModel):
     l0_mode: Literal["coarse", "smooth"] = Field(default="coarse")
     scale_mode: Literal["mean", "sum"] = Field(default="mean")
     constraint_lr: float = Field(default=1.0e-3)
-    # --- Hardware-aware metric parameters ---
-    # Each group is consumed only when the matching metric_type is selected. The MDMM
-    # layer filters these against the chosen metric's __init__ signature, so leaving a
-    # value as None falls back to that metric's own default. Validation lives here
-    # (ge/le + Literal) rather than as asserts inside the metric classes.
-    # FPGAAwareSparsityMetric  (metric_type == "FPGAAwareSparsity")
-    precision: Optional[int] = Field(default=None, ge=1)
-    target_resource: Optional[Literal["DSP", "BRAM"]] = Field(default=None)
-    bram_width: Optional[int] = Field(default=None, ge=1)
-    # PACAPatternMetric  (metric_type == "PACAPatternSparsity")
-    num_patterns_to_keep: Optional[int] = Field(default=None, ge=1)
-    beta: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    distance_metric: Optional[Literal["hamming", "valued_hamming", "cosine"]] = Field(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_flat_metric_layout(cls, values):
+        # Back-compat with the flat layout, where metric_type and the per-metric
+        # parameters were siblings of the shared fields: lift them into the nested
+        # `metric` block. A config that already has `metric` is passed through as-is.
+        if not isinstance(values, dict) or "metric" in values:
+            return values
+        metric = {}
+        metric_type = values.pop("metric_type", None)
+        if metric_type is not None:
+            metric["metric_type"] = getattr(metric_type, "value", metric_type)
+        for key in _FLAT_METRIC_KEYS:
+            if values.get(key) is not None:
+                metric[key] = values.pop(key)
+        if metric:
+            values["metric"] = metric
+        return values
+
+    @property
+    def metric_type(self) -> MetricType:
+        return MetricType(self.metric.metric_type)
 
     @model_validator(mode="after")
-    def _validate_bram_packing(self):
-        # The FPGA metric packs c = bram_width // precision DSP groups per BRAM block
-        # (2*bram_width // precision when not divisible); c < 1 exactly when
-        # precision > 2*bram_width, which would make BRAM packing impossible. Caught here
-        # at config load instead of at the first training step. Gated on the FPGA/BRAM
-        # selection: on other metrics these fields are unused and must not reject a config.
-        if self.metric_type == MetricType.FPGA_AWARE and self.target_resource == "BRAM":
-            precision = self.precision if self.precision is not None else 16
-            bram_width = self.bram_width if self.bram_width is not None else 36
-            if precision > 2 * bram_width:
-                raise ValueError(
-                    f"BRAM packing needs precision <= 2*bram_width "
-                    f"(got precision={precision}, bram_width={bram_width})."
-                )
-        return self
-
-    @model_validator(mode="after")
-    def _enforce_paca_constraint(self):
-        # PACA pattern pruning is defined as driving the pattern-distance metric to
-        # zero, so it always pairs with an equality constraint at target 0. Enforced
-        # here (in the data model) so the MDMM layer can stay metric-agnostic.
-        if self.metric_type == MetricType.PACA_PATTERN:
-            self.constraint_type = ConstraintType.EQUALITY
-            self.target_value = 0.0
+    def _apply_metric_constraint_overrides(self):
+        # A metric that mandates its constraint (e.g. PACA: Equality at 0) declares it
+        # by overriding constraint_overrides(); no metric-type branching here.
+        overrides = self.metric.constraint_overrides()
+        if overrides is not None:
+            self.constraint_type, self.target_value = overrides
         return self

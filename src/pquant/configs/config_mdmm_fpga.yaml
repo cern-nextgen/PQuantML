@@ -10,7 +10,6 @@ pruning_parameters:
   # (Equality at 0.0 would penalize sparsity instead.)
   constraint_type: "GreaterThanOrEqual"
   target_value: 0.9
-  metric_type: "FPGAAwareSparsity"
   rf: 4
   epsilon: 1.0e-03
   scale: 50.0
@@ -20,10 +19,11 @@ pruning_parameters:
   # weight-gradient (the coarse indicator is piecewise-constant).
   l0_mode: "smooth"
   constraint_lr: 1.0e-3
-  # FPGAAwareSparsityMetric-specific
-  precision: 16             # weight bit-width
-  target_resource: "DSP"    # "DSP" or "BRAM"
-  bram_width: 36            # BRAM word width (only used when target_resource == "BRAM")
+  metric:
+    metric_type: "FPGAAwareSparsity"
+    precision: 16             # weight bit-width
+    target_resource: "DSP"    # "DSP" or "BRAM"
+    bram_width: 36            # BRAM word width (only used when target_resource == "BRAM")
 
 quantization_parameters:
   enable_quantization: true

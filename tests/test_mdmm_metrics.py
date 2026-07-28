@@ -239,10 +239,28 @@ def test_mdmm_paca_full_phase_cycle(base_config):
 
 
 def test_pydantic_accepts_new_metric_types():
+    """The legacy flat layout is lifted into the nested metric block."""
     fpga = MDMMPruningModel(metric_type="FPGAAwareSparsity", precision=16, target_resource="DSP", bram_width=36)
-    assert fpga.metric_type.value == "FPGAAwareSparsity" and fpga.precision == 16
+    assert fpga.metric_type.value == "FPGAAwareSparsity" and fpga.metric.precision == 16
     paca = MDMMPruningModel(metric_type="PACAPatternSparsity", num_patterns_to_keep=8, beta=0.9, distance_metric="hamming")
-    assert paca.metric_type.value == "PACAPatternSparsity" and paca.beta == 0.9
+    assert paca.metric_type.value == "PACAPatternSparsity" and paca.metric.beta == 0.9
+
+
+def test_pydantic_nested_metric_layout():
+    """The nested layout is the canonical one; per-metric params live in the sub-model."""
+    m = MDMMPruningModel(metric={"metric_type": "FPGAAwareSparsity", "precision": 8, "target_resource": "BRAM"})
+    assert m.metric.precision == 8 and m.metric.bram_width == 36
+    assert m.metric_type.value == "FPGAAwareSparsity"
+    default = MDMMPruningModel()
+    assert default.metric_type.value == "UnstructuredSparsity"
+
+
+def test_pydantic_bram_packing_validated_at_load():
+    """precision > 2*bram_width makes BRAM packing impossible; the sub-model rejects it."""
+    with pytest.raises(ValidationError):
+        MDMMPruningModel(metric={"metric_type": "FPGAAwareSparsity", "precision": 128, "bram_width": 16, "target_resource": "BRAM"})
+    # Fine when the resource is DSP: the BRAM fields are unused.
+    MDMMPruningModel(metric={"metric_type": "FPGAAwareSparsity", "precision": 128, "bram_width": 16, "target_resource": "DSP"})
 
 
 @pytest.mark.parametrize(

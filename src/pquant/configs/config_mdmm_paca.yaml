@@ -7,9 +7,8 @@ pruning_parameters:
   pruning_method: mdmm
   enable_pruning: true
   disable_pruning_for_layers: [] # Disable pruning for these layers, even if enable_pruning is true
-  constraint_type: "Equality"    # Forced to Equality/0 for PACA by MDMMPruningModel.
+  constraint_type: "Equality"    # Forced to Equality/0 for PACA by PACAPatternModel.
   target_value: 0.0
-  metric_type: "PACAPatternSparsity"
   target_sparsity: 0.9
   rf: 1
   epsilon: 1.0e-03
@@ -17,10 +16,13 @@ pruning_parameters:
   damping: 1.0
   use_grad: false
   constraint_lr: 1.0e-3
-  # PACAPatternMetric-specific
-  num_patterns_to_keep: 16
-  beta: 0.85                 # cumulative pattern-frequency coverage kept (0..1)
-  distance_metric: "cosine"  # "hamming", "valued_hamming", or "cosine"
+  metric:
+    metric_type: "PACAPatternSparsity"
+    # Hand-tuned on the SmartPixels workload; the code defaults (0.75 / valued_hamming)
+    # are the generic starting point.
+    num_patterns_to_keep: 16
+    beta: 0.85                 # cumulative pattern-frequency coverage kept (0..1)
+    distance_metric: "cosine"  # "hamming", "valued_hamming", or "cosine"
 
 quantization_parameters:
   enable_quantization: true

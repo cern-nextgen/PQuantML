@@ -60,19 +60,15 @@ class MDMM(nn.Module):
         scale_mode = pruning_parameters.scale_mode
 
         candidate_kwargs = {
+            # Knobs shared across metrics live on the parent model; each metric's
+            # exclusive parameters come from its nested config block. The signature
+            # filter below routes both to whatever the chosen metric accepts.
             "epsilon": pruning_parameters.epsilon,
             "target_sparsity": target_sparsity,
             "l0_mode": l0_mode,
             "scale_mode": scale_mode,
             "rf": pruning_parameters.rf,
-            # FPGAAwareSparsityMetric
-            "precision": pruning_parameters.precision,
-            "target_resource": pruning_parameters.target_resource,
-            "bram_width": pruning_parameters.bram_width,
-            # PACAPatternMetric
-            "num_patterns_to_keep": pruning_parameters.num_patterns_to_keep,
-            "beta": pruning_parameters.beta,
-            "distance_metric": pruning_parameters.distance_metric,
+            **pruning_parameters.metric.model_dump(exclude={"metric_type"}),
         }
 
         metric_cls = METRIC_REGISTRY.get(metric_type)
