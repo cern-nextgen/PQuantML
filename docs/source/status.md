@@ -1,6 +1,6 @@
 # PQuantML Status
 
-This page tracks the development status of PQuantML features
+This page tracks the development status of PQuantML features.
 
 ## Release: v0.0.6
 
@@ -19,4 +19,5 @@ This page tracks the development status of PQuantML features
 | Implementation of HGQ and pruning layers in Torch | ⏳ Coming in v0.0.7  | Implemented in dev |
 | Additional test coverage for pruning methods | ⏳ Will be in the next release | Implemented in dev |
 | CI/CD pipeline                   | 🚧 Work in progress    | Due to the next release |
+| MDMM pruning algorithm metrics extension               | 🚧 Work in progress    | Due to the next release |
 | Documentation                   | 🚧 Improving    | Expanded monthly |

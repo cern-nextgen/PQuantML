@@ -1,11 +1,11 @@
 # Installation
-Installation via pip: pip install pquant-ml.
+Installation via pip: `pip install pquant-ml`.
 
-With TensorFlow pip install pquant-ml[tensorflow].
+With TensorFlow backend:  `pip install pquant-ml[tensorflow]`.
 
-With PyTorch pip install pquant-ml[torch].
+With PyTorch backend: `pip install pquant-ml[torch]`.
 
-You will need an environment with `python>=3.10,<=3.12` installed.
+You will need an environment with `python>=3.10,<3.13` installed.
 
 
 ```{warning}

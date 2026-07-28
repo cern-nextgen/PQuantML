@@ -14,10 +14,8 @@ The following table outlines the description of default parameters used to confi
 | `pretraining_epochs`   | int                                         | `50`          | Number of epochs during the pretraining stage.             |
 | `rewind`               | str                                         | `"never"`     | When to rewind the weights: never, every-round, or posttraining-stage.                               |
 | `rounds`               | int                                         | `1`           | Number of pruning/quantization rounds during training.                         |
-| `save_weights_epoch`   | int                                         | `-1`          | Epoch at which weights are saved for rewinding during the
-first round.           |
-| `pruning_first`   | bool                                         | `False`          | Whether to prune before quantization. If false, pruning occurs
-after quantization.|
+| `save_weights_epoch`   | int                                         | `-1`          | Epoch at which weights are saved for rewinding during the first round.           |
+| `pruning_first`   | bool                                         | `False`          | Whether to prune before quantization. If false, pruning occurs after quantization.|
 
 ```{note}
 If you require additional parameters for the training or optimization loops, please define them directly in the config.yaml file.
