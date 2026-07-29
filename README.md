@@ -19,7 +19,7 @@ It supports:
 PQuantML enables efficient deployment of compact neural networks on resource-constrained hardware such as FPGAs and embedded accelerators.
 
 <p align="center">
-  <img src="docs/source/_static/overview_pquant.png" alt="PQuantML overview" width="700">
+  <img src="docs/source/_static/overview_pquant_updated.png" alt="PQuantML overview" width="1000">
 </p>
 
 ## Installation
@@ -52,7 +52,9 @@ pip install "pquant-ml[torch]"        # PyTorch backend
 ## Training
 
 Different pruning methods involve different training stages, such as pre-training and fine-tuning. PQuantML provides a generic training function: you supply your own training and validation functions along with the number of epochs, and PQuant handles the training loop while automatically triggering the appropriate stages for the chosen pruning method.
-
+<p align="center">
+  <img src="docs/source/_static/pruning_methods_overview.png" alt="Pruning methods overview." width="1000">
+</p>
 ## Quantization
 
 PQuantML supports two quantization modes, each with several granularity options.
