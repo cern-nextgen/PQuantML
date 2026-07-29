@@ -76,7 +76,7 @@ class Quantizer(nn.Module):
 
     def calculate_bits_from_abs(self, abs_x):
         m = torch.ceil(torch.log2(abs_x + 1e-6))
-        int_bits = torch.clamp(m, min=0, max=self.b - self.k.to(m.device))
+        int_bits = torch.clamp(m, min=0).clamp(max=self.b - self.k.to(m.device))
         frac_bits = torch.clamp(self.b - int_bits - self.k, min=0)
         return int_bits, frac_bits
 

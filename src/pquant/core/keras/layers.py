@@ -1921,6 +1921,9 @@ class PQMultiheadAttention(keras.layers.Layer):
         return cls(**config)
 
 
+LAYERS_WITH_PRUNING_LAYER = (PQWeightBiasBase, PQSeparableConv2d, PQMultiheadAttention)
+
+
 def _iter_weight_layers(model):
     for layer in model.layers:
         if isinstance(layer, PQWeightBiasBase):
@@ -1961,37 +1964,37 @@ def apply_final_compression(model):
 
 def post_epoch_functions(model, epoch, total_epochs, **kwargs):
     for layer in model.layers:
-        if isinstance(layer, (PQWeightBiasBase, PQSeparableConv2d, PQMultiheadAttention)):
+        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
             layer.post_epoch_function(epoch, total_epochs, **kwargs)
 
 
 def pre_epoch_functions(model, epoch, total_epochs):
     for layer in model.layers:
-        if isinstance(layer, (PQWeightBiasBase, PQSeparableConv2d, PQMultiheadAttention)):
+        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
             layer.pre_epoch_function(epoch, total_epochs)
 
 
 def _post_round_functions(model):
     for layer in model.layers:
-        if isinstance(layer, (PQWeightBiasBase, PQSeparableConv2d, PQMultiheadAttention)):
+        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
             layer.post_round_function()
 
 
 def save_weights_functions(model):
     for layer in model.layers:
-        if isinstance(layer, (PQWeightBiasBase, PQSeparableConv2d, PQMultiheadAttention)):
+        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
             layer._save_weights()
 
 
 def _rewind_weights_functions(model):
     for layer in model.layers:
-        if isinstance(layer, (PQWeightBiasBase, PQSeparableConv2d, PQMultiheadAttention)):
+        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
             layer._rewind_weights()
 
 
 def pre_finetune_functions(model):
     for layer in model.layers:
-        if isinstance(layer, (PQWeightBiasBase, PQSeparableConv2d, PQMultiheadAttention)):
+        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
             layer.pre_finetune_function()
 
 
@@ -2068,7 +2071,7 @@ def get_layer_keep_ratio(model):
 
 
 def _is_training_stage(layer):
-    return not (layer.pruning_layer.is_finetuning or layer.pruning_layer.is_pretraining)
+    return not (layer.pruning_layer._is_finetuning or layer.pruning_layer._is_pretraining)
 
 
 def get_model_losses(model, losses):

@@ -46,52 +46,52 @@ class SingleLayerModel(nn.Module):
         return x
 
 
-def build_model_and_input(layer_kind, config):
-    if layer_kind == "dense":
+def build_model_and_input(layer_type, config):
+    if layer_type == "dense":
         layer = PQDense(config, IN_FEATURES, OUT_FEATURES)
         x = torch.randn(BATCH_SIZE, IN_FEATURES)
-    elif layer_kind == "conv1d":
+    elif layer_type == "conv1d":
         layer = PQConv1d(config, IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, padding=1)
         x = torch.randn(BATCH_SIZE, IN_FEATURES, STEPS)
-    elif layer_kind == "conv2d":
+    elif layer_type == "conv2d":
         layer = PQConv2d(config, IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, padding=1)
         x = torch.randn(BATCH_SIZE, IN_FEATURES, STEPS, STEPS)
-    elif layer_kind == "batchnorm1d":
+    elif layer_type == "batchnorm1d":
         layer = PQBatchNorm1d(config, IN_FEATURES)
         x = torch.randn(BATCH_SIZE, IN_FEATURES, STEPS)
-    elif layer_kind == "batchnorm2d":
+    elif layer_type == "batchnorm2d":
         layer = PQBatchNorm2d(config, IN_FEATURES)
         x = torch.randn(BATCH_SIZE, IN_FEATURES, STEPS, STEPS)
-    elif layer_kind == "layernorm":
+    elif layer_type == "layernorm":
         layer = PQLayerNorm(config, IN_FEATURES)
         x = torch.randn(BATCH_SIZE, STEPS, IN_FEATURES)
-    elif layer_kind == "avgpool1d":
+    elif layer_type == "avgpool1d":
         layer = PQAvgPool1d(config, kernel_size=2)
         x = torch.randn(BATCH_SIZE, IN_FEATURES, STEPS)
-    elif layer_kind == "avgpool2d":
+    elif layer_type == "avgpool2d":
         layer = PQAvgPool2d(config, kernel_size=2)
         x = torch.randn(BATCH_SIZE, IN_FEATURES, STEPS, STEPS)
-    elif layer_kind.startswith("activation_"):
-        layer = PQActivation(config, activation=layer_kind.replace("activation_", ""), quantize_output=True)
+    elif layer_type.startswith("activation_"):
+        layer = PQActivation(config, activation=layer_type.replace("activation_", ""), quantize_output=True)
         x = torch.randn(BATCH_SIZE, IN_FEATURES)
-    elif layer_kind == "mha":
+    elif layer_type == "mha":
         layer = PQMultiheadAttention(config, embed_dim=IN_FEATURES, num_heads=2)
         x = torch.randn(STEPS, BATCH_SIZE, IN_FEATURES)
         return SingleLayerModel(layer, is_mha=True), x
     else:
-        raise ValueError(f"unknown layer kind {layer_kind}")
+        raise ValueError(f"unknown layer kind {layer_type}")
 
     return SingleLayerModel(layer), x
 
 
-LIFECYCLE_FLAG_KEYS = ("is_pretraining", "is_finetuning", "final_compression_done")
+STAGE_FLAGS = ("is_pretraining", "is_finetuning", "final_compression_done")
 
 
 def randomize_state(model, seed):
     gen = torch.Generator().manual_seed(seed)
     with torch.no_grad():
         for name, t in model.state_dict().items():
-            if any(k in name for k in LIFECYCLE_FLAG_KEYS):
+            if any(k in name for k in STAGE_FLAGS):
                 continue
             if not torch.is_floating_point(t):
                 continue
@@ -118,7 +118,7 @@ def make_config(use_hgq):
     return config
 
 
-LAYER_KINDS = [
+LAYER_TYPES = [
     "dense",
     "conv1d",
     "conv2d",
@@ -137,12 +137,12 @@ STAGES = ["initial", "post_pretrain", "pre_finetune", "final_compression"]
 
 @pytest.mark.parametrize("use_hgq", [False, True], ids=["kif", "hgq"])
 @pytest.mark.parametrize("stage", STAGES)
-@pytest.mark.parametrize("layer_kind", LAYER_KINDS)
-def test_state_dict_roundtrip(tmp_path, layer_kind, stage, use_hgq):
+@pytest.mark.parametrize("layer_type", LAYER_TYPES)
+def test_state_dict_roundtrip(tmp_path, layer_type, stage, use_hgq):
     torch.manual_seed(0)
     config = make_config(use_hgq)
 
-    model, x = build_model_and_input(layer_kind, config)
+    model, x = build_model_and_input(layer_type, config)
     model(x)  # HGQ quantizers build lazily on first forward
     advance_to_stage(model, config, stage)
     randomize_state(model, seed=42)
@@ -151,7 +151,7 @@ def test_state_dict_roundtrip(tmp_path, layer_kind, stage, use_hgq):
     torch.save(model.state_dict(), path)
     torch.manual_seed(1)
     fresh_config = make_config(use_hgq)
-    fresh, _ = build_model_and_input(layer_kind, fresh_config)
+    fresh, _ = build_model_and_input(layer_type, fresh_config)
     fresh(x)
     advance_to_stage(fresh, fresh_config, stage)
     missing, unexpected = fresh.load_state_dict(torch.load(path, weights_only=True), strict=True)

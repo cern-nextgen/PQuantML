@@ -2139,45 +2139,45 @@ def test_model_fit(config_fn):
     model.fit(dummy_x, dummy_y, epochs=callback.total_epochs, callbacks=[callback], verbose=0)
 
 
-def build_single_layer_model(layer_kind, config):
+def build_single_layer_model(layer_type, config):
     channels_first = keras.backend.image_data_format() == "channels_first"
     conv2d_shape = (IN_FEATURES, 8, 8) if channels_first else (8, 8, IN_FEATURES)
     conv1d_shape = (IN_FEATURES, STEPS) if channels_first else (STEPS, IN_FEATURES)
     bn_axis = 1 if channels_first else -1
 
-    if layer_kind == "dense":
+    if layer_type == "dense":
         inputs = keras.Input(shape=(IN_FEATURES,))
         outputs = PQDense(config, units=OUT_FEATURES)(inputs)
-    elif layer_kind == "conv1d":
+    elif layer_type == "conv1d":
         inputs = keras.Input(shape=conv1d_shape)
         outputs = PQConv1d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
-    elif layer_kind == "conv2d":
+    elif layer_type == "conv2d":
         inputs = keras.Input(shape=conv2d_shape)
         outputs = PQConv2d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
-    elif layer_kind == "depthwise_conv2d":
+    elif layer_type == "depthwise_conv2d":
         inputs = keras.Input(shape=conv2d_shape)
         outputs = PQDepthwiseConv2d(config, KERNEL_SIZE, padding="same")(inputs)
-    elif layer_kind == "separable_conv2d":
+    elif layer_type == "separable_conv2d":
         inputs = keras.Input(shape=conv2d_shape)
         outputs = PQSeparableConv2d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
-    elif layer_kind == "batchnorm":
+    elif layer_type == "batchnorm":
         inputs = keras.Input(shape=conv2d_shape)
         outputs = PQBatchNormalization(config, axis=bn_axis)(inputs)
-    elif layer_kind == "avgpool1d":
+    elif layer_type == "avgpool1d":
         inputs = keras.Input(shape=conv1d_shape)
         outputs = PQAvgPool1d(config, pool_size=2, strides=2, padding="same")(inputs)
-    elif layer_kind == "avgpool2d":
+    elif layer_type == "avgpool2d":
         inputs = keras.Input(shape=conv2d_shape)
         outputs = PQAvgPool2d(config, pool_size=2, strides=2, padding="same")(inputs)
-    elif layer_kind in ("activation_relu", "activation_tanh", "activation_hard_tanh"):
-        activation = layer_kind.replace("activation_", "")
+    elif layer_type in ("activation_relu", "activation_tanh", "activation_hard_tanh"):
+        activation = layer_type.replace("activation_", "")
         inputs = keras.Input(shape=(IN_FEATURES,))
         outputs = PQActivation(config, activation=activation, quantize_input=True, quantize_output=True)(inputs)
-    elif layer_kind == "mha":
+    elif layer_type == "mha":
         inputs = keras.Input(shape=(STEPS, IN_FEATURES))
         outputs = PQMultiheadAttention(config, embed_dim=IN_FEATURES, num_heads=2)(inputs)[0]
     else:
-        raise ValueError(f"unknown layer kind {layer_kind}")
+        raise ValueError(f"unknown layer type {layer_type}")
 
     model = keras.Model(inputs, outputs)
     dummy = np.zeros((1,) + tuple(inputs.shape[1:]), dtype=np.float32)
@@ -2203,7 +2203,7 @@ def assert_weights_equal(model, reloaded, label):
         )
 
 
-LAYER_KINDS = [
+LAYER_TYPES = [
     "dense",
     "conv1d",
     "conv2d",
@@ -2220,8 +2220,8 @@ LAYER_KINDS = [
 
 
 @pytest.mark.parametrize("use_hgq", [False, True], ids=["kif", "hgq"])
-@pytest.mark.parametrize("layer_kind", LAYER_KINDS)
-def test_layer_type_serialization(tmp_path, layer_kind, use_hgq):
+@pytest.mark.parametrize("layer_type", LAYER_TYPES)
+def test_layer_type_serialization(tmp_path, layer_type, use_hgq):
     """Every PQ layer type must survive a full .keras save/load round-trip.
 
     Covers all quantizer variables (k/i/f/b, HGQ bitwidth variables) and pruning
@@ -2233,7 +2233,7 @@ def test_layer_type_serialization(tmp_path, layer_kind, use_hgq):
     config.quantization_parameters.enable_quantization = True
     config.quantization_parameters.use_high_granularity_quantization = use_hgq
 
-    model, dummy = build_single_layer_model(layer_kind, config)
+    model, dummy = build_single_layer_model(layer_type, config)
     model(dummy)
     randomize_weights(model, seed=42)
 
@@ -2241,14 +2241,14 @@ def test_layer_type_serialization(tmp_path, layer_kind, use_hgq):
         save_path = tmp_path / f"{label}.keras"
         model.save(save_path)
         reloaded = keras.models.load_model(save_path)
-        assert_weights_equal(model, reloaded, f"{layer_kind}/{label}")
+        assert_weights_equal(model, reloaded, f"{layer_type}/{label}")
         # The reloaded model must be usable, not just structurally equal.
         np.testing.assert_allclose(
             np.array(model(dummy)),
             np.array(reloaded(dummy)),
             rtol=0,
             atol=0,
-            err_msg=f"[{layer_kind}/{label}] forward pass mismatch after reload",
+            err_msg=f"[{layer_type}/{label}] forward pass mismatch after reload",
         )
 
     roundtrip("initial")
@@ -2261,8 +2261,8 @@ def test_layer_type_serialization(tmp_path, layer_kind, use_hgq):
 
 
 @pytest.mark.parametrize("use_hgq", [False, True], ids=["kif", "hgq"])
-@pytest.mark.parametrize("layer_kind", LAYER_KINDS)
-def test_layer_type_checkpoint_save_load(tmp_path, layer_kind, use_hgq):
+@pytest.mark.parametrize("layer_type", LAYER_TYPES)
+def test_layer_type_checkpoint_save_load(tmp_path, layer_type, use_hgq):
     """Every PQ layer type must survive a save_weights/load_weights round-trip."""
     # dst: no global pruning setup, so single-layer models without a prunable
     # weight layer (batchnorm/pool/activation/mha) pass the lifecycle functions.
@@ -2270,7 +2270,7 @@ def test_layer_type_checkpoint_save_load(tmp_path, layer_kind, use_hgq):
     config.quantization_parameters.enable_quantization = True
     config.quantization_parameters.use_high_granularity_quantization = use_hgq
 
-    model, dummy = build_single_layer_model(layer_kind, config)
+    model, dummy = build_single_layer_model(layer_type, config)
     model(dummy)
     randomize_weights(model, seed=0)
     original_weights = [np.array(w) for w in model.weights]
@@ -2282,4 +2282,4 @@ def test_layer_type_checkpoint_save_load(tmp_path, layer_kind, use_hgq):
     model.load_weights(path)
 
     for orig, w in zip(original_weights, model.weights):
-        np.testing.assert_array_equal(orig, np.array(w), err_msg=f"[{layer_kind}] Checkpoint weight mismatch: {w.name}")
+        np.testing.assert_array_equal(orig, np.array(w), err_msg=f"[{layer_type}] Checkpoint weight mismatch: {w.name}")
