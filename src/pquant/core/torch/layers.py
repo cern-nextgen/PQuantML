@@ -976,9 +976,9 @@ class PQBatchNorm2d(nn.BatchNorm2d):
         self.input_shape = (1,) + input_shape[1:]
 
     def apply_final_compression(self):
-        self.final_compression_done = True
         self._weight.data = self.weight
         self._bias.data = self.bias
+        self.final_compression_done = True
 
     def get_input_quantization_bits(self):
         return self.input_quantizer.get_quantization_bits()
@@ -1150,9 +1150,9 @@ class PQBatchNorm1d(nn.BatchNorm1d):
         self.input_shape = (1,) + input_shape[1:]
 
     def apply_final_compression(self):
-        self.final_compression_done = True
         self._weight.data = self.weight
         self._bias.data = self.bias
+        self.final_compression_done = True
 
     def get_input_quantization_bits(self):
         return self.input_quantizer.get_quantization_bits()
@@ -1352,11 +1352,11 @@ class PQLayerNorm(nn.LayerNorm):
         self.input_shape = (1,) + tuple(input_shape[1:])
 
     def apply_final_compression(self):
-        self.final_compression_done = True
         if self._weight is not None:
             self._weight.data = self.weight
         if self._bias is not None:
             self._bias.data = self.bias
+        self.final_compression_done = True
 
     def get_input_quantization_bits(self):
         return self.input_quantizer.get_quantization_bits()

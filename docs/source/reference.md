@@ -2,19 +2,20 @@
 
 ## Config file
 
-The most important part of the library is a user-defined config yaml file. It has five separate sections: training, pruning, quantization, finetuning, and fitcompress section, `currently maintained by TensorFlow only`, parameters. By default, the parameters in the config are the following:
+The most important part of the library is a user-defined `config.yaml` file. It has five separate sections: **training, pruning, quantization, hpo, and fitcompress**. By default, the parameters in the config are the following:
 
 ### Training parameters
-The following table outlines the primary parameters used to configure the training process:
+The following table outlines the description of default parameters used to configure the training process:
 
 | **Field**               | **Type**                                   | **Default**   | **Description**                                            |
 |------------------------|---------------------------------------------|---------------|------------------------------------------------------------|
-| `epochs`               | int                                         | `200`         | Total number of training epochs.                          |
-| `fine_tuning_epochs`   | int                                         | `0`           | Additional epochs for fine-tuning.                        |
-| `pretraining_epochs`   | int                                         | `50`          | Pretraining / warm-up epochs.                             |
-| `rewind`               | str                                         | `"never"`     | Weight rewinding policy.                                  |
-| `rounds`               | int                                         | `1`           | Number of prune–fine-tune cycles.                         |
-| `save_weights_epoch`   | int                                         | `-1`          | Save checkpoint at this epoch (`-1` disables).            |
+| `epochs`               | int                                         | `200`         | Number of epochs during the main training stage.           |
+| `fine_tuning_epochs`   | int                                         | `0`           | Number of epochs during the fine-tuning stage.             |
+| `pretraining_epochs`   | int                                         | `50`          | Number of epochs during the pretraining stage.             |
+| `rewind`               | str                                         | `"never"`     | When to rewind the weights: never, every-round, or posttraining-stage.                               |
+| `rounds`               | int                                         | `1`           | Number of pruning/quantization rounds during training.                         |
+| `save_weights_epoch`   | int                                         | `-1`          | Epoch at which weights are saved for rewinding during the first round.           |
+| `pruning_first`   | bool                                         | `False`          | Whether to prune before quantization. If false, pruning occurs after quantization.|
 
 ```{note}
 If you require additional parameters for the training or optimization loops, please define them directly in the config.yaml file.
@@ -33,10 +34,11 @@ If you require additional parameters for the training or optimization loops, ple
 | `quantize_input`                 | bool     | `true`      | Whether inputs to layers are quantized by default.                     |
 | `quantize_output`                | bool     | `true`      | Whether outputs of layers are quantized by default.                    |
 | `enable_quantization`            | bool     | `true`      | Global switch to enable or disable quantization.                       |
+| `granularity` | str | `"per_tensor"` | Whether bitwidths are shared across the whole tensor, per-channel, or per-weight. |
 | `hgq_gamma`                      | float    | `0.0`       | HGQ regularization coefficient for bitwidth stability.                 |
 | `hgq_beta`                       | float    | `0.0`       | HGQ loss coefficient scaling EBOPs.                                    |
 | `layer_specific`                 | dict     | `{}`        | Dictionary for per-layer quantization overrides.                       |
-| `use_hgq`                        | bool     | `false`     | Enable or disable High Granularity Quantization (HGQ).                 |
+| `use_high_granularity_quantization`                        | bool     | `false`     | Enable or disable High Granularity Quantization (HGQ).                 |
 | `use_real_tanh`                  | bool     | `false`     | Use a real `tanh` instead of hard/approximate `tanh`.                  |
 | `overflow_mode_data`                       | str      | `"SAT"`     | Overflow handling mode for input and output quantizers(`SAT`, `SAT_SYM`, `WRAP`, `WRAP_SM`).          |
 | `overflow_mode_parameters`                       | str      | `"SAT"`     | Overflow handling mode for weight and biases quantizers(`SAT`, `SAT_SYM`, `WRAP`, `WRAP_SM`).          |
@@ -44,7 +46,7 @@ If you require additional parameters for the training or optimization loops, ple
 | `use_relu_multiplier`            | bool     | `true`      | Enable a learned bit-shift multiplier inside ReLU layers.              |
 
 
-### Fine-tuning parameters
+### Hyperparameters optimization parameters
 
 | **Field**                | **Type**                | **Default**       | **Description**                               |
 |-------------------------|--------------------------|--------------------|-----------------------------------------------|
@@ -166,9 +168,9 @@ There are more details about every pruning method:
 
 | **Field**          | **Type**             | **Default**               | **Description**                                              |
 |--------------------|-----------------------|----------------------------|--------------------------------------------------------------|
-| `pruning_method`   | str                   | `mdmm`                         | Selects this pruning schema.                                 |
-| `constraint_type`  | ConstraintType        | `"Equality"`               | Constraint form: equality / ≤ / ≥.                           |
-| `target_value`     | float                 | `0.0`                      | Target value for the chosen metric.                          |
+| `pruning_method`   | str                   | `"mdmm"`                       | Selects this pruning schema.                                 |
+| `constraint_type`  | ConstraintType        | `"Equality"`               | Constraint form: `Equality`, `LessThanOrEqual`, or `GreaterThanOrEqual`. |
+| `target_value`     | float                 | `0.0`                      | Target value for the chosen metric (used for the general constraint). |
 | `metric`           | metric block          | `UnstructuredSparsity`     | Nested per-metric block: `metric_type` plus that metric's own parameters; see **MDMM metric types** below. |
 | `target_sparsity`  | float                 | `0.9`                      | Target sparsity when constraining sparsity.                  |
 | `rf`               | int                   | `1`                        | Regularization / frequency parameter.                        |
@@ -178,6 +180,7 @@ There are more details about every pruning method:
 | `use_grad`         | bool                  | `false`                    | Use gradient information during updates.                     |
 | `l0_mode`          | `"coarse"` \| `"smooth"` | `"coarse"`              | L0 approximation mode.                                       |
 | `scale_mode`       | `"mean"` \| `"sum"`      | `"mean"`                 | Aggregation mode for penalties.                              |
+| `constraint_lr`    | float                 | `1.0e-03`                  | Learning rate for the Lagrange multiplier (dual variable).   |
 
 
 ##### MDMM metric types
@@ -231,7 +234,7 @@ The metric measures the *zero*-group fraction, so pair it with `constraint_type:
 The hardware-aware metrics operate on 4D convolution weights; for non-convolutional layers `PACAPatternSparsity` is a no-op. Ready-made configs are available via `mdmm_fpga_config()` and `mdmm_paca_config()`.
 ```
 
-Optionally, there is also FITCompress method implemented for PyTorch:
+Optionally, there is also FITCompress method implemented for PyTorch-only:
 ### FitCompress method
 | **Field**                 | **Type** | **Default** | **Description**                                                                 |
 |---------------------------|----------|-------------|---------------------------------------------------------------------------------|
@@ -252,9 +255,19 @@ Optionally, there is also FITCompress method implemented for PyTorch:
 - `PQAvgPool*D`: Average pooling layers.
 - `PQBatchNorm*D`: BatchNorm layers.
 - `PQDense`: Linear layer.
-- `PQActivation`: Activation layers (ReLU, Tanh)
+- `PQActivation`: Activation layers (ReLU, Tanh, Leaky Relu, Gelu, Hard Tanh, or a user-provided activation function (Torch only) ).
+- `MultiHeadAttention`: Multi-head attention layer.
+- `LayerNorm`: Layer normalization layer (Currently Torch only).
 
 ```{note}
-Currently, PQuantML supports two quantization modes: layer-wise fixed-point quantization, where each tensor uses a single
-bit-width configuration, and High-Granularity Quantization (HGQ).
+PQuantML supports two quantization modes, each with several granularity options:
+
+**Fixed-point quantization** (for weights):
+- per-weight
+- per-channel
+- per-tensor
+
+**HGQ (High Granularity Quantization)**:
+- per-weight (learned bit-widths per weight)
+- per-tensor (learned bit-widths per tensor)
 ```

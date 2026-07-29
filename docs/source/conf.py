@@ -14,11 +14,9 @@ sys.path.insert(0, os.path.abspath('../'))
 project = 'PQuantML'
 copyright = '2025, Roope Niemi'
 author = 'Roope Niemi, Anastasiia Petrovych'
-release = "1.0.0"
+release = "0.0.6"
 version = release
 
-# -- General configuration ---------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 myst_enable_extensions = [
     "amsmath",
@@ -58,8 +56,6 @@ html_context = {
     'conf_py_path': '/docs/',  # Path in the checkout to the docs root
 }
 
-# -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = "sphinx_rtd_theme"
 html_static_path = ['_static']

@@ -1435,12 +1435,12 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
         self.input_shape = (1,) + tuple(input_shape[1:])
 
     def apply_final_compression(self):
-        self.final_compression_done = True
         if self.enable_quantization and self.quantize_parameters:
             if self.gamma is not None:
                 self.gamma.assign(self.weight_quantizer(self.gamma))
             if self.beta is not None:
                 self.beta.assign(self.bias_quantizer(self.beta))
+        self.final_compression_done = True
 
     def ebops(self):
         bw_inp = self.input_quantizer.get_total_bits(self.input_shape)
