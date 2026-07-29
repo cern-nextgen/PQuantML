@@ -55,6 +55,7 @@ Different pruning methods involve different training stages, such as pre-trainin
 <p align="center">
   <img src="docs/source/_static/pruning_methods_overview.png" alt="Pruning methods overview." width="1000">
 </p>
+
 ## Quantization
 
 PQuantML supports two quantization modes, each with several granularity options.
