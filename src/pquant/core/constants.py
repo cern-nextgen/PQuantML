@@ -53,3 +53,20 @@ FINETUNING_DIRECTION = {"maximize", "minimize"}
 CONFIG_FILE = "config.yaml"
 
 N_JOBS = 1
+
+# --- Hardware-aware pruning metric constants ---
+# Conv-kernel layout -> axis index, used to canonicalise weight layouts in the PACA
+# pattern utilities. Keras conv weights are HWIO, Torch conv weights are OIHW.
+CONV_LAYOUT_AXES = {"H": 0, "W": 1, "I": 2, "O": 3}
+CANONICAL_CONV_LAYOUT = "OIHW"
+
+# PACAPatternMetric pattern-distance metrics
+DISTANCE_HAMMING = "hamming"
+DISTANCE_VALUED_HAMMING = "valued_hamming"
+DISTANCE_COSINE = "cosine"
+PACA_DISTANCE_METRICS = (DISTANCE_HAMMING, DISTANCE_VALUED_HAMMING, DISTANCE_COSINE)
+
+# FPGAAwareSparsityMetric target hardware resources
+TARGET_RESOURCE_DSP = "DSP"
+TARGET_RESOURCE_BRAM = "BRAM"
+FPGA_TARGET_RESOURCES = (TARGET_RESOURCE_DSP, TARGET_RESOURCE_BRAM)
