@@ -1,19 +1,20 @@
+exclude: (^examples\/)
 repos:
-- repo: https://github.com/psf/black
-  rev: 25.1.0
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.20
   hooks:
-  - id: black
-    language_version: python3
-    args: ['--line-length=125',
-           '--skip-string-normalization']
+    - id: ruff
+      args: [--fix]
+    - id: ruff-format
 
 - repo: https://github.com/tox-dev/pyproject-fmt
-  rev: v2.5.1
+  rev: v2.25.1
   hooks:
     - id: pyproject-fmt
+      args: ["--max-supported-python", "3.13"]
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v5.0.0
+  rev: v6.0.0
   hooks:
   - id: check-added-large-files
   - id: check-case-conflict
@@ -27,29 +28,26 @@ repos:
   - id: requirements-txt-fixer
   - id: trailing-whitespace
 
-- repo: https://github.com/PyCQA/isort
-  rev: 6.0.1
-  hooks:
-  - id: isort
-    args: ["--profile=black"] # <-- this one
-
 - repo: https://github.com/asottile/pyupgrade
-  rev: v3.19.1
+  rev: v3.21.2
   hooks:
   - id: pyupgrade
-    args: ["--py36-plus"]
+    args: ["--py310-plus"]
 
 - repo: https://github.com/pycqa/flake8
-  rev: 7.1.2
+  rev: 7.3.0
   hooks:
   - id: flake8
-    exclude: docs/conf.py
+    exclude: docs/source/conf.py
     additional_dependencies: [flake8-bugbear, flake8-print]
     args: ['--max-line-length=125',  # github viewer width
-           '--extend-ignore=E203']  # E203 is not PEP8 compliant
+           '--extend-ignore=E203,T201,F401',
+           # E203 is not PEP8 compliant
+           # F401 included in ruff (behaves slightly differently for noqa flags)
+    ]
 
 - repo: https://github.com/mgedmin/check-manifest
-  rev: "0.50"
+  rev: "0.51"
   hooks:
   - id: check-manifest
     stages: [manual]
