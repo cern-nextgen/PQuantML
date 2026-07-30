@@ -174,7 +174,7 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
             config,
         )
         # Now add the layer specific configuration to the model
-        # _add_layer_specific_quantization_to_model(trained_uncompressed_model, config)
+        # add_layer_specific_quantization_to_model(trained_uncompressed_model, config)
 
     logging.info("Layerwise quantization bits after FITcompress : ", config.quantization_parameters.layer_specific)
 
@@ -798,6 +798,10 @@ class FITcompress:
                     )
 
                     self.assign_parameters(self.model, params_quantized_unpruned)
+
+                    self.post_fitcompress_calibration(
+                        p_node.extract_config_from_node(self.layer_names)['quant_config'], config
+                    )
 
                     return (
                         p_node,

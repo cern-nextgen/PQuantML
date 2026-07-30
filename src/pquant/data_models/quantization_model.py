@@ -1,6 +1,12 @@
+from enum import Enum
+
 from pydantic import BaseModel, Field
 
-from pquant.core.constants import QuantizationGranularity
+
+class QuantizationGranularity(str, Enum):
+    PER_TENSOR = "per_tensor"
+    PER_CHANNEL = "per_channel"
+    PER_WEIGHT = "per_weight"
 
 
 class BaseQuantizationModel(BaseModel):

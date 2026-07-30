@@ -8,7 +8,10 @@ import pytest
 
 @pytest.fixture(scope="function", autouse=True)
 def set_image_data_format():
-    keras.backend.set_image_data_format(os.environ.get("DATA_FORMAT", "channels_last"))
+    if "DATA_FORMAT" in os.environ:
+        keras.backend.set_image_data_format(os.environ["DATA_FORMAT"])
+    else:
+        keras.backend.set_image_data_format("channels_first")
 
 
 @pytest.fixture(scope='session', autouse=True, params=[42])

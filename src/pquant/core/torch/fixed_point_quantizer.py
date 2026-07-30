@@ -186,7 +186,7 @@ class FixedPointQuantizer:
 
     def forward_wrap_sm(self, x, k, i, f, training=False):
         def quant_fn(x):
-            return self.round(x, f)
+            return self.round(x, f, training and self.stochastic)
 
         x = wrap_sm_fn(x, k, i, f, training, quant_fn)
         return x

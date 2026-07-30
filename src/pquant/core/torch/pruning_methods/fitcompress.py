@@ -10,8 +10,8 @@ class FITCompress(nn.Module):
 
             config = PQConfig.load_from_config(config)
         self.config = config
-        self._is_pretraining = True
-        self._is_finetuning = False
+        self.is_pretraining = True
+        self.is_finetuning = False
         self.built = False
 
     def build(self, input_shape):
@@ -33,13 +33,13 @@ class FITCompress(nn.Module):
         return 0.0
 
     def pre_finetune_function(self):
-        self._is_finetuning = True
+        self.is_finetuning = True
 
     def post_round_function(self):
         pass
 
     def post_pre_train_function(self):
-        self._is_pretraining = False
+        self.is_pretraining = False
 
     def post_epoch_function(self, epoch, total_epochs, **kwargs):
         pass

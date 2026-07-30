@@ -33,6 +33,7 @@ if backend == "torch":
         get_ebops,
         get_layer_keep_ratio,
         get_model_losses,
+        load_torch_hgq_model,
         post_training_prune,
     )
     from .core.torch.tracing import check_quantization, print_quantization_check
@@ -63,6 +64,7 @@ if backend == "torch":
     _forwards.append("load_from_file")
     _forwards.append("load_from_dictionary")
     _forwards.append("get_ebops")
+    _forwards.append("load_torch_hgq_model")
     _forwards.append("check_quantization")
     _forwards.append("print_quantization_check")
     _forwards.append("PQConfig")

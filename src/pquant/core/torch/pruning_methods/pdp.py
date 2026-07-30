@@ -124,13 +124,9 @@ class PDP(nn.Module):
     def forward(self, weight):
         if self._is_pretraining or self._is_finetuning:
             return self.mask.to(weight.dtype) * weight
-        return self._compute_mask(weight) * weight
-
-    def update_mask(self, weight):
-        """Update stored mask from current weights. Called once per epoch from post_epoch_functions."""
-        if not self._is_pretraining and not self._is_finetuning:
-            with torch.no_grad():
-                self.mask.copy_(self._compute_mask(weight))
+        new_mask = self._compute_mask(weight)
+        self.mask.data = new_mask
+        return self.mask * weight
 
     def get_hard_mask(self, weight=None):
         return (self.mask >= 0.5).to(self.mask.dtype)

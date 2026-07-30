@@ -1,5 +1,3 @@
-from enum import Enum
-
 import optuna
 
 from pquant.data_models.pruning_model import (
@@ -12,13 +10,6 @@ from pquant.data_models.pruning_model import (
     PDPPruningModel,
     WandaPruningModel,
 )
-
-
-class QuantizationGranularity(str, Enum):
-    PER_TENSOR = "per_tensor"
-    PER_CHANNEL = "per_channel"
-    PER_WEIGHT = "per_weight"
-
 
 PRUNING_MODEL_REGISTRY = {
     "cs": CSPruningModel,

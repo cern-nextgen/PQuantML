@@ -2,7 +2,6 @@ from pquant.core.torch.pruning_methods.activation_pruning import ActivationPruni
 from pquant.core.torch.pruning_methods.autosparse import AutoSparse
 from pquant.core.torch.pruning_methods.cs import ContinuousSparsification
 from pquant.core.torch.pruning_methods.dst import DST
-from pquant.core.torch.pruning_methods.fitcompress import FITCompress
 from pquant.core.torch.pruning_methods.mdmm import MDMM
 from pquant.core.torch.pruning_methods.pdp import PDP
 from pquant.core.torch.pruning_methods.wanda import Wanda
@@ -16,8 +15,6 @@ def get_pruning_layer(config, layer_type):
         return AutoSparse(config, layer_type)
     elif pruning_method == "cs":
         return ContinuousSparsification(config, layer_type)
-    elif pruning_method == "fitcompress":
-        return FITCompress(config)
     elif pruning_method == "pdp":
         return PDP(config, layer_type)
     elif pruning_method == "activation_pruning":
