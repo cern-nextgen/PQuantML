@@ -45,6 +45,7 @@ class ContinuousSparsification(keras.layers.Layer):
         use_current_mask = ops.logical_or(self.is_pretraining, self.is_finetuning)
         updated_mask = ops.where(use_current_mask, stored_mask, new_mask)
         self.mask.assign(updated_mask)
+        self.add_loss(self.calculate_additional_loss())
         return updated_mask * weight
 
     def pre_finetune_function(self):
@@ -82,9 +83,11 @@ class ContinuousSparsification(keras.layers.Layer):
         self.beta.assign(1.0)
 
     def calculate_additional_loss(self):
-        return ops.convert_to_tensor(
+        penalty = ops.convert_to_tensor(
             self.config.pruning_parameters.threshold_decay * ops.norm(ops.ravel(self.get_mask()), ord=1)
         )
+        inactive = ops.logical_or(self.is_pretraining, self.is_finetuning)
+        return ops.where(inactive, ops.zeros_like(penalty), penalty)
 
     def get_layer_sparsity(self, weight):
         return ops.sum(self.get_hard_mask()) / ops.size(weight)
