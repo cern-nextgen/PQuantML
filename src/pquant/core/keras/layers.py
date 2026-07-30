@@ -1811,6 +1811,32 @@ class PQMultiheadAttention(keras.layers.Layer):
             return ops.convert_to_tensor(0.0)
         return ops.convert_to_tensor(self.hgq_beta * self.attention_ebops() + self.softmax.hgq_loss())
 
+    @staticmethod
+    def _split_qkv_shapes(input_shape):
+        if isinstance(input_shape, (list, tuple)) and len(input_shape) > 0 and isinstance(input_shape[0], (list, tuple)):
+            q_shape = input_shape[0]
+            k_shape = input_shape[1] if len(input_shape) > 1 else q_shape
+            v_shape = input_shape[2] if len(input_shape) > 2 else k_shape
+        else:
+            q_shape = k_shape = v_shape = input_shape
+        return q_shape, k_shape, v_shape
+
+    def compute_output_shape(self, input_shape):
+        q_shape, k_shape, _ = self._split_qkv_shapes(input_shape)
+        batch, tgt_len = q_shape[0], q_shape[1]
+        src_len = k_shape[1]
+        return (batch, tgt_len, self.embed_dim), (batch, tgt_len, src_len)
+
+    def build(self, input_shape):
+        q_shape, k_shape, v_shape = self._split_qkv_shapes(input_shape)
+        self.q_proj.build(q_shape)
+        self.k_proj.build(k_shape)
+        self.v_proj.build(v_shape)
+        self.out_proj.build(tuple(q_shape[:-1]) + (self.embed_dim,))
+        # Softmax operates on the per-head attention scores (B, H, Tq, Tk).
+        self.softmax.build((q_shape[0], self.num_heads, q_shape[1], k_shape[1]))
+        super().build(input_shape)
+
     def call(
         self,
         inputs,

@@ -35,6 +35,7 @@ if backend == "torch":
         get_model_losses,
         post_training_prune,
     )
+    from .core.torch.onnx import convert_to_onnx
     from .core.torch.tracing import check_quantization, print_quantization_check
     from .core.torch.train import train_model
 
@@ -66,6 +67,7 @@ if backend == "torch":
     _forwards.append("check_quantization")
     _forwards.append("print_quantization_check")
     _forwards.append("PQConfig")
+    _forwards.append("convert_to_onnx")
     __all__ = _forwards
 
 else:
@@ -91,6 +93,7 @@ else:
         get_model_losses,
         post_training_prune,
     )
+    from .core.keras.onnx import convert_to_onnx
     from .core.keras.train import train_model
 
     _forwards = ["activations", "layers", "quantizer"]
@@ -117,4 +120,5 @@ else:
     _forwards.append("load_from_file")
     _forwards.append("load_from_dictionary")
     _forwards.append("PQConfig")
+    _forwards.append("convert_to_onnx")
     __all__ = _forwards
