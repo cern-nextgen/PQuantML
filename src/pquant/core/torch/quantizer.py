@@ -23,7 +23,7 @@ class Quantizer(nn.Module):
         shape=None,
     ):
         super().__init__()
-
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         self.overflow = overflow
         self.round_mode = round_mode
         self.use_hgq = is_heterogeneous
@@ -32,10 +32,10 @@ class Quantizer(nn.Module):
         self.granularity = QuantizationGranularity(granularity).value
         if not self.use_hgq:
             param_shape = () if is_data else self.compute_weight_param_shape(shape)
-            self.k = torch.nn.Parameter(torch.full(param_shape, float(k)), requires_grad=False)
-            self.i = torch.nn.Parameter(torch.full(param_shape, float(i)), requires_grad=False)
-            self.f = torch.nn.Parameter(torch.full(param_shape, float(f)), requires_grad=False)
-            self.b = torch.nn.Parameter(torch.full(param_shape, float(i + k + f)), requires_grad=False)
+            self.k = torch.nn.Parameter(torch.full(param_shape, float(k), device=device), requires_grad=False)
+            self.i = torch.nn.Parameter(torch.full(param_shape, float(i), device=device), requires_grad=False)
+            self.f = torch.nn.Parameter(torch.full(param_shape, float(f), device=device), requires_grad=False)
+            self.b = torch.nn.Parameter(torch.full(param_shape, float(i + k + f), device=device), requires_grad=False)
         self.quantizer = create_quantizer(
             k,
             i,
