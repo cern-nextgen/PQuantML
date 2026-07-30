@@ -1,10 +1,10 @@
-from enum import Enum
-
 import keras
 from hgq.quantizer import Quantizer as HGQQuantizer
 from hgq.quantizer import QuantizerConfig
 from keras import ops
 from quantizers import get_fixed_quantizer
+
+from pquant.core.constants import QuantizationGranularity
 
 
 @keras.saving.register_keras_serializable(package="PQuantML")
@@ -19,7 +19,7 @@ class Quantizer(keras.layers.Layer):
         round_mode="RND",
         is_heterogeneous=False,
         is_data=False,
-        granularity="per_tensor",
+        granularity=QuantizationGranularity.PER_TENSOR,
         hgq_gamma=0,
         place="datalane",
         dynamic_data=True,
@@ -35,7 +35,7 @@ class Quantizer(keras.layers.Layer):
         self.is_data = is_data
         self.dynamic_data = dynamic_data
         self.place = place
-        self.granularity = granularity.value if isinstance(granularity, Enum) else granularity
+        self.granularity = QuantizationGranularity(granularity).value
         self.quantizer = create_quantizer(
             self.k_init,
             self.i_init,
@@ -53,9 +53,8 @@ class Quantizer(keras.layers.Layer):
     def calculate_bits_from_abs(self, abs_x):
         m = ops.ceil(ops.log(abs_x + 1e-6) / ops.log(2.0))
         int_bits = ops.maximum(m, 0.0)
-        b = self.b if hasattr(self, "b") else self.b_init
-        int_bits = ops.minimum(m, b - self.k)
-        frac_bits = ops.maximum(b - int_bits - self.k_init, 0.0)
+        int_bits = ops.minimum(int_bits, self.b - self.k)
+        frac_bits = ops.maximum(self.b - int_bits - self.k, 0.0)
         return int_bits, frac_bits
 
     def compute_data_dynamic_bits(self, x):
@@ -66,10 +65,10 @@ class Quantizer(keras.layers.Layer):
         return self.calculate_bits_from_abs(abs_x)
 
     def compute_weight_dynamic_bits(self, x):
-        if self.granularity == "per_tensor":
+        if self.granularity == QuantizationGranularity.PER_TENSOR or ops.ndim(x) == 1:
             _, i, f = self.get_quantization_bits()
             return i, f
-        if self.granularity == "per_channel":
+        if self.granularity == QuantizationGranularity.PER_CHANNEL:
             if ops.ndim(x) == 2:
                 abs_x = ops.max(ops.abs(x), axis=0, keepdims=True)
             elif ops.ndim(x) == 3:
@@ -78,7 +77,7 @@ class Quantizer(keras.layers.Layer):
                 abs_x = ops.max(ops.abs(x), axis=(0, 1, 2), keepdims=True)
             else:
                 raise ValueError("Unsupported tensor rank")
-        elif self.granularity == "per_weight":
+        elif self.granularity == QuantizationGranularity.PER_WEIGHT:
             abs_x = ops.abs(x)
         else:
             raise ValueError(f"compute_dynamic_bits called for granularity={self.granularity}")
@@ -89,39 +88,38 @@ class Quantizer(keras.layers.Layer):
             return self.compute_data_dynamic_bits(x)
         return self.compute_weight_dynamic_bits(x)
 
+    def _dynamic_bits_shape(self, input_shape):
+        """Shape the dynamically computed i/f will have, without computing them (used by build)."""
+        if self.is_data or len(input_shape) == 1:
+            return ()  # data and bias are per_tensor, so scalar shape
+        if self.granularity == QuantizationGranularity.PER_CHANNEL:
+            if len(input_shape) not in (2, 3, 4):
+                raise ValueError("Unsupported tensor rank")
+            return (1,) * (len(input_shape) - 1) + (input_shape[-1],)
+        return tuple(input_shape)  # per_weight
+
     def build(self, input_shape):
         if self.use_hgq:
             shape = tuple(input_shape) if not self.is_data else (1,) + tuple(input_shape[1:])
-            self.k = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.k_init), trainable=False)
-            self.i = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.i_init), trainable=False)
-            self.f = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.f_init), trainable=False)
-            self.b = self.add_weight(
-                shape=shape,
-                initializer=keras.initializers.Constant(self.k_init + self.i_init + self.f_init),
-                trainable=False,
-            )
             if not self.quantizer.built:
                 self.quantizer.build(shape)
             self.set_quantization_bits(self.i_init, self.f_init)
-        elif self.granularity == "per_tensor":
-            self.k = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.k_init), trainable=False)
-            self.i = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.i_init), trainable=False)
-            self.f = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.f_init), trainable=False)
-            self.b = self.add_weight(
-                shape=(), initializer=keras.initializers.Constant(self.k_init + self.i_init + self.f_init), trainable=False
-            )
+        elif self.granularity == QuantizationGranularity.PER_TENSOR:
+            self._build_params(shape=())
         else:
-            i, _ = self.compute_dynamic_bits(keras.ops.ones(input_shape))
-            self.k = self.add_weight(shape=i.shape, initializer=keras.initializers.Constant(self.k_init), trainable=False)
-            self.i = self.add_weight(shape=i.shape, initializer=keras.initializers.Constant(self.i_init), trainable=False)
-            self.f = self.add_weight(shape=i.shape, initializer=keras.initializers.Constant(self.f_init), trainable=False)
-            self.b = self.add_weight(
-                shape=i.shape,
-                initializer=keras.initializers.Constant(self.k_init + self.i_init + self.f_init),
-                trainable=False,
-            )
-
+            shape = self._dynamic_bits_shape(input_shape)
+            self._build_params(shape)
         super().build(input_shape)
+
+    def _build_params(self, shape):
+        self.k = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.k_init), trainable=False)
+        self.i = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.i_init), trainable=False)
+        self.f = self.add_weight(shape=shape, initializer=keras.initializers.Constant(self.f_init), trainable=False)
+        self.b = self.add_weight(
+            shape=shape,
+            initializer=keras.initializers.Constant(self.k_init + self.i_init + self.f_init),
+            trainable=False,
+        )
 
     def get_total_bits(self, shape):
         if self.use_hgq:
@@ -133,22 +131,29 @@ class Quantizer(keras.layers.Layer):
     def get_quantization_bits(self):
         if self.use_hgq:
             return self.quantizer.quantizer.k, self.quantizer.quantizer.i, self.quantizer.quantizer.f
+        if not hasattr(self, "i"):
+            return self.k_init, self.i_init, self.f_init
         return self.k, self.i, self.f
 
     def set_quantization_bits(self, i, f):
         if self.use_hgq:
             self.quantizer.quantizer._i.assign(self.quantizer.quantizer._i * 0.0 + i)
             self.quantizer.quantizer._f.assign(self.quantizer.quantizer._f * 0.0 + f)
-        self.i = i
-        self.f = f
+        elif hasattr(self, "i") and hasattr(self.i, "assign"):
+            self.i.assign(ops.zeros_like(self.i) + i)
+            self.f.assign(ops.zeros_like(self.f) + f)
+            self.b.assign(self.k + self.i + self.f)
+        else:
+            self.i = i
+            self.f = f
 
     def apply_final_compression(self):
-        if self.use_hgq and not self.quantizer.built or not self.built:
+        if self.use_hgq or not self.built:
             return
         k, i, f = self.get_quantization_bits()
-        self.i.assign(i)
-        self.f.assign(f)
-        self.b.assign(k + i + f)
+        self.i.assign(ops.zeros_like(self.i) + i)
+        self.f.assign(ops.zeros_like(self.f) + f)
+        self.b.assign(ops.zeros_like(self.b) + k + i + f)
         self.final_compression_done = True
 
     def post_pre_train_function(self):
@@ -159,10 +164,9 @@ class Quantizer(keras.layers.Layer):
             return self.quantizer(x, training=training)
         if not training:
             return self.quantizer(x, k=self.k, i=self.i, f=self.f, training=training)
-        else:
-            i, f = self.compute_dynamic_bits(x)
-            self.i.assign(i)
-            self.f.assign(f)
+        i, f = self.compute_dynamic_bits(x)
+        self.i.assign(i)
+        self.f.assign(f)
         return self.quantizer(x, k=self.k, i=i, f=f, training=training)
 
     def hgq_loss(self):
@@ -224,11 +228,11 @@ def axis_kwargs_for_granularity(granularity, is_data):
     per_channel is intentionally NOT supported for HGQ (the channel axis is layout-dependent, so we
     don't guess it).
     """
-    if granularity == "per_tensor":
+    if granularity == QuantizationGranularity.PER_TENSOR:
         return {"heterogeneous_axis": ()}
-    if granularity == "per_weight":
+    if granularity == QuantizationGranularity.PER_WEIGHT:
         return {"homogeneous_axis": (0,) if is_data else ()}
-    if granularity == "per_channel":
+    if granularity == QuantizationGranularity.PER_CHANNEL:
         raise ValueError("per_channel granularity is not supported for HGQ. Use 'per_tensor' or 'per_weight'.")
     raise ValueError(f"Unsupported granularity: {granularity}")
 
@@ -262,7 +266,16 @@ def create_hgq_data_quantizer(k, i, f, overflow, round_mode, axis_kwargs, gamma=
 
 
 def create_quantizer(
-    k, i, f, overflow, round_mode, is_heterogeneous, is_data, place="datalane", granularity="per_weight", gamma=1e-8
+    k,
+    i,
+    f,
+    overflow,
+    round_mode,
+    is_heterogeneous,
+    is_data,
+    place="datalane",
+    granularity=QuantizationGranularity.PER_WEIGHT,
+    gamma=1e-8,
 ):
     if is_heterogeneous:
         axis_kwargs = axis_kwargs_for_granularity(granularity, is_data)
