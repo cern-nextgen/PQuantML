@@ -846,6 +846,16 @@ class PQSeparableConv2d(Layer):
         self.depthwise_conv._rewind_weights()
         self.pointwise_conv._rewind_weights()
 
+    def build(self, input_shape):
+        self.depthwise_conv.build(input_shape)
+        intermediate_shape = self.depthwise_conv.compute_output_shape(input_shape)
+        self.pointwise_conv.build(intermediate_shape)
+        super().build(input_shape)
+
+    def compute_output_shape(self, input_shape):
+        intermediate_shape = self.depthwise_conv.compute_output_shape(input_shape)
+        return self.pointwise_conv.compute_output_shape(intermediate_shape)
+
     def call(self, x, training=None):
         x = self.depthwise_conv(x, training=training)
         x = self.pointwise_conv(x, training=training)
@@ -1811,6 +1821,42 @@ class PQMultiheadAttention(keras.layers.Layer):
             return ops.convert_to_tensor(0.0)
         return ops.convert_to_tensor(self.hgq_beta * self.attention_ebops() + self.softmax.hgq_loss())
 
+    def build(self, input_shape):
+        if isinstance(input_shape, (list, tuple)) and isinstance(input_shape[0], (list, tuple)):
+            if len(input_shape) == 3:
+                query_shape, key_shape, value_shape = input_shape
+            elif len(input_shape) == 2:
+                query_shape, key_shape = input_shape
+                value_shape = key_shape
+            else:
+                query_shape = key_shape = value_shape = input_shape[0]
+        else:
+            query_shape = key_shape = value_shape = input_shape
+        if not self.q_proj.built:
+            self.q_proj.build(query_shape)
+        if not self.k_proj.built:
+            self.k_proj.build(key_shape)
+        if not self.v_proj.built:
+            self.v_proj.build(value_shape)
+        scores_shape = (query_shape[0], self.num_heads, query_shape[1], key_shape[1])
+        if not self.softmax.built:
+            self.softmax.build(scores_shape)
+        if not self.out_proj.built:
+            self.out_proj.build((query_shape[0], query_shape[1], self.embed_dim))
+        super().build(input_shape)
+
+    def compute_output_spec(self, inputs, training=None, key_padding_mask=None, attn_mask=None, need_weights=True):
+        if isinstance(inputs, (list, tuple)):
+            query = inputs[0]
+            key = inputs[1] if len(inputs) > 1 else inputs[0]
+        else:
+            query = key = inputs
+        out = keras.KerasTensor((query.shape[0], query.shape[1], self.embed_dim), dtype=self.compute_dtype)
+        if need_weights:
+            attn = keras.KerasTensor((query.shape[0], query.shape[1], key.shape[1]), dtype=self.compute_dtype)
+            return out, attn
+        return out, None
+
     def call(
         self,
         inputs,
@@ -2222,10 +2268,12 @@ def add_compression_layers(model, config, input_shape=None):
             new_layer.pointwise_conv.set_enable_pruning(enable_pruning_pointwise)
             _build_pruning_layer_from_kernel(new_layer.depthwise_conv, layer.depthwise_kernel)
             _build_pruning_layer_from_kernel(new_layer.pointwise_conv, layer.pointwise_kernel)
-            new_layer.depthwise_conv.build(x.shape)
-            y = new_layer.depthwise_conv(x).shape
-            new_layer.pointwise_conv.build(y)
+            new_layer.build(x.shape)
             x = new_layer(x)
+            new_layer.depthwise_conv._kernel.assign(layer.depthwise_kernel)
+            new_layer.pointwise_conv._kernel.assign(layer.pointwise_kernel)
+            if layer.use_bias:
+                new_layer.pointwise_conv._bias.assign(layer.bias)
             act = _check_activation(layer, config)
         elif isinstance(layer, Conv1D):
             new_layer = PQConv1d(

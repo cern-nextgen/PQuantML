@@ -30,12 +30,13 @@ class Quantizer(nn.Module):
         self.is_data = is_data
         self.dynamic_data = dynamic_data
         self.granularity = QuantizationGranularity(granularity).value
-        if not self.use_hgq:
-            param_shape = () if is_data else self.compute_weight_param_shape(shape)
-            self.k = torch.nn.Parameter(torch.full(param_shape, float(k)), requires_grad=False)
-            self.i = torch.nn.Parameter(torch.full(param_shape, float(i)), requires_grad=False)
-            self.f = torch.nn.Parameter(torch.full(param_shape, float(f)), requires_grad=False)
-            self.b = torch.nn.Parameter(torch.full(param_shape, float(i + k + f)), requires_grad=False)
+
+        # Params even when using HGQ, as they are used during hls4ml conversion
+        param_shape = () if (is_data or self.use_hgq) else self.compute_weight_param_shape(shape)
+        self.k = torch.nn.Parameter(torch.full(param_shape, float(k)), requires_grad=False)
+        self.i = torch.nn.Parameter(torch.full(param_shape, float(i)), requires_grad=False)
+        self.f = torch.nn.Parameter(torch.full(param_shape, float(f)), requires_grad=False)
+        self.b = torch.nn.Parameter(torch.full(param_shape, float(i + k + f)), requires_grad=False)
         self.quantizer = create_quantizer(
             k,
             i,
@@ -63,6 +64,16 @@ class Quantizer(nn.Module):
         else:
             b = self.i + self.f + self.k
             return torch.ones(shape).to(b.device) * b
+
+    def _sync_hgq_mirror_bits(self):
+        if not self.quantizer.built:
+            return
+        with torch.no_grad():
+            k, i, f = self.quantizer.k.detach(), self.quantizer.i.detach(), self.quantizer.f.detach()
+            self.k.data = k.clone()
+            self.i.data = i.clone()
+            self.f.data = f.clone()
+            self.b.data = k + i + f
 
     def set_quantization_bits(self, i, f):
         if self.use_hgq:
@@ -146,6 +157,7 @@ class Quantizer(nn.Module):
                 self.quantizer._f.data.clamp_(self.quantizer.f_min, self.quantizer.f_max)
                 if self.quantizer.overflow_mode != "WRAP":
                     self.quantizer._i.data.clamp_(self.quantizer.i_min, self.quantizer.i_max)
+            self._sync_hgq_mirror_bits()
             self.final_compression_done.fill_(True)
             return
         _, i, f = self.get_quantization_bits()

@@ -302,8 +302,7 @@ def test_separable_conv2d_call(config_pdp, conv2d_input):
         layer_to_replace.pointwise_constraint,
         layer_to_replace.bias_constraint,
     )
-    layer.depthwise_conv.build(conv2d_input.shape)
-    layer.pointwise_conv.build(conv2d_input.shape)
+    layer.build(conv2d_input.shape)
     layer.depthwise_conv._kernel.assign(layer_to_replace.depthwise_kernel)
     layer.pointwise_conv._kernel.assign(layer_to_replace.pointwise_kernel)
 
@@ -317,8 +316,14 @@ def test_separable_conv2d_add_remove_layers(config_pdp, conv2d_input):
     inputs = keras.Input(shape=conv2d_input.shape[1:])
     out = SeparableConv2D(OUT_FEATURES, KERNEL_SIZE, use_bias=False, padding="same")(inputs)
     model = keras.Model(inputs=inputs, outputs=out, name="test_conv2d")
+    depthwise_kernel = ops.copy(model.layers[1].depthwise_kernel)
+    pointwise_kernel = ops.copy(model.layers[1].pointwise_kernel)
     model = add_compression_layers(model, config_pdp, conv2d_input.shape)
     model(conv2d_input)
+
+    # The original layer's weights must survive the replacement.
+    assert ops.all(ops.equal(model.layers[1].depthwise_conv._kernel, depthwise_kernel))
+    assert ops.all(ops.equal(model.layers[1].pointwise_conv._kernel, pointwise_kernel))
 
     post_pretrain_functions(model, config_pdp)
     pre_finetune_functions(model)
