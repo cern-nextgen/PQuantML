@@ -47,7 +47,7 @@ TRACKING_URI = "http://0.0.0.0:5000/"
 DB_STORAGE = "sqlite:///optuna_study.db"
 
 TORCH_BACKEND = "torch"
-TF_BACKEND = 'tensorflow'
+TF_BACKEND = "tensorflow"
 
 FINETUNING_DIRECTION = {"maximize", "minimize"}
 CONFIG_FILE = "config.yaml"

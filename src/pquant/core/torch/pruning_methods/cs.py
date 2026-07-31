@@ -73,6 +73,8 @@ class ContinuousSparsification(nn.Module):
         self.beta.fill_(1.0)
 
     def calculate_additional_loss(self):
+        if self._is_pretraining or self._is_finetuning:
+            return torch.zeros((), dtype=self.s.dtype, device=self.s.device)
         return self.config.pruning_parameters.threshold_decay * torch.norm(self.get_mask().reshape(-1), p=1)
 
     def get_layer_sparsity(self, weight):

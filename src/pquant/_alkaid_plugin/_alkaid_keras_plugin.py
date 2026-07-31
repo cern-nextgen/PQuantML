@@ -51,7 +51,7 @@ def _table_fn(table):
     fn = table.activation_function
 
     def apply_fn(v: np.ndarray) -> np.ndarray:
-        t = keras.ops.cast(keras.ops.convert_to_tensor(v), 'float32')
+        t = keras.ops.cast(keras.ops.convert_to_tensor(v), "float32")
         return np.asarray(keras.ops.convert_to_numpy(fn(t)), dtype=np.float64)
 
     return apply_fn
@@ -80,9 +80,9 @@ class ReplayPQuantDense(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
-        out = np.einsum('...c,cC->...C', inputs, _final_kernel(layer)) + _final_bias(layer)
-        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        inputs = _replay_quantizer_if_enabled(layer, "input_quantizer", inputs, "quantize_input")
+        out = np.einsum("...c,cC->...C", inputs, _final_kernel(layer)) + _final_bias(layer)
+        return _replay_quantizer_if_enabled(layer, "output_quantizer", out, "quantize_output")
 
 
 class ReplayPQuantConv(ReplayOperationBase):
@@ -90,7 +90,7 @@ class ReplayPQuantConv(ReplayOperationBase):
 
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
-        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        inputs = _replay_quantizer_if_enabled(layer, "input_quantizer", inputs, "quantize_input")
         kernel = _final_kernel(layer)
         bias = _final_bias(layer)
 
@@ -122,9 +122,9 @@ class ReplayPQuantConv(ReplayOperationBase):
         )
         if bias.shape != ():
             out = out + bias
-        if layer.data_format == 'channels_first':
+        if layer.data_format == "channels_first":
             out = np.moveaxis(out, -1, 1)  # type: ignore
-        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, "output_quantizer", out, "quantize_output")
 
 
 class ReplayPQuantSeparableConv(ReplayOperationBase):
@@ -158,7 +158,7 @@ class ReplayPQuantBatchNormalization(ReplayBatchNormalization):
 
     def call(self, inputs: FVArray, mask=None) -> FVArray:
         layer = self.op
-        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        inputs = _replay_quantizer_if_enabled(layer, "input_quantizer", inputs, "quantize_input")
         scale, offset = self.fused_scale_offset()
         shape = [1] * inputs.ndim
         axis = layer.axis if isinstance(layer.axis, (list, tuple)) else [layer.axis]
@@ -179,9 +179,9 @@ class ReplayPQuantAvgPool(ReplayPool):
 
     def call(self, inputs: FVArray, mask: None = None) -> FVArray:
         layer = self.op
-        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        inputs = _replay_quantizer_if_enabled(layer, "input_quantizer", inputs, "quantize_input")
         out = super().call(inputs, mask=mask)
-        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, "output_quantizer", out, "quantize_output")
 
 
 class ReplayPQuantActivation(ReplayOperationBase):
@@ -191,11 +191,11 @@ class ReplayPQuantActivation(ReplayOperationBase):
     def call(self, inputs: FVArray) -> FVArray:
         layer = self.op
         inputs = _scale_by_relu_multiplier(layer, inputs)
-        inputs = _replay_quantizer_if_enabled(layer, 'input_quantizer', inputs, 'quantize_input')
+        inputs = _replay_quantizer_if_enabled(layer, "input_quantizer", inputs, "quantize_input")
         if layer.activation_name not in keras_numpy_unary_map:
-            raise PQuantAlkaidError(f'Unsupported PQuant activation for Alkaid conversion: {layer.activation_name!r}')
+            raise PQuantAlkaidError(f"Unsupported PQuant activation for Alkaid conversion: {layer.activation_name!r}")
         out = keras_numpy_unary_map[layer.activation_name](inputs)
-        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, "output_quantizer", out, "quantize_output")
 
 
 class ReplayPQuantSoftmax(ReplayOperationBase):
@@ -204,7 +204,7 @@ class ReplayPQuantSoftmax(ReplayOperationBase):
 
     def call(self, inputs: FVArray, mask=None) -> FVArray:
         if mask is not None:
-            raise PQuantAlkaidError('PQSoftmax masks are not supported in Alkaid conversion.')
+            raise PQuantAlkaidError("PQSoftmax masks are not supported in Alkaid conversion.")
         return _replay_softmax(self.op, inputs, _table_fn)
 
 
@@ -215,7 +215,7 @@ class ReplayPQuantMultiheadAttention(ReplayOperationBase):
     def call(self, inputs, key_padding_mask=None, attn_mask=None, need_weights=True):
         layer = self.op
         if key_padding_mask is not None or attn_mask is not None:
-            raise PQuantAlkaidError('Attention masks are not supported in Alkaid conversion.')
+            raise PQuantAlkaidError("Attention masks are not supported in Alkaid conversion.")
 
         query, key, value = _unpack_query_key_value(inputs)
         batch_size, query_len = query.shape[0], query.shape[1]
@@ -232,13 +232,13 @@ class ReplayPQuantMultiheadAttention(ReplayOperationBase):
         v = v.reshape(batch_size, key_len, num_heads, head_dim).transpose(0, 2, 1, 3)
 
         scale = float(np.float32(layer.scale))
-        attn_scores = einsum('bhtd,bhsd->bhts', q, k) * scale
+        attn_scores = einsum("bhtd,bhsd->bhts", q, k) * scale
 
         # The softmax's own input/output quantizers handle the scores and the attention weights
         attn_weights = ReplayPQuantSoftmax(layer.softmax).call(attn_scores)
 
         # Weighted sum of values (dropout is an inference no-op): (B, H, T, head_dim)
-        out = einsum('bhts,bhsd->bhtd', attn_weights, v)
+        out = einsum("bhts,bhsd->bhtd", attn_weights, v)
 
         # Merge heads: (B, T, E)
         out = out.transpose(0, 2, 1, 3).reshape(batch_size, query_len, layer.embed_dim)
@@ -252,4 +252,4 @@ class ReplayPQuantMultiheadAttention(ReplayOperationBase):
 
 def register() -> None:
     """Entry point for Alkaid's ``alkaid_keras`` second-level plugin group."""
-    _mark_plugin_loaded('keras')
+    _mark_plugin_loaded("keras")

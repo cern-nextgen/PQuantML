@@ -17,12 +17,6 @@ import torch.nn as nn
 
 os.environ["KERAS_BACKEND"] = "torch"
 
-import pquant  # noqa: E402
-from pquant.core.torch.convert_to_onnx import (  # noqa: E402
-    convert_to_onnx,
-    convert_to_onnx_fx,
-    export_qdq_layernorm,
-)
 from pquant.layers import (  # noqa: E402
     PQAvgPool1d,
     PQAvgPool2d,
@@ -32,6 +26,13 @@ from pquant.layers import (  # noqa: E402
     PQConv2d,
     PQDense,
     PQMultiheadAttention,
+)
+
+import pquant  # noqa: E402
+from pquant.core.torch.convert_to_onnx import (  # noqa: E402
+    convert_to_onnx,
+    convert_to_onnx_fx,
+    export_qdq_layernorm,
 )
 
 ort = pytest.importorskip("onnxruntime", reason="onnxruntime not installed")

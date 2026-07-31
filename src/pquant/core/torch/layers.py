@@ -1,6 +1,6 @@
 import math
 import typing
-from typing import Optional, Tuple, TypeVar, Union
+from typing import TypeVar
 
 import torch
 import torch.nn as nn
@@ -12,7 +12,7 @@ from pquant.core.torch.quantizer import Quantizer
 from pquant.core.torch.utils import get_pruning_layer
 
 if typing.TYPE_CHECKING:
-    from pquant.core.torch.fit_compress import call_fitcompress  # noqa: 401
+    pass  # noqa: 401
 
 T = TypeVar("T")
 
@@ -49,10 +49,10 @@ class PQWeightBiasBase(nn.Module):
         quantize_input=True,
         quantize_output=False,
         enable_pruning: bool = None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -275,10 +275,10 @@ class PQDense(PQWeightBiasBase, nn.Linear):
         enable_pruning: bool = None,
         device=None,
         dtype=None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -447,7 +447,7 @@ class PQConv2d(PQConvBase, nn.Conv2d):
         out_channels: int,
         kernel_size: _size_2_t,
         stride: _size_2_t = 1,
-        padding: Union[str, _size_2_t] = 0,
+        padding: str | _size_2_t = 0,
         dilation: _size_2_t = 1,
         groups: int = 1,
         bias: bool = True,
@@ -457,10 +457,10 @@ class PQConv2d(PQConvBase, nn.Conv2d):
         quantize_input=True,
         quantize_output=False,
         enable_pruning: bool = None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -508,7 +508,7 @@ class PQConv1d(PQConvBase, nn.Conv1d):
         out_channels: int,
         kernel_size: _size_1_t,
         stride: _size_1_t = 1,
-        padding: Union[str, _size_1_t] = 0,
+        padding: str | _size_1_t = 0,
         dilation: _size_1_t = 1,
         groups: int = 1,
         bias: bool = True,
@@ -518,10 +518,10 @@ class PQConv1d(PQConvBase, nn.Conv1d):
         quantize_input=True,
         quantize_output=False,
         enable_pruning: bool = None,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         weight_quant_granularity=None,
         in_quant_granularity=None,
         bias_quant_granularity=None,
@@ -583,8 +583,8 @@ class PQAvgPoolBase(nn.Module):
         config,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -698,8 +698,8 @@ class PQAvgPool1d(PQAvgPoolBase, nn.AvgPool1d):
         count_include_pad: bool = True,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -736,11 +736,11 @@ class PQAvgPool2d(PQAvgPoolBase, nn.AvgPool2d):
         padding: _size_2_t = 0,
         ceil_mode: bool = False,
         count_include_pad: bool = True,
-        divisor_override: Optional[int] = None,
+        divisor_override: int | None = None,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         **kwargs,
@@ -927,15 +927,15 @@ class PQBatchNorm2d(PQBatchNormBase, nn.BatchNorm2d):
         config,
         num_features: int,
         eps: float = 1e-5,
-        momentum: typing.Optional[float] = 0.1,
+        momentum: float | None = 0.1,
         affine: bool = True,
         track_running_stats: bool = True,
         device=None,
         dtype=None,
         quantize_input=True,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         weight_quant_granularity=None,
         bias_quant_granularity=None,
@@ -959,15 +959,15 @@ class PQBatchNorm1d(PQBatchNormBase, nn.BatchNorm1d):
         config,
         num_features: int,
         eps: float = 1e-5,
-        momentum: typing.Optional[float] = 0.1,
+        momentum: float | None = 0.1,
         affine: bool = True,
         track_running_stats: bool = True,
         device=None,
         dtype=None,
         quantize_input=True,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         weight_quant_granularity=None,
         bias_quant_granularity=None,
@@ -989,7 +989,7 @@ class PQLayerNorm(nn.LayerNorm):
     def __init__(
         self,
         config,
-        normalized_shape: Union[int, Tuple[int, ...], torch.Size],
+        normalized_shape: int | tuple[int, ...] | torch.Size,
         eps: float = 1e-5,
         elementwise_affine: bool = True,
         bias: bool = True,
@@ -997,10 +997,10 @@ class PQLayerNorm(nn.LayerNorm):
         dtype=None,
         quantize_input=True,
         quantize_output=False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         weight_quant_granularity=None,
@@ -1226,11 +1226,11 @@ class PQMultiheadAttention(nn.Module):
         quantize_input: bool = True,
         quantize_output: bool = False,
         approximate_softmax: bool = False,
-        in_quant_bits: Tuple[T, T, T] = None,
-        weight_quant_bits: Tuple[T, T, T] = None,
-        bias_quant_bits: Tuple[T, T, T] = None,
-        out_quant_bits: Tuple[T, T, T] = None,
-        attn_quant_bits: Tuple[T, T, T] = None,
+        in_quant_bits: tuple[T, T, T] = None,
+        weight_quant_bits: tuple[T, T, T] = None,
+        bias_quant_bits: tuple[T, T, T] = None,
+        out_quant_bits: tuple[T, T, T] = None,
+        attn_quant_bits: tuple[T, T, T] = None,
         in_quant_granularity=None,
         out_quant_granularity=None,
         param_quant_granularity=None,
@@ -1323,10 +1323,10 @@ class PQMultiheadAttention(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        key_padding_mask: Optional[torch.Tensor] = None,
-        attn_mask: Optional[torch.Tensor] = None,
+        key_padding_mask: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | None = None,
         need_weights: bool = True,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if not self.batch_first:
             # (T, B, E) -> (B, T, E)
             query = query.transpose(0, 1)
@@ -1379,8 +1379,7 @@ class PQMultiheadAttention(nn.Module):
 
     def extra_repr(self) -> str:
         return (
-            f"embed_dim={self.embed_dim}, num_heads={self.num_heads}, "
-            f"dropout={self.dropout}, batch_first={self.batch_first}"
+            f"embed_dim={self.embed_dim}, num_heads={self.num_heads}, dropout={self.dropout}, batch_first={self.batch_first}"
         )
 
 

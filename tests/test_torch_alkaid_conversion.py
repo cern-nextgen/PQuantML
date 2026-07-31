@@ -6,8 +6,11 @@ import torch
 import torch.nn as nn
 from alkaid.codegen import RTLModel  # noqa: E402
 from alkaid.converter import trace_model
-from alkaid.trace import trace  # noqa: E402
-from alkaid.trace import FVArray, HWConfig  # noqa: E402
+from alkaid.trace import (  # noqa: E402
+    FVArray,
+    HWConfig,
+    trace,  # noqa: E402
+)
 
 from pquant import pdp_config
 from pquant._alkaid_plugin import _alkaid_torch_plugin  # noqa: E402
@@ -40,7 +43,6 @@ INPUT_KIF = (1, 4, 4)
 
 
 class TwoBranchNet(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         self.conv2d = PQConv2d(config, IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, padding="same")

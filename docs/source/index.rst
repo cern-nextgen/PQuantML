@@ -20,13 +20,13 @@ Welcome to the documentation for PQuantML, a hardware-aware model compression fr
 - Layer-wise precision configuration
 - Flexible training pipelines
 - PyTorch and TensorFlow backends
-- Knowledge distillation 
+- Knowledge distillation
 - HGQ library intergration
 - Integration with hardware-friendly toolchains (e.g., hls4ml)
 
 PQuantML enables efficient deployment of compact neural networks on resource-constrained hardware such as FPGAs and embedded accelerators.
 
-The paper describing the framework is available at: `PQuantML: A Tool for End-to-End Hardware-aware Model Compression <https://arxiv.org/abs/2603.26595>`_. 
+The paper describing the framework is available at: `PQuantML: A Tool for End-to-End Hardware-aware Model Compression <https://arxiv.org/abs/2603.26595>`_.
 
 
 .. rst-class:: light

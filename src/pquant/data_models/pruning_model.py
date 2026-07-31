@@ -1,11 +1,11 @@
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class BasePruningModel(BaseModel):
-    disable_pruning_for_layers: List[str] = Field(default_factory=list)
+    disable_pruning_for_layers: list[str] = Field(default_factory=list)
     enable_pruning: bool = Field(default=True)
     threshold_decay: float = Field(default=0.0)
 
@@ -39,8 +39,8 @@ class PDPPruningModel(BasePruningModel):
 
 class WandaPruningModel(BasePruningModel):
     pruning_method: Literal["wanda"] = "wanda"
-    M: Optional[int] = (Field(default=None),)
-    N: Optional[int] = (Field(default=None),)
+    M: int | None = (Field(default=None),)
+    N: int | None = (Field(default=None),)
     sparsity: float = Field(default=0.9)
     t_delta: int = Field(default=100)
     t_start_collecting_batch: int = Field(default=100)

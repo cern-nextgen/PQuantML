@@ -108,9 +108,9 @@ class DST(keras.layers.Layer):
         return ops.sum(self.get_mask(weight)) / ops.size(weight)
 
     def calculate_additional_loss(self):
-        if self._is_pretraining or self._is_finetuning:
-            return ops.cast(0.0, self.threshold.dtype)
-        return self.config.pruning_parameters.alpha * ops.sum(ops.exp(-self.threshold))
+        penalty = self.config.pruning_parameters.alpha * ops.sum(ops.exp(-self.threshold))
+        inactive = ops.logical_or(self.is_pretraining, self.is_finetuning)
+        return ops.where(inactive, ops.zeros_like(penalty), penalty)
 
     def pre_finetune_function(self):
         self._is_finetuning = True

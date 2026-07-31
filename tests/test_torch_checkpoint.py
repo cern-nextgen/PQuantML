@@ -7,7 +7,6 @@ from torch import nn
 
 os.environ["KERAS_BACKEND"] = "torch"
 
-from pquant import dst_config  # noqa: E402
 from pquant.activations import PQActivation  # noqa: E402
 from pquant.layers import (  # noqa: E402
     PQAvgPool1d,
@@ -24,6 +23,8 @@ from pquant.layers import (  # noqa: E402
     pre_finetune_functions,
 )
 
+from pquant import dst_config  # noqa: E402
+
 BATCH_SIZE = 2
 OUT_FEATURES = 8
 IN_FEATURES = 4
@@ -32,7 +33,6 @@ STEPS = 6
 
 
 class SingleLayerModel(nn.Module):
-
     def __init__(self, layer, is_mha=False):
         super().__init__()
         self.layer = layer

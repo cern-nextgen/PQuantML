@@ -11,7 +11,7 @@ def set_image_data_format():
     keras.backend.set_image_data_format(os.environ.get("DATA_FORMAT", "channels_last"))
 
 
-@pytest.fixture(scope='session', autouse=True, params=[42])
+@pytest.fixture(scope="session", autouse=True, params=[42])
 def set_random_seed(request):
     """Set random seeds for reproducibility"""
 
@@ -20,36 +20,36 @@ def set_random_seed(request):
     random.seed(seed)
     backend = keras.backend.backend()
     match backend:
-        case 'tensorflow':
+        case "tensorflow":
             import tensorflow as tf
 
             tf.random.set_seed(seed)
-        case 'torch':
+        case "torch":
             import torch
 
             torch.manual_seed(seed)
         case _:
-            raise ValueError(f'Unknown backend: {backend}')
+            raise ValueError(f"Unknown backend: {backend}")
 
 
-@pytest.fixture(scope='session', autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 def configure_backend():
     backend = keras.backend.backend()
 
     match backend:
-        case 'tensorflow':
+        case "tensorflow":
             import tensorflow as tf
 
             # Use full float32 matmul precision to match numpy/onnxruntime. Without this, TF uses
             # TF32 on Ampere+ GPUs and the ~1e-3 relative error exceeds tight test tolerances
             # (e.g. the keras→ONNX parity tests). Mirrors the torch 'highest' setting below.
             tf.config.experimental.enable_tensor_float_32_execution(False)
-        case 'torch':
+        case "torch":
             import torch
 
-            torch.set_float32_matmul_precision('highest')
+            torch.set_float32_matmul_precision("highest")
             device = "cuda" if torch.cuda.is_available() else "cpu"
             torch.set_default_device(device)
             torch.set_default_dtype(torch.float32)
         case _:
-            raise ValueError(f'Unknown backend: {backend}')
+            raise ValueError(f"Unknown backend: {backend}")

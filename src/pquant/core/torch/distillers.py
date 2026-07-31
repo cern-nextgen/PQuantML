@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 import torch
 import torch.nn as nn
@@ -114,10 +114,10 @@ class LayerwiseDistiller:
 
         def teacher_post(m: nn.Module, inp: tuple, out: torch.Tensor) -> None:
             teacher_output = out[0] if isinstance(out, tuple) else out
-            teacher_captured_data['out'] = teacher_output.detach().cpu()
+            teacher_captured_data["out"] = teacher_output.detach().cpu()
 
         def teacher_pre(m: nn.Module, inp: tuple) -> None:
-            teacher_captured_data['inp'] = inp[0].detach().cpu()
+            teacher_captured_data["inp"] = inp[0].detach().cpu()
 
         teacher_output_hook = teacher_layer.register_forward_hook(teacher_post)
         teacher_input_hook = teacher_layer.register_forward_pre_hook(teacher_pre)
@@ -130,7 +130,7 @@ class LayerwiseDistiller:
                         x = x.to(self.device)
                     self.teacher(x)
                     torch.save(
-                        (teacher_captured_data['inp'], teacher_captured_data['out']),
+                        (teacher_captured_data["inp"], teacher_captured_data["out"]),
                         os.path.join(cache_dir, f"{n_batches:08d}.pt"),
                     )
                     n_batches += 1
@@ -162,10 +162,10 @@ class LayerwiseDistiller:
         s_captured: dict[str, torch.Tensor] = {}
 
         def teacher_post(m: nn.Module, inp: tuple, out) -> None:
-            t_captured['out'] = (out[0] if isinstance(out, tuple) else out).detach()
+            t_captured["out"] = (out[0] if isinstance(out, tuple) else out).detach()
 
         def student_hook(m: nn.Module, inp: tuple, out) -> None:
-            s_captured['out'] = out[0] if isinstance(out, tuple) else out
+            s_captured["out"] = out[0] if isinstance(out, tuple) else out
 
         h_t = teacher_layer.register_forward_hook(teacher_post)
         h_s = student_layer.register_forward_hook(student_hook)
@@ -179,7 +179,7 @@ class LayerwiseDistiller:
                         x = x.to(self.device)
                     self.teacher(x)
                     self.student(x)
-                    batch_losses.append(self.loss_fn(s_captured['out'], t_captured['out']).item())
+                    batch_losses.append(self.loss_fn(s_captured["out"], t_captured["out"]).item())
         finally:
             h_t.remove()
             h_s.remove()
@@ -265,7 +265,7 @@ class LayerwiseDistiller:
                 hooks = [h_t, h_s]
 
             for epoch in range(n_epochs):
-                if getattr(student_layer, 'enable_pruning', False):
+                if getattr(student_layer, "enable_pruning", False):
                     student_layer.pruning_layer.pre_epoch_function(epoch, n_epochs)
                 batch_losses: list[float] = []
 
@@ -296,7 +296,7 @@ class LayerwiseDistiller:
 
                 mean_loss = sum(batch_losses) / len(batch_losses)
                 epoch_losses.append(mean_loss)
-                if getattr(student_layer, 'enable_pruning', False):
+                if getattr(student_layer, "enable_pruning", False):
                     student_layer.pruning_layer.post_epoch_function(epoch, n_epochs)
                 val_loss: float | None = None
                 if val_dataloader is not None:

@@ -6,11 +6,7 @@ import pytest
 from alkaid.codegen import RTLModel  # noqa: E402
 from alkaid.converter import trace_model
 from alkaid.trace import trace  # noqa: E402
-
-from pquant import pdp_config
-from pquant._alkaid_plugin import _alkaid_keras_plugin  # noqa: E402
 from pquant.activations import PQActivation
-from pquant.core.keras.quantizer import Quantizer
 from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
@@ -24,6 +20,10 @@ from pquant.layers import (
     PQSoftmax,
     apply_final_compression,
 )
+
+from pquant import pdp_config
+from pquant._alkaid_plugin import _alkaid_keras_plugin  # noqa: E402
+from pquant.core.keras.quantizer import Quantizer
 
 _alkaid_keras_plugin.register()
 

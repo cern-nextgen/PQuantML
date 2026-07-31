@@ -15,18 +15,7 @@ from keras.layers import (
     ReLU,
     SeparableConv2D,
 )
-
-from pquant import (
-    ap_config,
-    autosparse_config,
-    cs_config,
-    dst_config,
-    mdmm_config,
-    pdp_config,
-    wanda_config,
-)
 from pquant.activations import PQActivation
-from pquant.core.hyperparameter_optimization import PQConfig
 from pquant.layers import (
     PQAvgPool1d,
     PQAvgPool2d,
@@ -43,6 +32,17 @@ from pquant.layers import (
     post_pretrain_functions,
     pre_finetune_functions,
 )
+
+from pquant import (
+    ap_config,
+    autosparse_config,
+    cs_config,
+    dst_config,
+    mdmm_config,
+    pdp_config,
+    wanda_config,
+)
+from pquant.core.hyperparameter_optimization import PQConfig
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32
@@ -1469,13 +1469,13 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
             assert ops.all(f_input == 7.0)
 
     config_pdp.quantization_parameters.layer_specific = {
-        'conv2d': {
-            'weight': {'integer_bits': 1.0, 'fractional_bits': 3.0},
-            'bias': {'integer_bits': 2.0, 'fractional_bits': 4.0},
+        "conv2d": {
+            "weight": {"integer_bits": 1.0, "fractional_bits": 3.0},
+            "bias": {"integer_bits": 2.0, "fractional_bits": 4.0},
         },
-        're_lu': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'average_pooling2d': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'activation': {"input": {'integer_bits': 0.0, 'fractional_bits': 3.0}},
+        "re_lu": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "average_pooling2d": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "activation": {"input": {"integer_bits": 0.0, "fractional_bits": 3.0}},
     }
     keras.backend.clear_session()
     inputs = keras.Input(shape=conv2d_input.shape[1:])
@@ -1536,13 +1536,13 @@ def test_set_activation_custom_bits_quantizer(config_pdp, conv2d_input):
             assert m.f_input == 7.0
 
     config_pdp.quantization_parameters.layer_specific = {
-        'conv2d': {
-            'weight': {'integer_bits': 1.0, 'fractional_bits': 3.0},
-            'bias': {'integer_bits': 2.0, 'fractional_bits': 4.0},
+        "conv2d": {
+            "weight": {"integer_bits": 1.0, "fractional_bits": 3.0},
+            "bias": {"integer_bits": 2.0, "fractional_bits": 4.0},
         },
-        're_lu': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'average_pooling2d': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'activation': {"input": {'integer_bits': 0.0, 'fractional_bits': 3.0}},
+        "re_lu": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "average_pooling2d": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "activation": {"input": {"integer_bits": 0.0, "fractional_bits": 3.0}},
     }
     keras.backend.clear_session()
     inputs = keras.Input(shape=conv2d_input.shape[1:])
@@ -1710,7 +1710,6 @@ def test_avg_pool1d(config_pdp, conv1d_input):
 
 
 class DummyLayer(keras.layers.Layer):
-
     def __init__(self, *args, **kwargs):
         super().__init__()
         self.built = True
@@ -1735,7 +1734,7 @@ class DummyLayer(keras.layers.Layer):
 
 def test_avgpool_quant_called(config_pdp, conv1d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQAvgPool1d(config_pdp, KERNEL_SIZE, quantize_input=True)
         layer(conv1d_input)
         assert layer.input_quantizer.layer_called == 1
@@ -1757,7 +1756,7 @@ def test_avgpool_quant_called(config_pdp, conv1d_input):
 def test_batchnorm_quant_called(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
     axis = -1 if keras.backend.image_data_format() == "channels_last" else 1
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQBatchNormalization(config_pdp, axis=axis, quantize_input=True)
         layer(conv2d_input)
         assert layer.input_quantizer.layer_called == 1
@@ -1781,7 +1780,7 @@ def test_batchnorm_quant_called(config_pdp, conv2d_input):
 
 def test_pqconv2d_quant_called(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQConv2d(config_pdp, OUT_FEATURES, KERNEL_SIZE, quantize_input=True, use_bias=True)
         layer.post_pre_train_function()
         layer(conv2d_input)
@@ -1812,7 +1811,7 @@ def test_pqconv2d_quant_called(config_pdp, conv2d_input):
 def test_pqdepthwiseconv2d_quant_called(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
 
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQDepthwiseConv2d(config_pdp, KERNEL_SIZE, quantize_input=True, use_bias=True)
         layer.post_pre_train_function()
         layer(conv2d_input)
@@ -1842,7 +1841,7 @@ def test_pqdepthwiseconv2d_quant_called(config_pdp, conv2d_input):
 
 def test_pqconv1d_quant_called(config_pdp, conv1d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQConv1d(config_pdp, OUT_FEATURES, KERNEL_SIZE, quantize_input=True, use_bias=True)
         layer.post_pre_train_function()
         layer(conv1d_input)
@@ -1872,7 +1871,7 @@ def test_pqconv1d_quant_called(config_pdp, conv1d_input):
 
 def test_dense_quant_called(config_pdp, dense_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQDense(config_pdp, OUT_FEATURES, quantize_input=True, use_bias=True)
         layer.post_pre_train_function()
         layer(dense_input)
@@ -1905,7 +1904,7 @@ def test_layer_replacement_quant_called(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.quantize_input = True
     config_pdp.quantization_parameters.quantize_output = True
     config_pdp.quantization_parameters.use_high_granularity_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         inp = keras.Input(shape=conv2d_input.shape[1:])
         x = Conv2D(OUT_FEATURES, KERNEL_SIZE)(inp)
 

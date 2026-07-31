@@ -53,13 +53,13 @@ def _final_weight(layer: torch.nn.Module) -> np.ndarray:
 def _activation_numpy_fn(layer: PQActivation):
     """The numpy elementwise function for a named PQActivation (relu/tanh/gelu/...)."""
     name = layer.activation_name
-    fn = torch_numpy_unary_map.get(name) or torch_numpy_unary_map.get(name.replace('_', ''))
+    fn = torch_numpy_unary_map.get(name) or torch_numpy_unary_map.get(name.replace("_", ""))
     if fn is not None:
         return fn
-    if name == 'leaky_relu':
-        slope = float(getattr(layer.activation_function, 'negative_slope', 0.1015625))
+    if name == "leaky_relu":
+        slope = float(getattr(layer.activation_function, "negative_slope", 0.1015625))
         return lambda x: np.where(x < 0, x * slope, x)  # type: ignore
-    raise PQuantAlkaidError(f'Unsupported PQuant activation for Alkaid conversion: {name!r}')
+    raise PQuantAlkaidError(f"Unsupported PQuant activation for Alkaid conversion: {name!r}")
 
 
 def _table_fn(table):
@@ -68,7 +68,7 @@ def _table_fn(table):
 
     def apply_fn(v: np.ndarray) -> np.ndarray:
         with torch.no_grad():
-            t = torch.as_tensor(v, dtype=torch.float32, device='cpu')
+            t = torch.as_tensor(v, dtype=torch.float32, device="cpu")
             return fn(t).detach().cpu().numpy().astype(np.float64)
 
     return apply_fn
@@ -86,12 +86,12 @@ class ReplayPQuantDense(ReplayModuleBase):
 
     def call(self, input: FVArray) -> FVArray:
         layer = self.module
-        input = _replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        input = _replay_quantizer_if_enabled(layer, "input_quantizer", input, "quantize_input")
         out = input @ _final_weight(layer).T
         bias = _final_bias(layer)
         if bias.shape != ():
             out = out + bias
-        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, "output_quantizer", out, "quantize_output")
 
 
 class ReplayPQuantConv(ReplayModuleBase):
@@ -99,7 +99,7 @@ class ReplayPQuantConv(ReplayModuleBase):
 
     def call(self, input: FVArray) -> FVArray:
         layer = self.module
-        input = _replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        input = _replay_quantizer_if_enabled(layer, "input_quantizer", input, "quantize_input")
         out = conv_nd_replay(
             input,
             _final_weight(layer),
@@ -109,7 +109,7 @@ class ReplayPQuantConv(ReplayModuleBase):
             dilation=layer.dilation,
             groups=layer.groups,
         )
-        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, "output_quantizer", out, "quantize_output")
 
 
 class ReplayPQuantBatchNorm(ReplayBatchNorm):
@@ -128,7 +128,7 @@ class ReplayPQuantBatchNorm(ReplayBatchNorm):
 
     def call(self, input: FVArray) -> FVArray:
         layer = self.module
-        input = _replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        input = _replay_quantizer_if_enabled(layer, "input_quantizer", input, "quantize_input")
         return super().call(input)
 
 
@@ -137,7 +137,7 @@ class ReplayPQuantAvgPool(ReplayModuleBase):
 
     def call(self, input: FVArray) -> FVArray:
         layer = self.module
-        input = _replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        input = _replay_quantizer_if_enabled(layer, "input_quantizer", input, "quantize_input")
         out = replay_avg_pool(
             input,
             layer.kernel_size,
@@ -146,7 +146,7 @@ class ReplayPQuantAvgPool(ReplayModuleBase):
             layer.ceil_mode,
             layer.count_include_pad,
         )
-        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, "output_quantizer", out, "quantize_output")
 
 
 class ReplayPQuantActivation(ReplayModuleBase):
@@ -155,9 +155,9 @@ class ReplayPQuantActivation(ReplayModuleBase):
     def call(self, input: FVArray) -> FVArray:
         layer = self.module
         input = _scale_by_relu_multiplier(layer, input)
-        input = _replay_quantizer_if_enabled(layer, 'input_quantizer', input, 'quantize_input')
+        input = _replay_quantizer_if_enabled(layer, "input_quantizer", input, "quantize_input")
         out = _activation_numpy_fn(layer)(input)
-        return _replay_quantizer_if_enabled(layer, 'output_quantizer', out, 'quantize_output')
+        return _replay_quantizer_if_enabled(layer, "output_quantizer", out, "quantize_output")
 
 
 class ReplayPQuantSoftmax(ReplayModuleBase):
@@ -168,9 +168,9 @@ class ReplayPQuantSoftmax(ReplayModuleBase):
     def call(self, inputs: FVArray, mask=None) -> FVArray:
         module = self.module
         if mask is not None:
-            raise PQuantAlkaidError('PQSoftmax masks are not supported in Alkaid conversion.')
+            raise PQuantAlkaidError("PQSoftmax masks are not supported in Alkaid conversion.")
         if not module.built:
-            raise PQuantAlkaidError('PQSoftmax must be built (one real forward) before Alkaid conversion.')
+            raise PQuantAlkaidError("PQSoftmax must be built (one real forward) before Alkaid conversion.")
         return _replay_softmax(module, inputs, _table_fn)
 
 
@@ -179,7 +179,7 @@ def _patch_root_quantizer_trace() -> None:
     import alkaid.converter.builtin.torch.main as torch_main
 
     tracer_cls = torch_main.TorchALIRTracer
-    marker = '__alkaid_pquant_patched_root_quantizer__'
+    marker = "__alkaid_pquant_patched_root_quantizer__"
     if getattr(tracer_cls, marker, False):
         return
     original = tracer_cls.apply_model
@@ -191,7 +191,7 @@ def _patch_root_quantizer_trace() -> None:
                 inputs = (inputs,)
             replay = ReplayPQuantQuantizer(self.model)
             dump = replay(*inputs)
-            return {'inputs': tuple(inputs), 'quantizer/final': dump['final'], 'final': dump['final']}, ['final']
+            return {"inputs": tuple(inputs), "quantizer/final": dump["final"], "final": dump["final"]}, ["final"]
         return original(self, verbose, inputs)
 
     tracer_cls.apply_model = wrapped
@@ -249,11 +249,11 @@ def _register_functional_helpers() -> None:
     _functional_map.setdefault(torch.full, _replay_full)
     _functional_map.setdefault(torch.zeros_like, _replay_zeros_like)
     _functional_map.setdefault(torch.ones_like, _replay_ones_like)
-    _method_map.setdefault('pow', lambda receiver, exponent, **_kwargs: receiver**exponent)
+    _method_map.setdefault("pow", lambda receiver, exponent, **_kwargs: receiver**exponent)
 
 
 def register() -> None:
     """Entry point for Alkaid's ``alkaid_torch`` second-level plugin group."""
     _patch_root_quantizer_trace()
     _register_functional_helpers()
-    _mark_plugin_loaded('torch')
+    _mark_plugin_loaded("torch")
