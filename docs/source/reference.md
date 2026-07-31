@@ -203,7 +203,7 @@ Optionally, there is also FITCompress method implemented for PyTorch-only:
 - `PQAvgPool*D`: Average pooling layers.
 - `PQBatchNorm*D`: BatchNorm layers.
 - `PQDense`: Linear layer.
-- `PQActivation`: Activation layers (ReLU, Tanh, Leaky Relu, Gelu, Hard Tanh, or a user-provided activation function (Torch only) ).
+- `PQActivation`: Activation layers (ReLU, Tanh, Leaky Relu, Gelu, Hard Tanh, Softmax or a user-provided activation function (Torch only) ).
 - `MultiHeadAttention`: Multi-head attention layer.
 - `LayerNorm`: Layer normalization layer (Currently Torch only).
 
