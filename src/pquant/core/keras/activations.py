@@ -340,9 +340,18 @@ class PQSoftmax(keras.layers.Layer):
 
         self.input_quantizer = _data_quantizer(self.k_input, self.i_input, self.f_input)
         self.output_quantizer = _data_quantizer(self.k_output, self.i_output, self.f_output)
-        if self.use_hgq:
-            self.input_quantizer.build(input_shape)
-            self.output_quantizer.build(input_shape)
+        accum_shape = tuple(1 if i in self.axes else s for i, s in enumerate(input_shape))
+        self.input_quantizer.build(input_shape)
+        self.output_quantizer.build(input_shape)
+        if not self.exp_table.built:
+            self.exp_table.build(input_shape)
+        if not self.inv_table.built:
+            self.inv_table.build(accum_shape)
+        for table, shape in ((self.exp_table, input_shape), (self.inv_table, accum_shape)):
+            if table.quantize_input and not table.input_quantizer.built:
+                table.input_quantizer.build(shape)
+            if table.quantize_output and not table.output_quantizer.built:
+                table.output_quantizer.build(shape)
         super().build(input_shape)
 
     def get_input_quantization_bits(self):
