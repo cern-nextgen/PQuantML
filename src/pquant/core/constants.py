@@ -1,3 +1,5 @@
+from enum import Enum
+
 import optuna
 
 from pquant.data_models.pruning_model import (
@@ -10,15 +12,13 @@ from pquant.data_models.pruning_model import (
     PDPPruningModel,
     WandaPruningModel,
 )
-from pquant.pruning_methods.constraint_functions import (
-    EqualityConstraint,
-    GreaterThanOrEqualConstraint,
-    LessThanOrEqualConstraint,
-)
-from pquant.pruning_methods.metric_functions import (
-    StructuredSparsityMetric,
-    UnstructuredSparsityMetric,
-)
+
+
+class QuantizationGranularity(str, Enum):
+    PER_TENSOR = "per_tensor"
+    PER_CHANNEL = "per_channel"
+    PER_WEIGHT = "per_weight"
+
 
 PRUNING_MODEL_REGISTRY = {
     "cs": CSPruningModel,
@@ -47,21 +47,9 @@ TRACKING_URI = "http://0.0.0.0:5000/"
 DB_STORAGE = "sqlite:///optuna_study.db"
 
 TORCH_BACKEND = "torch"
-TF_BACKEND = 'tensorflow'
+TF_BACKEND = "tensorflow"
 
 FINETUNING_DIRECTION = {"maximize", "minimize"}
 CONFIG_FILE = "config.yaml"
 
 N_JOBS = 1
-
-
-METRIC_REGISTRY = {
-    "UnstructuredSparsity": UnstructuredSparsityMetric,
-    "StructuredSparsity": StructuredSparsityMetric,
-}
-
-CONSTRAINT_REGISTRY = {
-    "Equality": EqualityConstraint,
-    "LessThanOrEqual": LessThanOrEqualConstraint,
-    "GreaterThanOrEqual": GreaterThanOrEqualConstraint,
-}

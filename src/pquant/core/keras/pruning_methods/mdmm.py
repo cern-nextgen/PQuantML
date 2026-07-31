@@ -8,7 +8,26 @@ import inspect
 import keras
 from keras import ops
 
-from pquant.core.constants import CONSTRAINT_REGISTRY, METRIC_REGISTRY
+from pquant.core.keras.pruning_methods.constraint_functions import (
+    EqualityConstraint,
+    GreaterThanOrEqualConstraint,
+    LessThanOrEqualConstraint,
+)
+from pquant.core.keras.pruning_methods.metric_functions import (
+    StructuredSparsityMetric,
+    UnstructuredSparsityMetric,
+)
+
+METRIC_REGISTRY = {
+    "UnstructuredSparsity": UnstructuredSparsityMetric,
+    "StructuredSparsity": StructuredSparsityMetric,
+}
+
+CONSTRAINT_REGISTRY = {
+    "Equality": EqualityConstraint,
+    "LessThanOrEqual": LessThanOrEqualConstraint,
+    "GreaterThanOrEqual": GreaterThanOrEqualConstraint,
+}
 
 # -------------------------------------------------------------------
 #                   MDMM Layer
@@ -28,6 +47,10 @@ class MDMM(keras.layers.Layer):
         self.constraint_layer = None
         self._is_finetuning = False
         self._is_pretraining = True
+        # TEMP: cache last penalty so calculate_additional_loss() works in
+        # custom training loops via get_model_losses(). Remove once the
+        # add_loss()/model.fit path is the only supported path.
+        self._last_penalty = None
 
     def build(self, input_shape):
         pruning_parameters = self.config.pruning_parameters
@@ -94,8 +117,11 @@ class MDMM(keras.layers.Layer):
         self.mask.assign(ops.where(not_active, ops.convert_to_tensor(self.mask), hard_mask))
 
         penalty = ops.sum(self.constraint_layer(weight))
-        self.add_loss(ops.where(not_active, ops.zeros_like(penalty), penalty))
-
+        gated_penalty = ops.where(not_active, ops.zeros_like(penalty), penalty)
+        self.add_loss(gated_penalty)
+        # TEMP: cache for calculate_additional_loss() — remove with the
+        # _last_penalty attribute once custom-loop callers move to model.losses.
+        self._last_penalty = gated_penalty
         return ops.where(self.is_finetuning, weight * hard_mask, weight)
 
     def get_hard_mask(self, weight=None):
@@ -109,7 +135,12 @@ class MDMM(keras.layers.Layer):
 
     def calculate_additional_loss(self):
         # Loss is added via self.add_loss() in call() for model.fit.
-        # For custom training loops, accumulate model.losses from the last forward pass instead.
+        # TEMP: also return the cached penalty so custom training loops using
+        # get_model_losses() see the constraint term. Remove this branch (and
+        # the _last_penalty cache) once those callers switch to model.losses;
+        # then this can revert to `return 0.0`.
+        if self._last_penalty is not None:
+            return self._last_penalty
         return 0.0
 
     def pre_epoch_function(self, epoch, total_epochs):

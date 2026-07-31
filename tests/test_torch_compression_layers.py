@@ -1,8 +1,8 @@
-import keras
+import os
+
 import numpy as np
 import pytest
 import torch
-from keras import ops
 from torch import nn
 from torch.nn import (
     AvgPool2d,
@@ -14,10 +14,12 @@ from torch.nn import (
     Tanh,
 )
 
-from pquant import post_training_prune
-from pquant.activations import PQActivation
-from pquant.core.hyperparameter_optimization import PQConfig
-from pquant.layers import (
+os.environ["KERAS_BACKEND"] = "torch"
+
+import keras  # noqa: E402
+from keras import ops  # noqa: E402
+from pquant.activations import PQActivation  # noqa: E402
+from pquant.layers import (  # noqa: E402
     PQAvgPool1d,
     PQAvgPool2d,
     PQBatchNorm2d,
@@ -32,6 +34,9 @@ from pquant.layers import (
     post_pretrain_functions,
     pre_finetune_functions,
 )
+
+from pquant import post_training_prune  # noqa: E402
+from pquant.core.hyperparameter_optimization import PQConfig  # noqa: E402
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32
@@ -599,6 +604,8 @@ def test_trigger_post_pretraining(config_pdp, dense_input):
 def test_hgq_weight_shape(config_pdp, dense_input):
     config_pdp.quantization_parameters.enable_quantization = True
     config_pdp.quantization_parameters.use_high_granularity_quantization = True
+    # Per-weight granularity → one bit-width per weight element.
+    config_pdp.quantization_parameters.granularity = "per_weight"
     layer = Linear(IN_FEATURES, OUT_FEATURES, bias=False)
     layer2 = Linear(OUT_FEATURES, OUT_FEATURES, bias=False)
     model = TestModel2(layer, layer2, "relu", "tanh")
@@ -606,20 +613,22 @@ def test_hgq_weight_shape(config_pdp, dense_input):
     model = add_compression_layers(model, config_pdp, dense_input.shape)
     post_pretrain_functions(model, config_pdp)
 
-    assert model.submodule.weight_quantizer.quantizer.quantizer._i.shape == model.submodule.weight.shape
-    assert model.activation.input_quantizer.quantizer.quantizer._i.shape == (1, OUT_FEATURES)
+    assert model.submodule.weight_quantizer.quantizer._i.shape == model.submodule.weight.shape
+    assert model.activation.input_quantizer.quantizer._i.shape == (1, OUT_FEATURES)
 
 
 def test_qbn_build(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
     config_pdp.quantization_parameters.use_high_granularity_quantization = True
+    # Per-weight granularity → one bit-width per conv-kernel element.
+    config_pdp.quantization_parameters.granularity = "per_weight"
     layer = Conv2d(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, bias=False)
     layer2 = BatchNorm2d(OUT_FEATURES)
     model = TestModel2(layer, layer2, None, "tanh")
 
     model = add_compression_layers(model, config_pdp, conv2d_input.shape)
     post_pretrain_functions(model, config_pdp)
-    assert model.submodule.weight_quantizer.quantizer.quantizer._i.shape == model.submodule.weight.shape
+    assert model.submodule.weight_quantizer.quantizer._i.shape == model.submodule.weight.shape
 
 
 def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
@@ -634,13 +643,13 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
         if isinstance(m, (PQWeightBiasBase)):
             assert m.i_weight == 0.0
             assert m.i_bias == 0.0
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.i == 0.0)
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.i == 0.0)
+            assert torch.all(m.weight_quantizer.quantizer.i == 0.0)
+            assert torch.all(m.weight_quantizer.quantizer.i == 0.0)
 
             assert m.f_weight == 7.0
             assert m.f_bias == 7.0
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.f == 7.0)
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.f == 7.0)
+            assert torch.all(m.weight_quantizer.quantizer.f == 7.0)
+            assert torch.all(m.weight_quantizer.quantizer.f == 7.0)
         elif isinstance(m, PQActivation) and m.activation_name == "tanh":
             k_input, i_input, f_input = m.get_input_quantization_bits()
 
@@ -655,17 +664,17 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
         elif isinstance(m, PQAvgPool2d):
             assert m.i_input == 0.0
             assert m.f_input == 7.0
-            assert torch.all(m.input_quantizer.quantizer.quantizer.i == 0.0)
-            assert torch.all(m.input_quantizer.quantizer.quantizer.f == 7.0)
+            assert torch.all(m.input_quantizer.quantizer.i == 0.0)
+            assert torch.all(m.input_quantizer.quantizer.f == 7.0)
 
     config_pdp.quantization_parameters.layer_specific = {
-        'submodule': {
-            'weight': {'integer_bits': 1, 'fractional_bits': 3},
-            'bias': {'integer_bits': 2, 'fractional_bits': 4},
+        "submodule": {
+            "weight": {"integer_bits": 1, "fractional_bits": 3},
+            "bias": {"integer_bits": 2, "fractional_bits": 4},
         },
-        'submodule2': {"input": {'integer_bits': 1, 'fractional_bits': 3}},
-        'activation': {"input": {'integer_bits': 1, 'fractional_bits': 4}},
-        'activation2': {"input": {'integer_bits': 0, 'fractional_bits': 3}},
+        "submodule2": {"input": {"integer_bits": 1, "fractional_bits": 3}},
+        "activation": {"input": {"integer_bits": 1, "fractional_bits": 4}},
+        "activation2": {"input": {"integer_bits": 0, "fractional_bits": 3}},
     }
 
     model = TestModel2(layer, layer2, "relu", "tanh")
@@ -675,13 +684,13 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
         if isinstance(m, (PQWeightBiasBase)):
             assert m.i_weight == 1.0
             assert m.i_bias == 2.0
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.i == 1.0)
-            assert torch.all(m.bias_quantizer.quantizer.quantizer.i == 2.0)
+            assert torch.all(m.weight_quantizer.quantizer.i == 1.0)
+            assert torch.all(m.bias_quantizer.quantizer.i == 2.0)
 
             assert m.f_weight == 3.0
             assert m.f_bias == 4.0
-            assert torch.all(m.weight_quantizer.quantizer.quantizer.f == 3.0)
-            assert torch.all(m.bias_quantizer.quantizer.quantizer.f == 4.0)
+            assert torch.all(m.weight_quantizer.quantizer.f == 3.0)
+            assert torch.all(m.bias_quantizer.quantizer.f == 4.0)
         elif isinstance(m, PQActivation) and m.activation_name == "tanh":
             k_input, i_input, f_input = m.get_input_quantization_bits()
 
@@ -695,8 +704,8 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
         elif isinstance(m, PQAvgPool2d):
             assert m.i_input == 1.0
             assert m.f_input == 3.0
-            assert torch.all(m.input_quantizer.quantizer.quantizer.i == 1.0)
-            assert torch.all(m.input_quantizer.quantizer.quantizer.f == 3.0)
+            assert torch.all(m.input_quantizer.quantizer.i == 1.0)
+            assert torch.all(m.input_quantizer.quantizer.f == 3.0)
 
 
 def test_disable_pruning_from_single_layer(config_pdp, conv2d_input):
@@ -739,13 +748,13 @@ def test_set_activation_custom_bits_quantizer(config_pdp, conv2d_input):
             assert m.f_input == 8.0
 
     config_pdp.quantization_parameters.layer_specific = {
-        'submodule': {
-            'weight': {'integer_bits': 1.0, 'fractional_bits': 3.0},
-            'bias': {'integer_bits': 1.0, 'fractional_bits': 3.0},
+        "submodule": {
+            "weight": {"integer_bits": 1.0, "fractional_bits": 3.0},
+            "bias": {"integer_bits": 1.0, "fractional_bits": 3.0},
         },
-        'submodule2': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'activation': {"input": {'integer_bits': 0.0, 'fractional_bits': 4.0}},
-        'activation2': {"input": {'integer_bits': 0.0, 'fractional_bits': 3.0}},
+        "submodule2": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "activation": {"input": {"integer_bits": 0.0, "fractional_bits": 4.0}},
+        "activation2": {"input": {"integer_bits": 0.0, "fractional_bits": 3.0}},
     }
 
     model = TestModel2(layer, layer2, "relu", "tanh")
@@ -1166,7 +1175,6 @@ def test_batchnorm2d_direct_hgq(config_pdp, conv2d_input):
 
 
 class DummyLayer(nn.Module):
-
     def __init__(self, is_pretraining=False):
         super().__init__()
         self.built = True
@@ -1736,7 +1744,6 @@ def dummy_hgq_loss():
 
 
 class ModelWithAllLayers(nn.Module):
-
     def __init__(self, use_bias=True):
         super().__init__()
         self.conv = Conv2d(IN_FEATURES, OUT_FEATURES, KERNEL_SIZE, bias=use_bias)

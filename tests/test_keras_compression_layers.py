@@ -15,6 +15,23 @@ from keras.layers import (
     ReLU,
     SeparableConv2D,
 )
+from pquant.activations import PQActivation
+from pquant.layers import (
+    PQAvgPool1d,
+    PQAvgPool2d,
+    PQBatchNormalization,
+    PQConv1d,
+    PQConv2d,
+    PQDense,
+    PQDepthwiseConv2d,
+    PQMultiheadAttention,
+    PQSeparableConv2d,
+    add_compression_layers,
+    apply_final_compression,
+    get_layer_keep_ratio,
+    post_pretrain_functions,
+    pre_finetune_functions,
+)
 
 from pquant import (
     ap_config,
@@ -25,23 +42,7 @@ from pquant import (
     pdp_config,
     wanda_config,
 )
-from pquant.activations import PQActivation
 from pquant.core.hyperparameter_optimization import PQConfig
-from pquant.layers import (
-    PQAvgPool1d,
-    PQAvgPool2d,
-    PQBatchNormalization,
-    PQConv1d,
-    PQConv2d,
-    PQDense,
-    PQDepthwiseConv2d,
-    PQSeparableConv2d,
-    add_compression_layers,
-    apply_final_compression,
-    get_layer_keep_ratio,
-    post_pretrain_functions,
-    pre_finetune_functions,
-)
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32
@@ -301,8 +302,7 @@ def test_separable_conv2d_call(config_pdp, conv2d_input):
         layer_to_replace.pointwise_constraint,
         layer_to_replace.bias_constraint,
     )
-    layer.depthwise_conv.build(conv2d_input.shape)
-    layer.pointwise_conv.build(conv2d_input.shape)
+    layer.build(conv2d_input.shape)
     layer.depthwise_conv._kernel.assign(layer_to_replace.depthwise_kernel)
     layer.pointwise_conv._kernel.assign(layer_to_replace.pointwise_kernel)
 
@@ -316,8 +316,14 @@ def test_separable_conv2d_add_remove_layers(config_pdp, conv2d_input):
     inputs = keras.Input(shape=conv2d_input.shape[1:])
     out = SeparableConv2D(OUT_FEATURES, KERNEL_SIZE, use_bias=False, padding="same")(inputs)
     model = keras.Model(inputs=inputs, outputs=out, name="test_conv2d")
+    depthwise_kernel = ops.copy(model.layers[1].depthwise_kernel)
+    pointwise_kernel = ops.copy(model.layers[1].pointwise_kernel)
     model = add_compression_layers(model, config_pdp, conv2d_input.shape)
     model(conv2d_input)
+
+    # The original layer's weights must survive the replacement.
+    assert ops.all(ops.equal(model.layers[1].depthwise_conv._kernel, depthwise_kernel))
+    assert ops.all(ops.equal(model.layers[1].pointwise_conv._kernel, pointwise_kernel))
 
     post_pretrain_functions(model, config_pdp)
     pre_finetune_functions(model)
@@ -1387,6 +1393,8 @@ def test_trigger_post_pretraining(config_pdp, conv2d_input):
 def test_hgq_weight_shape(config_pdp, dense_input):
     config_pdp.quantization_parameters.enable_quantization = True
     config_pdp.quantization_parameters.use_high_granularity_quantization = True
+    # Per-weight granularity → one bit-width per kernel element.
+    config_pdp.quantization_parameters.granularity = "per_weight"
     inputs = keras.Input(shape=dense_input.shape[1:])
     out = Dense(OUT_FEATURES, use_bias=False)(inputs)
     act1 = Activation("tanh")(out)
@@ -1466,13 +1474,13 @@ def test_set_activation_custom_bits_hgq(config_pdp, conv2d_input):
             assert ops.all(f_input == 7.0)
 
     config_pdp.quantization_parameters.layer_specific = {
-        'conv2d': {
-            'weight': {'integer_bits': 1.0, 'fractional_bits': 3.0},
-            'bias': {'integer_bits': 2.0, 'fractional_bits': 4.0},
+        "conv2d": {
+            "weight": {"integer_bits": 1.0, "fractional_bits": 3.0},
+            "bias": {"integer_bits": 2.0, "fractional_bits": 4.0},
         },
-        're_lu': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'average_pooling2d': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'activation': {"input": {'integer_bits': 0.0, 'fractional_bits': 3.0}},
+        "re_lu": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "average_pooling2d": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "activation": {"input": {"integer_bits": 0.0, "fractional_bits": 3.0}},
     }
     keras.backend.clear_session()
     inputs = keras.Input(shape=conv2d_input.shape[1:])
@@ -1533,13 +1541,13 @@ def test_set_activation_custom_bits_quantizer(config_pdp, conv2d_input):
             assert m.f_input == 7.0
 
     config_pdp.quantization_parameters.layer_specific = {
-        'conv2d': {
-            'weight': {'integer_bits': 1.0, 'fractional_bits': 3.0},
-            'bias': {'integer_bits': 2.0, 'fractional_bits': 4.0},
+        "conv2d": {
+            "weight": {"integer_bits": 1.0, "fractional_bits": 3.0},
+            "bias": {"integer_bits": 2.0, "fractional_bits": 4.0},
         },
-        're_lu': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'average_pooling2d': {"input": {'integer_bits': 1.0, 'fractional_bits': 3.0}},
-        'activation': {"input": {'integer_bits': 0.0, 'fractional_bits': 3.0}},
+        "re_lu": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "average_pooling2d": {"input": {"integer_bits": 1.0, "fractional_bits": 3.0}},
+        "activation": {"input": {"integer_bits": 0.0, "fractional_bits": 3.0}},
     }
     keras.backend.clear_session()
     inputs = keras.Input(shape=conv2d_input.shape[1:])
@@ -1707,7 +1715,6 @@ def test_avg_pool1d(config_pdp, conv1d_input):
 
 
 class DummyLayer(keras.layers.Layer):
-
     def __init__(self, *args, **kwargs):
         super().__init__()
         self.built = True
@@ -1732,7 +1739,7 @@ class DummyLayer(keras.layers.Layer):
 
 def test_avgpool_quant_called(config_pdp, conv1d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQAvgPool1d(config_pdp, KERNEL_SIZE, quantize_input=True)
         layer(conv1d_input)
         assert layer.input_quantizer.layer_called == 1
@@ -1754,7 +1761,7 @@ def test_avgpool_quant_called(config_pdp, conv1d_input):
 def test_batchnorm_quant_called(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
     axis = -1 if keras.backend.image_data_format() == "channels_last" else 1
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQBatchNormalization(config_pdp, axis=axis, quantize_input=True)
         layer(conv2d_input)
         assert layer.input_quantizer.layer_called == 1
@@ -1778,7 +1785,7 @@ def test_batchnorm_quant_called(config_pdp, conv2d_input):
 
 def test_pqconv2d_quant_called(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQConv2d(config_pdp, OUT_FEATURES, KERNEL_SIZE, quantize_input=True, use_bias=True)
         layer.post_pre_train_function()
         layer(conv2d_input)
@@ -1809,7 +1816,7 @@ def test_pqconv2d_quant_called(config_pdp, conv2d_input):
 def test_pqdepthwiseconv2d_quant_called(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.enable_quantization = True
 
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQDepthwiseConv2d(config_pdp, KERNEL_SIZE, quantize_input=True, use_bias=True)
         layer.post_pre_train_function()
         layer(conv2d_input)
@@ -1839,7 +1846,7 @@ def test_pqdepthwiseconv2d_quant_called(config_pdp, conv2d_input):
 
 def test_pqconv1d_quant_called(config_pdp, conv1d_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQConv1d(config_pdp, OUT_FEATURES, KERNEL_SIZE, quantize_input=True, use_bias=True)
         layer.post_pre_train_function()
         layer(conv1d_input)
@@ -1869,7 +1876,7 @@ def test_pqconv1d_quant_called(config_pdp, conv1d_input):
 
 def test_dense_quant_called(config_pdp, dense_input):
     config_pdp.quantization_parameters.enable_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         layer = PQDense(config_pdp, OUT_FEATURES, quantize_input=True, use_bias=True)
         layer.post_pre_train_function()
         layer(dense_input)
@@ -1902,7 +1909,7 @@ def test_layer_replacement_quant_called(config_pdp, conv2d_input):
     config_pdp.quantization_parameters.quantize_input = True
     config_pdp.quantization_parameters.quantize_output = True
     config_pdp.quantization_parameters.use_high_granularity_quantization = True
-    with patch('pquant.layers.Quantizer', DummyLayer):
+    with patch("pquant.layers.Quantizer", DummyLayer):
         inp = keras.Input(shape=conv2d_input.shape[1:])
         x = Conv2D(OUT_FEATURES, KERNEL_SIZE)(inp)
 
@@ -2134,3 +2141,149 @@ def test_model_fit(config_fn):
     model.compile(optimizer="adam", loss="mse", jit_compile=False)
     callback = PQuantCallback(config, log_ebops=False, log_keep_ratio=False)
     model.fit(dummy_x, dummy_y, epochs=callback.total_epochs, callbacks=[callback], verbose=0)
+
+
+def build_single_layer_model(layer_type, config):
+    channels_first = keras.backend.image_data_format() == "channels_first"
+    conv2d_shape = (IN_FEATURES, 8, 8) if channels_first else (8, 8, IN_FEATURES)
+    conv1d_shape = (IN_FEATURES, STEPS) if channels_first else (STEPS, IN_FEATURES)
+    bn_axis = 1 if channels_first else -1
+
+    if layer_type == "dense":
+        inputs = keras.Input(shape=(IN_FEATURES,))
+        outputs = PQDense(config, units=OUT_FEATURES)(inputs)
+    elif layer_type == "conv1d":
+        inputs = keras.Input(shape=conv1d_shape)
+        outputs = PQConv1d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
+    elif layer_type == "conv2d":
+        inputs = keras.Input(shape=conv2d_shape)
+        outputs = PQConv2d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
+    elif layer_type == "depthwise_conv2d":
+        inputs = keras.Input(shape=conv2d_shape)
+        outputs = PQDepthwiseConv2d(config, KERNEL_SIZE, padding="same")(inputs)
+    elif layer_type == "separable_conv2d":
+        inputs = keras.Input(shape=conv2d_shape)
+        outputs = PQSeparableConv2d(config, OUT_FEATURES, KERNEL_SIZE, padding="same")(inputs)
+    elif layer_type == "batchnorm":
+        inputs = keras.Input(shape=conv2d_shape)
+        outputs = PQBatchNormalization(config, axis=bn_axis)(inputs)
+    elif layer_type == "avgpool1d":
+        inputs = keras.Input(shape=conv1d_shape)
+        outputs = PQAvgPool1d(config, pool_size=2, strides=2, padding="same")(inputs)
+    elif layer_type == "avgpool2d":
+        inputs = keras.Input(shape=conv2d_shape)
+        outputs = PQAvgPool2d(config, pool_size=2, strides=2, padding="same")(inputs)
+    elif layer_type in ("activation_relu", "activation_tanh", "activation_hard_tanh"):
+        activation = layer_type.replace("activation_", "")
+        inputs = keras.Input(shape=(IN_FEATURES,))
+        outputs = PQActivation(config, activation=activation, quantize_input=True, quantize_output=True)(inputs)
+    elif layer_type == "mha":
+        inputs = keras.Input(shape=(STEPS, IN_FEATURES))
+        outputs = PQMultiheadAttention(config, embed_dim=IN_FEATURES, num_heads=2)(inputs)[0]
+    else:
+        raise ValueError(f"unknown layer type {layer_type}")
+
+    model = keras.Model(inputs, outputs)
+    dummy = np.zeros((1,) + tuple(inputs.shape[1:]), dtype=np.float32)
+    return model, dummy
+
+
+def randomize_weights(model, seed):
+    rng = np.random.default_rng(seed)
+    for w in model.weights:
+        # Lifecycle flags must keep their 0/1 values.
+        if w.name.endswith(("is_pretraining", "is_finetuning")):
+            continue
+        w.assign(rng.standard_normal(w.shape).astype(w.dtype))
+
+
+def assert_weights_equal(model, reloaded, label):
+    assert len(model.weights) == len(reloaded.weights), f"[{label}] weight count mismatch"
+    for orig_w, loaded_w in zip(model.weights, reloaded.weights):
+        np.testing.assert_array_equal(
+            np.array(orig_w),
+            np.array(loaded_w),
+            err_msg=f"[{label}] Weight mismatch: {orig_w.name}",
+        )
+
+
+LAYER_TYPES = [
+    "dense",
+    "conv1d",
+    "conv2d",
+    "depthwise_conv2d",
+    "separable_conv2d",
+    "batchnorm",
+    "avgpool1d",
+    "avgpool2d",
+    "activation_relu",
+    "activation_tanh",
+    "activation_hard_tanh",
+    "mha",
+]
+
+
+@pytest.mark.parametrize("use_hgq", [False, True], ids=["kif", "hgq"])
+@pytest.mark.parametrize("layer_type", LAYER_TYPES)
+def test_layer_type_serialization(tmp_path, layer_type, use_hgq):
+    """Every PQ layer type must survive a full .keras save/load round-trip.
+
+    Covers all quantizer variables (k/i/f/b, HGQ bitwidth variables) and pruning
+    state carried as model weights, at each lifecycle stage.
+    """
+    # dst: no global pruning setup, so single-layer models without a prunable
+    # weight layer (batchnorm/pool/activation/mha) pass the lifecycle functions.
+    config = dst_config()
+    config.quantization_parameters.enable_quantization = True
+    config.quantization_parameters.use_high_granularity_quantization = use_hgq
+
+    model, dummy = build_single_layer_model(layer_type, config)
+    model(dummy)
+    randomize_weights(model, seed=42)
+
+    def roundtrip(label):
+        save_path = tmp_path / f"{label}.keras"
+        model.save(save_path)
+        reloaded = keras.models.load_model(save_path)
+        assert_weights_equal(model, reloaded, f"{layer_type}/{label}")
+        # The reloaded model must be usable, not just structurally equal.
+        np.testing.assert_allclose(
+            np.array(model(dummy)),
+            np.array(reloaded(dummy)),
+            rtol=0,
+            atol=0,
+            err_msg=f"[{layer_type}/{label}] forward pass mismatch after reload",
+        )
+
+    roundtrip("initial")
+    post_pretrain_functions(model, config)
+    roundtrip("post_pretrain")
+    pre_finetune_functions(model)
+    roundtrip("pre_finetune")
+    apply_final_compression(model)
+    roundtrip("final_compression")
+
+
+@pytest.mark.parametrize("use_hgq", [False, True], ids=["kif", "hgq"])
+@pytest.mark.parametrize("layer_type", LAYER_TYPES)
+def test_layer_type_checkpoint_save_load(tmp_path, layer_type, use_hgq):
+    """Every PQ layer type must survive a save_weights/load_weights round-trip."""
+    # dst: no global pruning setup, so single-layer models without a prunable
+    # weight layer (batchnorm/pool/activation/mha) pass the lifecycle functions.
+    config = dst_config()
+    config.quantization_parameters.enable_quantization = True
+    config.quantization_parameters.use_high_granularity_quantization = use_hgq
+
+    model, dummy = build_single_layer_model(layer_type, config)
+    model(dummy)
+    randomize_weights(model, seed=0)
+    original_weights = [np.array(w) for w in model.weights]
+
+    path = str(tmp_path / "ckpt.weights.h5")
+    model.save_weights(path)
+    for w in model.weights:
+        w.assign(np.zeros(w.shape, dtype=w.dtype))
+    model.load_weights(path)
+
+    for orig, w in zip(original_weights, model.weights):
+        np.testing.assert_array_equal(orig, np.array(w), err_msg=f"[{layer_type}] Checkpoint weight mismatch: {w.name}")

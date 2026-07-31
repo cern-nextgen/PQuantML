@@ -174,7 +174,7 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
             config,
         )
         # Now add the layer specific configuration to the model
-        # add_layer_specific_quantization_to_model(trained_uncompressed_model, config)
+        # _add_layer_specific_quantization_to_model(trained_uncompressed_model, config)
 
     logging.info("Layerwise quantization bits after FITcompress : ", config.quantization_parameters.layer_specific)
 
@@ -184,7 +184,6 @@ def call_fitcompress(config, trained_uncompressed_model, train_loader, loss_func
 
 
 class node:
-
     def __init__(
         self,
         matrices_params_layerwise,
@@ -232,7 +231,7 @@ class node:
         self.unquantized_weights = unquantized_weights
         self.int_bits = int_bits
         self.frac_bits = frac_bits
-        self.key = ''.join(random.choices(string.ascii_uppercase + string.digits, k=20))
+        self.key = "".join(random.choices(string.ascii_uppercase + string.digits, k=20))
 
     def extract_config_from_node(self, layer_names):
         """
@@ -250,13 +249,12 @@ class node:
             layer_name: [i_bits, f_bits] for layer_name, i_bits, f_bits in zip(layer_names, self.int_bits, self.frac_bits)
         }
 
-        config = {'quant_config': quant_config, 'pruning_metrics': self.pruning_metrics}
+        config = {"quant_config": quant_config, "pruning_metrics": self.pruning_metrics}
 
         return config
 
 
 class FITcompress:
-
     def __init__(self, model, device, dataloader, criterion, config, layerwise_pruning=False, input_shape=None):
         """
         Calculate initial EF of the uncompressed model and set up quantization &
@@ -320,7 +318,7 @@ class FITcompress:
         )
 
         # for N:M pruning in Wanda, use 50% pruning cap during FITcompress
-        if self.config.pruning_parameters.pruning_method == 'wanda' and type(self.config.pruning_parameters.N) is int:
+        if self.config.pruning_parameters.pruning_method == "wanda" and type(self.config.pruning_parameters.N) is int:
             self.pruning_schedule = 0.5 * (
                 1
                 - np.logspace(
@@ -333,15 +331,15 @@ class FITcompress:
 
         # Dictionary structure allows us to possibly iterate over multiple different pruning metrics
         # but currently only one as in FITcompress, the target pruning sparsity, i.e. percentage
-        pruning_metrics = {'percentage': 0}
+        pruning_metrics = {"percentage": 0}
 
         # If we want to find sparsity targets per layer (not part of FITcompress paper)
         if layerwise_pruning:
             self.pruning_schedulers_layerwise = self.get_pruning_schedulers_layer_specific(
-                matrices_params_layerwise, None, mode='fit'
+                matrices_params_layerwise, None, mode="fit"
             )
             # Add the layer-specific starting pruning percentages to the current metric
-            pruning_metrics = pruning_metrics | {f'{self.layer_names[i]}_percentage': 0 for i in range(self.n_layers)}
+            pruning_metrics = pruning_metrics | {f"{self.layer_names[i]}_percentage": 0 for i in range(self.n_layers)}
 
         # Initialize the first node in the compression space
         self.initial_node = node(
@@ -368,7 +366,7 @@ class FITcompress:
         # Intialize a list to store nodes that can be traversed during the path finding process
         self.potential_nodes = [self.initial_node]
 
-    def get_pruning_schedulers_layer_specific(self, matrices_params_layerwise, global_sparsity_scheduler, mode='fit'):
+    def get_pruning_schedulers_layer_specific(self, matrices_params_layerwise, global_sparsity_scheduler, mode="fit"):
         """
         Calculates layer-specific pruning schedulers. The idea is that layers with weights
         that are not that much affected by pertubation should be pruned more/faster than layers with weights
@@ -383,7 +381,7 @@ class FITcompress:
         """
 
         schedulers = {}
-        if mode == 'fit':
+        if mode == "fit":
             # Get the layer-wise FIT scores of the initial model
             _, FIT_layerwise = self.fit_computer.get_FIT_old(
                 FeM=self.FeM, params_after=matrices_params_layerwise, same_theta=True
@@ -396,7 +394,6 @@ class FITcompress:
             max_importance = max(FIT_layerwise_summed)
 
             for layer_idx, importance in enumerate(FIT_layerwise_summed):
-
                 # Scale importance between 0 and 1
                 importance_ratio = (importance - min_importance) / (max_importance - min_importance)
 
@@ -452,7 +449,7 @@ class FITcompress:
         for _, module in model.named_modules():
             if isinstance(module, (PQDense, PQConv2d)):
                 for name_param, matrix_param in list(module.named_parameters()):
-                    if name_param.endswith('_weight'):
+                    if name_param.endswith("_weight"):
                         matrix_param.data = nn.parameter.Parameter(params[i].to(self.device))
                         matrix_param.collect = True
                         i += 1
@@ -643,7 +640,6 @@ class FITcompress:
         current_node_matrices_params_layerwise = []
         # Now iterate through all layers
         for idx, curr_pruning_percentage in enumerate(pruning_metrics.values()):
-
             if idx == 0:  # Global pruning percentage
                 continue
 
@@ -768,7 +764,7 @@ class FITcompress:
         """
         iterations = 0
         while len(self.potential_nodes) > 0 and iterations < 1000:
-            logging.info(f'Iteration : {iterations} ')
+            logging.info(f"Iteration : {iterations} ")
 
             next_best_node = None
 
@@ -777,7 +773,6 @@ class FITcompress:
             for p_node in self.potential_nodes:
                 # If we find a node with wanted compression rate, we can return it and stop the A* algorithm
                 if p_node.curr_compression_rate < self.compression_goal:
-
                     logging.info(
                         f"Optimal node found with full distance {p_node.full_dist}, "
                         f"compression rate {p_node.curr_compression_rate}, "
@@ -798,10 +793,6 @@ class FITcompress:
                     )
 
                     self.assign_parameters(self.model, params_quantized_unpruned)
-
-                    self.post_fitcompress_calibration(
-                        p_node.extract_config_from_node(self.layer_names)['quant_config'], config
-                    )
 
                     return (
                         p_node,
@@ -866,7 +857,6 @@ class FITcompress:
         """
 
         if self.config.fitcompress_parameters.approximate:
-
             # Update FeM for the best node and use it when creating the neighbours for quantization.
             # This leads to num_layers less FIT calculations, as we do not need to calculate the FeM again,
             # which reduces runtime
@@ -889,7 +879,6 @@ class FITcompress:
         logging.info("Current node states for quantization & pruning: ", current_node_state)
         if self.config.fitcompress_parameters.optimize_quantization:
             for layer_idx in range(self.n_layers):
-
                 # Set neighbour state to current state
                 neighbour_node_state = current_node_state.copy()
 
@@ -934,7 +923,6 @@ class FITcompress:
                     self.potential_nodes.append(neighbour_node)
 
         if self.config.fitcompress_parameters.optimize_pruning:
-
             # Set neighbour state to current state
             neighbour_node_state = current_node_state.copy()
 
@@ -973,7 +961,6 @@ class FITcompress:
                         current_node=current_node, pruning_metrics=neighbour_node_pruning_metrics
                     )
                 else:
-
                     neighbour_node_parameters_layerwise, neighbour_node_unquantized_parameters_layerwise = self.add_pruning(
                         current_node=current_node,
                         params=current_node.parameters.copy(),
@@ -1169,7 +1156,6 @@ class FITcompress:
 
 
 class FIT:
-
     def __init__(self, model, device, input_spec):
         """
         Initialize the FIT class, which is used to compute the FIT values for quantization and pruning.
@@ -1217,12 +1203,11 @@ class FIT:
         layer_names = []
         # Iterate through all modules in the model
         for name, module in model.named_modules():
-
             if isinstance(module, (PQDense, PQConv2d)):
                 layer_names.append(name)
                 for name_param, matrix_param in list(module.named_parameters()):
                     # Search for the weights
-                    if name_param.endswith('_weight'):
+                    if name_param.endswith("_weight"):
                         matrices_params_layerwise.append(matrix_param)
                         # Set their collect flag to True (later on we can then access them easily like this)
                         matrix_param.collect = True
@@ -1276,7 +1261,7 @@ class FIT:
         self.hooks.clear()
         assert len(self.hooks) == 0, "Hooks were not removed properly!"
 
-    def get_loss(self, model, data_batch, target_batch, loss_func, mode='mini-batch'):
+    def get_loss(self, model, data_batch, target_batch, loss_func, mode="mini-batch"):
         """
         This function triggers the loss calcuation of a model.
         We use it such that we can then calculate gradients which are
@@ -1302,16 +1287,16 @@ class FIT:
 
         output = model(data_batch)
 
-        if mode == 'mini-batch':
+        if mode == "mini-batch":
             # Check which loss_func instance is active
             if isinstance(loss_func, torch.nn.CrossEntropyLoss):
                 # Calculate loss based on mini-batch and averaged over it
                 loss_func = torch.nn.CrossEntropyLoss()
 
-        if mode == 'sample':
+        if mode == "sample":
             if isinstance(loss_func, torch.nn.CrossEntropyLoss):
                 # Calculate loss for each sample
-                loss_func = torch.nn.CrossEntropyLoss(reduce=False, reduction='none')
+                loss_func = torch.nn.CrossEntropyLoss(reduce=False, reduction="none")
 
         loss = loss_func(output, target_batch)
 
@@ -1405,7 +1390,7 @@ class FIT:
                 if data_batch.size(0) != batch_size:
                     continue  # Uneven batches break loop
 
-                loss = self.get_loss(model, data_batch, target_batch, loss_func, mode='mini-batch')
+                loss = self.get_loss(model, data_batch, target_batch, loss_func, mode="mini-batch")
                 curr_batch_matrices_params_layerwise = []
                 curr_batch_minmax_range_params_layerwise = []
                 for weights in model.parameters():
@@ -1639,7 +1624,6 @@ class FIT:
                 curr_FIT += EF_trace * delta_theta
 
         else:
-
             for theta, EF_trace in zip(params_before, EF_trace_params_layerwise):
                 # Calculate the squared difference between the parameters before and after
                 delta_theta = torch.sum(theta.detach().cpu() ** 2)
@@ -1668,10 +1652,8 @@ class FIT:
         curr_FIT = 0
 
         if not same_theta:
-
             # Taken from compute_fake_FIT_params()
             for theta_before, theta_after, layer_FeM in zip(params_before, params_after, FeM):
-
                 curr_FIT_layer = torch.sum(
                     layer_FeM * (theta_before.detach().cpu() - theta_after.detach().cpu()) ** 2
                 ).numpy()
@@ -1684,7 +1666,6 @@ class FIT:
 
             # Taken from generate_FIT_pruning_importance()
             for theta_after, layer_FeM in zip(params_after, FeM):
-
                 curr_FIT_layer = layer_FeM * (theta_after.detach().cpu() ** 2)
                 FIT_layerwise.append(curr_FIT_layer)
 

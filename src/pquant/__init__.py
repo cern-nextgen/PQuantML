@@ -5,7 +5,7 @@ import sys
 # flake8: noqa
 backend = os.getenv("KERAS_BACKEND", "tensorflow")
 if backend == "torch":
-    from . import configs, pruning_methods
+    from . import configs
     from .core.hyperparameter_optimization import (
         PQConfig,
         ap_config,
@@ -19,19 +19,26 @@ if backend == "torch":
         pdp_config,
         wanda_config,
     )
-    from .core.torch import activations, layers, optimizers, quantizer
+    from .core.torch import (
+        activations,
+        layers,
+        optimizers,
+        pruning_methods,
+        quantizer,
+        tracing,
+    )
     from .core.torch.layers import (
         add_compression_layers,
         apply_final_compression,
         get_ebops,
         get_layer_keep_ratio,
         get_model_losses,
-        load_torch_hgq_model,
         post_training_prune,
     )
+    from .core.torch.tracing import check_quantization, print_quantization_check
     from .core.torch.train import train_model
 
-    _forwards = ["activations", "layers", "quantizer", "optimizers"]
+    _forwards = ["activations", "layers", "quantizer", "optimizers", "tracing"]
 
     for name in _forwards:
         mod = importlib.import_module(f".core.torch.{name}", package="pquant")
@@ -56,12 +63,13 @@ if backend == "torch":
     _forwards.append("load_from_file")
     _forwards.append("load_from_dictionary")
     _forwards.append("get_ebops")
-    _forwards.append("load_torch_hgq_model")
+    _forwards.append("check_quantization")
+    _forwards.append("print_quantization_check")
     _forwards.append("PQConfig")
     __all__ = _forwards
 
 else:
-    from . import configs, pruning_methods
+    from . import configs
     from .core.hyperparameter_optimization import (
         PQConfig,
         ap_config,
@@ -74,7 +82,7 @@ else:
         pdp_config,
         wanda_config,
     )
-    from .core.keras import activations, layers, quantizer
+    from .core.keras import activations, layers, pruning_methods, quantizer
     from .core.keras.layers import (
         add_compression_layers,
         apply_final_compression,
