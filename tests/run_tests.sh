@@ -16,3 +16,4 @@ KERAS_BACKEND=torch pytest test_torch_alkaid_conversion.py
 pytest test_keras_alkaid_conversion.py
 KERAS_BACKEND=torch pytest test_hgq_torch.py
 pytest test_hgq_keras.py
+KERAS_BACKEND=torch pytest test_reinitialize_quantizers.py
