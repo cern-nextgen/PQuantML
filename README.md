@@ -45,7 +45,7 @@ pip install "pquant-ml[torch]"        # PyTorch backend
 | `PQAvgPool*D` | Average pooling layers |
 | `PQBatchNorm*D` | Batch normalization layers |
 | `PQDense` | Linear (fully connected) layer |
-| `PQActivation` | Activation layers: ReLU, Tanh, Leaky ReLU, GELU, Hard Tanh, or a user-provided activation function (Torch only) |
+| `PQActivation` | Activation layers: ReLU, Tanh, Leaky ReLU, GELU, Hard Tanh, Softmax or a user-provided activation function (Torch only) |
 | `MultiHeadAttention` | Multi-head attention layer |
 | `LayerNorm` | Layer normalization layer (currently Torch only) |
 
