@@ -91,7 +91,7 @@ class PQActivation(nn.Module):
         self.enable_ebops = enable_ebops
         self.built = False
 
-    def check_is_built(self, input_shape):
+    def check_is_built(self, input_shape, device):
         if self.built:
             return
         self.built = True
@@ -123,8 +123,8 @@ class PQActivation(nn.Module):
             granularity=self.config.quantization_parameters.granularity,
         )
         if self.use_hgq:
-            self.input_quantizer.quantizer.build(input_shape)
-            self.output_quantizer.quantizer.build(input_shape)
+            self.input_quantizer.quantizer.build(input_shape, device)
+            self.output_quantizer.quantizer.build(input_shape, device)
 
         if self.use_multiplier:
             self.multiplier = nn.Parameter(torch.tensor(-1.0), requires_grad=True)
@@ -174,7 +174,7 @@ class PQActivation(nn.Module):
         return x
 
     def forward(self, x):
-        self.check_is_built(x.shape)
+        self.check_is_built(x.shape, x.device)
         if self.use_fitcompress and self.is_pretraining and self.activation_name == "relu":
             if self.post_fitcompress_calibration:
                 # Save quantized input into ReLU
@@ -311,7 +311,7 @@ class PQSoftmax(nn.Module):
             quantize_output=True,
         )
 
-    def check_is_built(self, input_shape):
+    def check_is_built(self, input_shape, device):
         if self.built:
             return
         self.built = True
@@ -336,8 +336,8 @@ class PQSoftmax(nn.Module):
         self.input_quantizer = _data_quantizer(self.k_input, self.i_input, self.f_input)
         self.output_quantizer = _data_quantizer(self.k_output, self.i_output, self.f_output)
         if self.use_hgq:
-            self.input_quantizer.quantizer.build(input_shape)
-            self.output_quantizer.quantizer.build(input_shape)
+            self.input_quantizer.quantizer.build(input_shape, device)
+            self.output_quantizer.quantizer.build(input_shape, device)
 
     def get_input_quantization_bits(self):
         return self.input_quantizer.get_quantization_bits()
@@ -379,7 +379,7 @@ class PQSoftmax(nn.Module):
         return loss
 
     def forward(self, inputs, mask=None):
-        self.check_is_built(inputs.shape)
+        self.check_is_built(inputs.shape, inputs.device)
         if self.quantize_input and self.enable_quantization:
             inputs = self.input_quantizer(inputs)
 

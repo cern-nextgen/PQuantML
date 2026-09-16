@@ -230,7 +230,7 @@ def _is_single_value(shape):
 
 def _build_hgq(shape, is_data, granularity):
     q = HGQQuantizer(k0=1, i0=2, f0=4, overflow_mode="SAT", round_mode="RND", is_data=is_data, granularity=granularity)
-    q.build(shape)
+    q.build(shape, torch.device("cpu"))
     return tuple(q.i.shape), tuple(q.f.shape)
 
 
@@ -265,7 +265,7 @@ def test_per_channel_rejected_for_hgq(is_data):
     # per_channel is not a valid HGQ granularity; building must raise.
     q = HGQQuantizer(k0=1, i0=2, f0=4, overflow_mode="SAT", round_mode="RND", is_data=is_data, granularity="per_channel")
     with pytest.raises(ValueError, match="per_channel"):
-        q.build((32, 16, 3, 3))
+        q.build((32, 16, 3, 3), torch.device("cpu"))
 
 
 # ---------------------------------------------------------------------------

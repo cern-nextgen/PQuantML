@@ -813,7 +813,7 @@ class PQBatchNormBase:
         self.post_fitcompress_calibration = False
         self.saved_inputs = []
 
-    def _check_is_built(self, input_shape):
+    def _check_is_built(self, input_shape, device):
         if self.built:
             return
         self.built = True
@@ -855,7 +855,7 @@ class PQBatchNormBase:
             shape=None if self._bias is None else self._bias.shape,
         )
         if self.use_hgq:
-            self.input_quantizer.quantizer.build(input_shape)
+            self.input_quantizer.quantizer.build(input_shape, device)
         shape = [1] * len(input_shape)
         shape[1] = input_shape[1]
         self._shape = tuple(shape)
@@ -912,7 +912,7 @@ class PQBatchNormBase:
         self.is_pretraining = False
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        self._check_is_built(input.shape)
+        self._check_is_built(input.shape, input.device)
         if self.quantize_input and self.enable_quantization:
             if not self._is_fitcompress_pretraining():
                 input = self.input_quantizer(input)
@@ -1047,7 +1047,7 @@ class PQLayerNorm(nn.LayerNorm):
         self.post_fitcompress_calibration = False
         self.saved_inputs = []
 
-    def _check_is_built(self, input_shape):
+    def _check_is_built(self, input_shape, device):
         if self.built:
             return
         self.built = True
@@ -1102,8 +1102,8 @@ class PQLayerNorm(nn.LayerNorm):
             shape=None if self._bias is None else self._bias.shape,
         )
         if self.use_hgq:
-            self.input_quantizer.quantizer.build(input_shape)
-            self.output_quantizer.quantizer.build(input_shape)
+            self.input_quantizer.quantizer.build(input_shape, device)
+            self.output_quantizer.quantizer.build(input_shape, device)
         self.input_shape = (1,) + tuple(input_shape[1:])
 
     def apply_final_compression(self):
@@ -1165,7 +1165,7 @@ class PQLayerNorm(nn.LayerNorm):
         self.is_pretraining = False
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        self._check_is_built(input.shape)
+        self._check_is_built(input.shape, input.device)
         if self.quantize_input and self.enable_quantization:
             if not self._is_fitcompress_pretraining():
                 input = self.input_quantizer(input)

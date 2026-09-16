@@ -127,15 +127,19 @@ class HGQQuantizer(nn.Module):
             # Integer bits are trainable for SAT / SAT_SYM.
             self._i = nn.Parameter(torch.tensor(self.i0))
 
-    def build(self, input_shape: tuple) -> None:
+    def build(self, input_shape: tuple, device: torch.device) -> None:
         """
         Initialise shaped parameter / buffer tensors.
 
         Called automatically on the first forward pass. The optimizer must be
         created *after* build() has been called so that it tracks the shaped
         parameters, not the scalar placeholders from __init__.
+
+        `device` is the input tensor's device, passed in from forward() --
+        NOT read from self._k.device, which is a placeholder created in
+        __init__ before the module (built lazily, on first forward) ever gets
+        swept up by the model's own .to(device) call, so it's always CPU.
         """
-        device = self._k.device
         self.homogeneous_axis = self._homogeneous_axis(len(input_shape))
         bw_shape = self._infer_bw_shape(input_shape)
 
@@ -219,7 +223,7 @@ class HGQQuantizer(nn.Module):
 
     def forward(self, x: torch.Tensor, training: bool = False) -> torch.Tensor:
         if not self._built:
-            self.build(tuple(x.shape))
+            self.build(tuple(x.shape), x.device)
 
         if training:
             with torch.no_grad():
