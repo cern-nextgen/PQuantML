@@ -27,6 +27,23 @@ config.quantization_parameters.default_weight_fractional_bits = 3.
 config.quantization_parameters.use_relu_multiplier = False
 ```
 
+### Use-case presets
+`dst_config()`, `pdp_config()` and the other `*_config()` functions load the full default configuration of one pruning method. The presets below (`from pquant import preset_configs as presets`) instead start from what you want to achieve and take a handful of keyword arguments. Each returns an ordinary `PQConfig` that you can keep editing.
+| **Preset** | **Pruning** | **Default bits** | **Training** |
+|---|---|---|---|
+| `quantized()` | none (`pruning_method: None`) | Fixed bitwidths at `granularity` (`per_tensor` by default): data (0, 0, 8) with integer bits set from the data (`dynamic_data=True`), weights and biases (1, 0, 7) | `epochs=100`, no pretraining or fine-tuning stage |
+| `hgq(granularity="per_weight")` | none (`pruning_method: None`) | HGQ learns the bitwidths: one per weight and activation element with `per_weight` (the default), one per tensor with `per_tensor`; data lanes start at (0, 3, 5), weights and biases at (1, 0, 7) | `epochs=100`, no pretraining or fine-tuning stage |
+| `quantized_unstructured_pruning(alpha=1e-7)` | DST with a weight-wise threshold | As in `quantized()` | `epochs=100`, `fine_tuning_epochs=0` (a stage with the pruning mask fixed) |
+| `quantized_nm_pruning(n=2, m=4)` | Wanda N:M: `n` of every `m` consecutive weights pruned (the N:M literature usually counts kept weights; same thing for 2:4). Mask computed once at `prune_at_epoch` (10) of the main stage from `calibration_batches` (100) batches of input statistics, then fixed | Same as above | `pretraining_epochs=10`, `epochs=100` |
+| `quantized_structured_pruning(target_sparsity)` | Structured PDP towards `target_sparsity` (fraction of weights removed, in [0, 1)); `epsilon` is derived so the sparsity ramp reaches the target after about 90% of `epochs` | Same as above | `pretraining_epochs=10`, `epochs=100`, `fine_tuning_epochs=10` |
+| `hgq_structured_pruning(target_sparsity, granularity="per_tensor")` | Structured PDP as above | HGQ-learned bitwidths as in `hgq`, one per tensor by default | `pretraining_epochs=10`, `epochs=100`, `fine_tuning_epochs=10` |
+
+```python
+from pquant import preset_configs as presets
+
+config = presets.quantized_structured_pruning(target_sparsity=0.5, epochs=30, weight_bits=(1, 0, 5))
+```
+
 ### Building a model
 PQuantML supports two ways of defining compressed models. Below we illustrate both approaches using a simple jet-tagging architecture.
 

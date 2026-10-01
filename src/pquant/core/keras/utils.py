@@ -9,6 +9,8 @@ from pquant.core.keras.pruning_methods.wanda import Wanda
 
 def get_pruning_layer(config, layer_type):
     pruning_method = config.pruning_parameters.pruning_method
+    if pruning_method is None:
+        return None
     if pruning_method == "dst":
         return DST(config, layer_type)
     elif pruning_method == "autosparse":
