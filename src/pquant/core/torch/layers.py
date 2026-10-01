@@ -78,7 +78,8 @@ class PQWeightBiasBase(nn.Module):
         self.overflow_mode_parameters = config.quantization_parameters.overflow_mode_parameters
         self.overflow_mode_data = config.quantization_parameters.overflow_mode_data
         self.use_hgq = config.quantization_parameters.use_high_granularity_quantization
-        self.enable_pruning = enable_pruning if enable_pruning is not None else config.pruning_parameters.enable_pruning
+        enable_pruning = enable_pruning if enable_pruning is not None else config.pruning_parameters.enable_pruning
+        self.enable_pruning = bool(enable_pruning) and self.pruning_layer is not None
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.granularity = config.quantization_parameters.granularity
@@ -191,7 +192,8 @@ class PQWeightBiasBase(nn.Module):
             self.register_parameter("_bias", self._bias)
         else:
             self.register_parameter("_bias", None)
-        self.pruning_layer.build(self._weight.shape)
+        if self.pruning_layer is not None:
+            self.pruning_layer.build(self._weight.shape)
 
     def post_pre_train_function(self):
         self.is_pretraining = False
@@ -1631,6 +1633,10 @@ def call_post_round_functions(model, rewind, rounds, r):
         post_round_functions(model)
 
 
+def _has_pruning_layer(layer):
+    return isinstance(layer, LAYERS_WITH_PRUNING_LAYER) and layer.pruning_layer is not None
+
+
 def _update_pruning_mask(layer):
     if layer.enable_pruning and hasattr(layer.pruning_layer, "update_mask"):
         layer.pruning_layer.update_mask(layer._weight)
@@ -1638,7 +1644,7 @@ def _update_pruning_mask(layer):
 
 def post_epoch_functions(model, epoch, total_epochs, **kwargs):
     for layer in model.modules():
-        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
+        if _has_pruning_layer(layer):
             layer.pruning_layer.post_epoch_function(epoch, total_epochs, **kwargs)
             _update_pruning_mask(layer)
         elif isinstance(layer, Quantizer):
@@ -1647,13 +1653,13 @@ def post_epoch_functions(model, epoch, total_epochs, **kwargs):
 
 def pre_epoch_functions(model, epoch, total_epochs):
     for layer in model.modules():
-        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
+        if _has_pruning_layer(layer):
             layer.pruning_layer.pre_epoch_function(epoch, total_epochs)
 
 
 def post_round_functions(model):
     for layer in model.modules():
-        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
+        if _has_pruning_layer(layer):
             layer.pruning_layer.post_round_function()
 
 
@@ -1671,7 +1677,7 @@ def rewind_weights_functions(model):
 
 def pre_finetune_functions(model):
     for layer in model.modules():
-        if isinstance(layer, LAYERS_WITH_PRUNING_LAYER):
+        if _has_pruning_layer(layer):
             layer.pruning_layer.pre_finetune_function()
 
 

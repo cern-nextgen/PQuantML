@@ -32,7 +32,7 @@ class Quantizer(nn.Module):
         is_heterogeneous,
         is_data=False,
         granularity=QuantizationGranularity.PER_TENSOR,
-        hgq_gamma=0,
+        hgq_gamma=1e-8,
         place="datalane",
         dynamic_data=True,
         shape=None,
@@ -121,22 +121,20 @@ class Quantizer(nn.Module):
         else:
             return shape
 
+    def _reduce_absmax(self, x):
+        if self.is_data or self.granularity == QuantizationGranularity.PER_TENSOR or x.ndim == 1:
+            return torch.amax(torch.abs(x))
+        if self.granularity == QuantizationGranularity.PER_CHANNEL:
+            return torch.amax(torch.abs(x), dim=tuple(range(1, x.ndim)), keepdim=True)
+        if self.granularity == QuantizationGranularity.PER_WEIGHT:
+            return torch.abs(x)
+        raise ValueError("The selected granularity is not supported.")
+
     def compute_weight_dynamic_bits(self, x):
         if self.granularity == QuantizationGranularity.PER_TENSOR or x.ndim == 1 or not self.training:
             _, i, f = self.get_quantization_bits()
             return i, f
-        if self.granularity == QuantizationGranularity.PER_CHANNEL:
-            if x.ndim == 2:
-                abs_x = torch.amax(torch.abs(x), dim=1, keepdim=True)
-            elif x.ndim == 3:
-                abs_x = torch.amax(torch.abs(x), dim=(1, 2), keepdim=True)
-            elif x.ndim == 4:
-                abs_x = torch.amax(torch.abs(x), dim=(1, 2, 3), keepdim=True)
-        elif self.granularity == QuantizationGranularity.PER_WEIGHT:
-            abs_x = torch.abs(x)
-        else:
-            raise ValueError("The selected granularity is not supported.")
-        return self.calculate_bits_from_abs(abs_x)
+        return self.calculate_bits_from_abs(self._reduce_absmax(x))
 
     def compute_dynamic_bits(self, x):
         if self.is_data:
@@ -146,19 +144,17 @@ class Quantizer(nn.Module):
     def forward(self, x):
         if self.use_hgq:
             return self.quantizer(x, training=self.training)
-        elif self._final_compression_done:
+        if self._final_compression_done:
             return self.quantizer(x, k=self.k, i=self.i, f=self.f, training=False)
-        else:
-            i, f = self.compute_dynamic_bits(x)
-            with torch.no_grad():
-                if self.i.shape == i.shape and self.f.shape == f.shape:
-                    self.i.copy_(i)
-                    self.f.copy_(f)
-                else:
-                    self.i.data = i
-                    self.f.data = f
-        x = self.quantizer(x, k=self.k, i=i, f=f, training=self.training)
-        return x
+        i, f = self.compute_dynamic_bits(x)
+        with torch.no_grad():
+            if self.i.shape == i.shape and self.f.shape == f.shape:
+                self.i.copy_(i)
+                self.f.copy_(f)
+            else:
+                self.i.data = i
+                self.f.data = f
+        return self.quantizer(x, k=self.k, i=i, f=f, training=self.training)
 
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:

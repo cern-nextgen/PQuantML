@@ -35,15 +35,15 @@ If you require additional parameters for the training or optimization loops, ple
 | `quantize_output`                | bool     | `true`      | Whether outputs of layers are quantized by default.                    |
 | `enable_quantization`            | bool     | `true`      | Global switch to enable or disable quantization.                       |
 | `granularity` | str | `"per_tensor"` | Whether bitwidths are shared across the whole tensor, per-channel, or per-weight. |
-| `hgq_gamma`                      | float    | `1e-8`      | L1 penalty per learned bit (HGQ). The Keras backend always uses hgq's default, 1e-8. |
-| `hgq_beta`                       | float    | `0.0`       | HGQ loss coefficient scaling EBOPs.                                    |
+| `hgq_gamma`                      | float    | `1e-8`      | L1 penalty per learned bit (HGQ) on the trainable `i` and `f`; only `f` in WRAP mode. Must be >= 0. |
+| `hgq_beta`                       | float    | `1e-5`      | HGQ loss coefficient scaling EBOPs.                                    |
 | `layer_specific`                 | dict     | `{}`        | Dictionary for per-layer quantization overrides.                       |
 | `use_high_granularity_quantization`                        | bool     | `false`     | Enable or disable High Granularity Quantization (HGQ).                 |
 | `use_real_tanh`                  | bool     | `false`     | Use a real `tanh` instead of hard/approximate `tanh`.                  |
-| `overflow_mode_data`                       | str      | `"SAT"`     | Overflow handling mode for input and output quantizers(`SAT`, `SAT_SYM`, `WRAP`, `WRAP_SM`).          |
-| `overflow_mode_parameters`                       | str      | `"SAT"`     | Overflow handling mode for weight and biases quantizers(`SAT`, `SAT_SYM`, `WRAP`, `WRAP_SM`).          |
+| `overflow_mode_data`                       | str      | `"SAT"`     | Overflow handling mode for input and output quantizers (`SAT`, `SAT_SYM`, `WRAP`, `WRAP_SM`).        |
+| `overflow_mode_parameters`                       | str      | `"SAT"`     | Overflow handling mode for weight and biases quantizers (`SAT`, `SAT_SYM`, `WRAP`, `WRAP_SM`). |
 | `round_mode`                     | str      | `"RND"`     | Rounding mode (`TRN`, `RND`, `RND_CONV`, `RND_ZERO`, etc.).            |
-| `use_relu_multiplier`            | bool     | `true`      | Enable a learned bit-shift multiplier inside ReLU layers.              |
+| `use_relu_multiplier`            | bool     | `false`     | Enable a learned bit-shift multiplier inside ReLU layers.              |
 
 
 ### Hyperparameters optimization parameters
@@ -87,6 +87,9 @@ PQuantML supports seven different pruning methods.
 | `autosparse`         | `AutoSparsePruningModel`   |
 | `activation_pruning` | `ActivationPruningModel`   |
 | `mdmm`               | `MDMMPruningModel`         |
+| `None` | `NoPruningModel`         |
+
+
 
 
 There are the parameters shared by all methods:
@@ -128,7 +131,7 @@ There are more details about every pruning method:
 |----------------------|----------|-------------|---------------------------------------------------|
 | `pruning_method`     | str      | `pdp`           | Selects this pruning schema.                      |
 | `epsilon`            | float    | `0.015`     | Smoothing/regularization factor for gating.       |
-| `sparsity`           | float    | `0.8`       | Target sparsity level (0–1).                      |
+| `sparsity`           | float    | `0.8`       | Target sparsity level, in [0, 1).                      |
 | `temperature`        | float    | `1.0e-05`   | Annealing temperature.                            |
 | `structured_pruning` | bool     | `false`     | Enable structured pruning.                        |
 
@@ -140,8 +143,8 @@ There are more details about every pruning method:
 | `M`                         | Optional[int]    | `null`      | Optional grouping constant.                      |
 | `N`                         | Optional[int]    | `null`      | Optional grouping constant.                      |
 | `sparsity`                  | float            | `0.9`       | Target sparsity level (0–1).                     |
-| `t_delta`                   | int              | `100`       | Window size / steps for stats collection.        |
-| `t_start_collecting_batch`  | int              | `100`       | Warm-up steps before collecting statistics.      |
+| `t_delta`                   | int              | `100`       | Batches of statistics collected before the mask is computed (>= 1).        |
+| `t_start_collecting_batch`  | int              | `10`        | Epochs of the main stage to wait before collecting statistics (>= 0). |
 | `calculate_pruning_budget`  | bool             | `true`      | Auto-compute pruning budget from data.           |
 
 #### Autosparse Pruning

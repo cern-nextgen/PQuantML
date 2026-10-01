@@ -9,6 +9,7 @@ from pquant.data_models.pruning_model import (
     DSTPruningModel,
     FITCompressPruningModel,
     MDMMPruningModel,
+    NoPruningModel,
     PDPPruningModel,
     WandaPruningModel,
 )
@@ -29,6 +30,7 @@ PRUNING_MODEL_REGISTRY = {
     "autosparse": AutoSparsePruningModel,
     "activation_pruning": ActivationPruningModel,
     "mdmm": MDMMPruningModel,
+    None: NoPruningModel,  # pruning_method: null -> quantization only
 }
 
 SAMPLER_REGISTRY = {

@@ -15,7 +15,7 @@ class BaseQuantizationModel(BaseModel):
     granularity: QuantizationGranularity = Field(default=QuantizationGranularity.PER_TENSOR)
     dynamic_data_quantization: bool = Field(default=False)
     enable_quantization: bool = Field(default=True)
-    hgq_gamma: float = Field(default=1e-8)
+    hgq_gamma: float = Field(default=1e-8, ge=0.0)  # hgq's own default
     hgq_beta: float = Field(default=1e-5)
     hgq_heterogeneous: bool = Field(default=True)
     layer_specific: dict[str, dict] = Field(default_factory=dict)
@@ -24,4 +24,4 @@ class BaseQuantizationModel(BaseModel):
     overflow_mode_parameters: str = Field(default="SAT")
     overflow_mode_data: str = Field(default="SAT")
     round_mode: str = Field(default="RND")
-    use_relu_multiplier: bool = Field(default=True)
+    use_relu_multiplier: bool = Field(default=False)

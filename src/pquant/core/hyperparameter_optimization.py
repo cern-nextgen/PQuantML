@@ -23,6 +23,7 @@ from pquant.data_models.pruning_model import (
     DSTPruningModel,
     FITCompressPruningModel,
     MDMMPruningModel,
+    NoPruningModel,
     PDPPruningModel,
     WandaPruningModel,
 )
@@ -76,6 +77,7 @@ class PQConfig(BaseModel):
             | AutoSparsePruningModel
             | ActivationPruningModel
             | MDMMPruningModel
+            | NoPruningModel
         ),
         Field(discriminator="pruning_method"),
     ]
