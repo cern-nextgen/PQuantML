@@ -70,9 +70,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
+      - name: Set up Python ${{ matrix.python-version }}
+        run: |
+          python3 -m pip install --user uv
+          python3 -m uv venv --python ${{ matrix.python-version }} .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Verify interpreter
         run: |
@@ -85,8 +87,8 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[all]" onnx onnxruntime alkaid
-          pip list
+          python -m pip install -e ".[all]" onnx onnxruntime alkaid
+          python -m pip list
 
       - name: Run tests
         run: pytest -v --durations=20 ${{ matrix.tests }}
