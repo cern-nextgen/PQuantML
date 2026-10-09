@@ -64,7 +64,8 @@ jobs:
               tests/test_hgq_torch.py
     env:
       KERAS_BACKEND: ${{ matrix.backend }}
-      PIP_CACHE_DIR: /__w/_temp/pip-cache
+      PIP_CACHE_DIR: /__w/_temp/pip-cache\
+      NVIDIA_TF32_OVERRIDE: "0"
     steps:
       - uses: actions/checkout@v4
         with:
