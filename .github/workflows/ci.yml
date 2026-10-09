@@ -87,9 +87,10 @@ jobs:
       - name: Install verilator (conda-forge)
         run: |
           curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C /usr/local bin/micromamba
-          micromamba create -y -p /opt/verilator -c conda-forge verilator
-          ln -sf /opt/verilator/bin/verilator* /usr/local/bin/
-          verilator --version
+          micromamba create -y -p /opt/verilator -c conda-forge verilator make cxx-compiler
+          echo "PATH=$PATH:/opt/verilator/bin" >> "$GITHUB_ENV"
+          echo "VERILATOR_ROOT=/opt/verilator/share/verilator" >> "$GITHUB_ENV"
+          /opt/verilator/bin/verilator --version
 
       - name: Install package and test dependencies
         run: |
