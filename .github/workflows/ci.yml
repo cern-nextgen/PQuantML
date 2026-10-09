@@ -64,21 +64,23 @@ jobs:
               tests/test_hgq_torch.py
     env:
       KERAS_BACKEND: ${{ matrix.backend }}
+      PIP_CACHE_DIR: /__w/_temp/pip-cache
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Verify interpreter
+        run: |
+          python --version
+          python -c "import sys; assert sys.version_info[:2] == tuple(map(int, '${{ matrix.python-version }}'.split('.'))), sys.version"
+
       - name: Show GPU
         run: nvidia-smi
-      - name: Debug permissions
-        run: |
-          id
-          grep CapEff /proc/self/status
-          cat /proc/self/uid_map
-          stat -f -c %T /__w/_temp
-          ls -ln /__w/_temp/_runner_file_commands | head -3
-          touch /__w/_temp/probe && echo write-ok
 
       - name: Install package and test dependencies
         run: |
