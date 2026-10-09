@@ -73,7 +73,7 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: |
           python3 -m pip install --user uv
-          python3 -m uv venv --python ${{ matrix.python-version }} .venv
+          python3 -m uv venv --seed --python ${{ matrix.python-version }} .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Verify interpreter
