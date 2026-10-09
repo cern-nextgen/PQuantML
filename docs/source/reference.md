@@ -87,6 +87,7 @@ PQuantML supports seven different pruning methods.
 | `autosparse`         | `AutoSparsePruningModel`   |
 | `activation_pruning` | `ActivationPruningModel`   |
 | `mdmm`               | `MDMMPruningModel`         |
+| `None` (or omitted)  | `BasePruningModel`: no pruning |
 
 
 
@@ -96,7 +97,7 @@ There are the parameters shared by all methods:
 | **Field**                     | **Type**     | **Default** | **Description**                               |
 |------------------------------|--------------|-------------|-----------------------------------------------|
 | `disable_pruning_for_layers` | List[str]    | `[]`        | Layer names to exclude from pruning.          |
-| `enable_pruning`             | bool         | `true`      | Master pruning on/off switch.                 |
+| `enable_pruning`             | bool         | `true`      | Master pruning on/off switch. `false` when `pruning_method` is `None`. |
 | `threshold_decay`            | float        | `0.0`       | Optional pruning threshold decay term.        |
 
 

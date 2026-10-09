@@ -65,6 +65,10 @@ def _nm_wanda(n, m, prune_at_epoch, calibration_batches):
     }
 
 
+def _no_pruning():
+    return PQConfig.load_from_config({"pruning_parameters": {"pruning_method": None}})
+
+
 def _build(base, **sections):
     config = base.get_dict()
     for name, values in sections.items():
@@ -83,8 +87,7 @@ def quantized(
     dynamic_data=True,
 ):
     return _build(
-        dst_config(),
-        pruning_parameters={"enable_pruning": False},
+        _no_pruning(),
         quantization_parameters=_quantization(
             granularity,
             data_bits,
@@ -112,8 +115,7 @@ def hgq(
 ):
 
     return _build(
-        dst_config(),
-        pruning_parameters={"enable_pruning": False},
+        _no_pruning(),
         quantization_parameters=_quantization(
             granularity,
             data_bits,

@@ -54,7 +54,7 @@ class Quantizer(keras.layers.Layer):
 
     def calculate_bits_from_abs(self, abs_x):
         m = ops.ceil(ops.log(abs_x + 1e-6) / ops.log(2.0))
-        int_bits = ops.maximum(m, 0.0)
+        int_bits = ops.maximum(m, -8.0)
         int_bits = ops.minimum(int_bits, self.b - self.k)
         frac_bits = ops.maximum(self.b - int_bits - self.k, 0.0)
         return int_bits, frac_bits

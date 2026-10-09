@@ -309,7 +309,8 @@ class PQWeightBiasBase(keras.layers.Layer):
             self._update_pruning_mask()
 
     def post_round_function(self):
-        self.pruning_layer.post_round_function()
+        if self.pruning_layer is not None:
+            self.pruning_layer.post_round_function()
 
     def _update_pruning_mask(self):
         if self.enable_pruning and hasattr(self.pruning_layer, "update_mask"):
@@ -2171,6 +2172,8 @@ def _check_activation(layer, config):
 
 
 def _build_pruning_layer_from_kernel(new_layer, kernel):
+    if new_layer.pruning_layer is None:
+        return
     transposed_kernel = ops.transpose(kernel, new_layer.weight_transpose)
     new_layer.pruning_layer.build(transposed_kernel.shape)
 

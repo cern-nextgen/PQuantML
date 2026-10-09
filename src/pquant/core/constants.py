@@ -5,6 +5,7 @@ import optuna
 from pquant.data_models.pruning_model import (
     ActivationPruningModel,
     AutoSparsePruningModel,
+    BasePruningModel,
     CSPruningModel,
     DSTPruningModel,
     FITCompressPruningModel,
@@ -29,6 +30,7 @@ PRUNING_MODEL_REGISTRY = {
     "autosparse": AutoSparsePruningModel,
     "activation_pruning": ActivationPruningModel,
     "mdmm": MDMMPruningModel,
+    None: BasePruningModel,
 }
 
 SAMPLER_REGISTRY = {

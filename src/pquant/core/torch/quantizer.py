@@ -102,7 +102,7 @@ class Quantizer(nn.Module):
 
     def calculate_bits_from_abs(self, abs_x):
         m = torch.ceil(torch.log2(abs_x + 1e-6))
-        int_bits = torch.clamp(m, min=0).clamp(max=self.b - self.k.to(m.device))
+        int_bits = torch.clamp(m, min=-8).clamp(max=self.b - self.k.to(m.device))
         frac_bits = torch.clamp(self.b - int_bits - self.k, min=0)
         return int_bits, frac_bits
 
@@ -110,7 +110,7 @@ class Quantizer(nn.Module):
         if not (self.training and self.dynamic_data):
             _, i, f = self.get_quantization_bits()
             return i, f
-        abs_x = torch.amax(torch.abs(x))
+        abs_x = torch.amax(torch.abs(x.detach()))
         return self.calculate_bits_from_abs(abs_x)
 
     def compute_weight_param_shape(self, shape):
@@ -134,7 +134,7 @@ class Quantizer(nn.Module):
         if self.granularity == QuantizationGranularity.PER_TENSOR or x.ndim == 1 or not self.training:
             _, i, f = self.get_quantization_bits()
             return i, f
-        return self.calculate_bits_from_abs(self._reduce_absmax(x))
+        return self.calculate_bits_from_abs(self._reduce_absmax(x.detach()))  # see compute_data_dynamic_bits
 
     def compute_dynamic_bits(self, x):
         if self.is_data:

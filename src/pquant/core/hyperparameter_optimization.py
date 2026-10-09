@@ -18,6 +18,7 @@ from pquant.data_models.hyperparameter_optimization_model import (
 from pquant.data_models.pruning_model import (
     ActivationPruningModel,
     AutoSparsePruningModel,
+    BasePruningModel,
     CSPruningModel,
     DSTPruningModel,
     FITCompressPruningModel,
@@ -75,6 +76,7 @@ class PQConfig(BaseModel):
             | AutoSparsePruningModel
             | ActivationPruningModel
             | MDMMPruningModel
+            | BasePruningModel
         ),
         Field(discriminator="pruning_method"),
     ]

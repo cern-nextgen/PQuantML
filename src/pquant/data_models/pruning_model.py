@@ -5,19 +5,22 @@ from pydantic import BaseModel, Field
 
 
 class BasePruningModel(BaseModel):
+    pruning_method: Literal[None] = None
     disable_pruning_for_layers: list[str] = Field(default_factory=list)
-    enable_pruning: bool = Field(default=True)
+    enable_pruning: bool = Field(default=False)
     threshold_decay: float = Field(default=0.0)
 
 
 class CSPruningModel(BasePruningModel):
     pruning_method: Literal["cs"] = "cs"
+    enable_pruning: bool = Field(default=True)
     final_temp: int = Field(default=200)
     threshold_init: float = Field(default=0)
 
 
 class DSTPruningModel(BasePruningModel):
     pruning_method: Literal["dst"] = "dst"
+    enable_pruning: bool = Field(default=True)
     alpha: float = Field(default=5.0e-06)
     max_pruning_pct: float = Field(default=0.99)
     threshold_init: float = Field(default=0.0)
@@ -26,11 +29,13 @@ class DSTPruningModel(BasePruningModel):
 
 class FITCompressPruningModel(BasePruningModel):
     pruning_method: Literal["fitcompress"] = "fitcompress"
+    enable_pruning: bool = Field(default=True)
     min_frac_bits: float = Field(default=2.0)
 
 
 class PDPPruningModel(BasePruningModel):
     pruning_method: Literal["pdp"] = "pdp"
+    enable_pruning: bool = Field(default=True)
     epsilon: float = Field(default=0.015)
     sparsity: float = Field(default=0.8, ge=0.0, lt=1.0)
     temperature: float = Field(default=1.0e-05)
@@ -39,6 +44,7 @@ class PDPPruningModel(BasePruningModel):
 
 class WandaPruningModel(BasePruningModel):
     pruning_method: Literal["wanda"] = "wanda"
+    enable_pruning: bool = Field(default=True)
     M: int | None = Field(default=None)
     N: int | None = Field(default=None)
     sparsity: float = Field(default=0.9)
@@ -49,6 +55,7 @@ class WandaPruningModel(BasePruningModel):
 
 class AutoSparsePruningModel(BasePruningModel):
     pruning_method: Literal["autosparse"] = "autosparse"
+    enable_pruning: bool = Field(default=True)
     alpha: float = Field(default=0.5)
     alpha_reset_epoch: int = Field(default=90)
     autotune_epochs: int = Field(default=10)
@@ -59,6 +66,7 @@ class AutoSparsePruningModel(BasePruningModel):
 
 class ActivationPruningModel(BasePruningModel):
     pruning_method: Literal["activation_pruning"] = "activation_pruning"
+    enable_pruning: bool = Field(default=True)
     threshold: float = Field(default=0.3)
     t_delta: int = Field(default=50)
     t_start_collecting_batch: int = Field(default=50)
@@ -77,6 +85,7 @@ class ConstraintType(str, Enum):
 
 class MDMMPruningModel(BasePruningModel):
     pruning_method: Literal["mdmm"] = "mdmm"
+    enable_pruning: bool = Field(default=True)
     constraint_type: ConstraintType = Field("Equality")
     target_value: float = Field(default=0.0)
     metric_type: MetricType = Field(default="UnstructuredSparsity")
