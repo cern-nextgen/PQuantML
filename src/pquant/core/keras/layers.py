@@ -309,7 +309,8 @@ class PQWeightBiasBase(keras.layers.Layer):
             self._update_pruning_mask()
 
     def post_round_function(self):
-        self.pruning_layer.post_round_function()
+        if self.pruning_layer is not None:
+            self.pruning_layer.post_round_function()
 
     def _update_pruning_mask(self):
         if self.enable_pruning and hasattr(self.pruning_layer, "update_mask"):
@@ -1952,6 +1953,7 @@ class PQMultiheadAttention(keras.layers.Layer):
                 "in_quant_granularity": self.in_quant_granularity,
                 "out_quant_granularity": self.out_quant_granularity,
                 "param_quant_granularity": self.param_quant_granularity,
+                "final_compression_done": self.q_proj.final_compression_done,
             }
         )
         return config
@@ -1964,7 +1966,11 @@ class PQMultiheadAttention(keras.layers.Layer):
         config.pop("v_proj", None)
         config.pop("out_proj", None)
         config.pop("softmax", None)
-        return cls(**config)
+        final_compression_done = config.pop("final_compression_done", False)
+        instance = cls(**config)
+        for proj in (instance.q_proj, instance.k_proj, instance.v_proj, instance.out_proj):
+            proj.final_compression_done = final_compression_done
+        return instance
 
 
 LAYERS_WITH_PRUNING_LAYER = (PQWeightBiasBase, PQSeparableConv2d, PQMultiheadAttention)
@@ -2166,6 +2172,8 @@ def _check_activation(layer, config):
 
 
 def _build_pruning_layer_from_kernel(new_layer, kernel):
+    if new_layer.pruning_layer is None:
+        return
     transposed_kernel = ops.transpose(kernel, new_layer.weight_transpose)
     new_layer.pruning_layer.build(transposed_kernel.shape)
 

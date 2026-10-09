@@ -27,6 +27,22 @@ config.quantization_parameters.default_weight_fractional_bits = 3.
 config.quantization_parameters.use_relu_multiplier = False
 ```
 
+### Use-case presets
+`dst_config()`, `pdp_config()` and the other `*_config()` functions load the full default configuration of one pruning method. The presets (`from pquant import preset_configs as presets`) instead start from what you want to achieve and take a handful of keyword arguments. Each returns an ordinary `PQConfig` that you can keep editing. The preset configs cover the following cases:
+- quantized model
+- quantized model with unstructured pruning
+- quantized model with structured pruning
+- quantized model with N:M pruning
+- HGQ model
+- HGQ model with per-tensor granularity and structured pruning
+
+
+```python
+from pquant import preset_configs as presets
+
+config = presets.quantized_structured_pruning(target_sparsity=0.5, epochs=30, weight_bits=(1, 0, 5))
+```
+
 ### Building a model
 PQuantML supports two ways of defining compressed models. Below we illustrate both approaches using a simple jet-tagging architecture.
 

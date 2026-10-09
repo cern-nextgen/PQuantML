@@ -1,6 +1,7 @@
 import keras
 from hgq.quantizer import Quantizer as HGQQuantizer
 from hgq.quantizer import QuantizerConfig
+from hgq.regularizers import MonoL1
 from keras import ops
 from quantizers import get_fixed_quantizer
 
@@ -20,7 +21,7 @@ class Quantizer(keras.layers.Layer):
         is_heterogeneous=False,
         is_data=False,
         granularity=QuantizationGranularity.PER_TENSOR,
-        hgq_gamma=0,
+        hgq_gamma=1e-8,
         place="datalane",
         dynamic_data=True,
     ):
@@ -46,13 +47,14 @@ class Quantizer(keras.layers.Layer):
             self.is_data,
             place,
             granularity=self.granularity,
+            gamma=hgq_gamma,
         )
         self.is_pretraining = True
         self.hgq_gamma = hgq_gamma
 
     def calculate_bits_from_abs(self, abs_x):
         m = ops.ceil(ops.log(abs_x + 1e-6) / ops.log(2.0))
-        int_bits = ops.maximum(m, 0.0)
+        int_bits = ops.maximum(m, -8.0)
         int_bits = ops.minimum(int_bits, self.b - self.k)
         frac_bits = ops.maximum(self.b - int_bits - self.k, 0.0)
         return int_bits, frac_bits
@@ -64,24 +66,22 @@ class Quantizer(keras.layers.Layer):
         abs_x = ops.max(ops.abs(x))
         return self.calculate_bits_from_abs(abs_x)
 
+    def _reduce_absmax(self, x):
+        if self.is_data or self.granularity == QuantizationGranularity.PER_TENSOR or ops.ndim(x) == 1:
+            return ops.max(ops.abs(x))
+        if self.granularity == QuantizationGranularity.PER_CHANNEL:
+            if ops.ndim(x) not in (2, 3, 4):
+                raise ValueError("Unsupported tensor rank")
+            return ops.max(ops.abs(x), axis=tuple(range(ops.ndim(x) - 1)), keepdims=True)
+        if self.granularity == QuantizationGranularity.PER_WEIGHT:
+            return ops.abs(x)
+        raise ValueError(f"compute_dynamic_bits called for granularity={self.granularity}")
+
     def compute_weight_dynamic_bits(self, x):
         if self.granularity == QuantizationGranularity.PER_TENSOR or ops.ndim(x) == 1:
             _, i, f = self.get_quantization_bits()
             return i, f
-        if self.granularity == QuantizationGranularity.PER_CHANNEL:
-            if ops.ndim(x) == 2:
-                abs_x = ops.max(ops.abs(x), axis=0, keepdims=True)
-            elif ops.ndim(x) == 3:
-                abs_x = ops.max(ops.abs(x), axis=(0, 1), keepdims=True)
-            elif ops.ndim(x) == 4:
-                abs_x = ops.max(ops.abs(x), axis=(0, 1, 2), keepdims=True)
-            else:
-                raise ValueError("Unsupported tensor rank")
-        elif self.granularity == QuantizationGranularity.PER_WEIGHT:
-            abs_x = ops.abs(x)
-        else:
-            raise ValueError(f"compute_dynamic_bits called for granularity={self.granularity}")
-        return self.calculate_bits_from_abs(abs_x)
+        return self.calculate_bits_from_abs(self._reduce_absmax(x))
 
     def compute_dynamic_bits(self, x):
         if self.is_data:
@@ -188,6 +188,7 @@ class Quantizer(keras.layers.Layer):
             granularity=config.pop("granularity"),
             place=config.pop("place"),
             dynamic_data=config.pop("dynamic_data", True),
+            hgq_gamma=config.pop("hgq_gamma", 1e-8),
         )
 
         if use_hgq:
@@ -238,6 +239,14 @@ def axis_kwargs_for_granularity(granularity, is_data):
 
 
 def create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, axis_kwargs, gamma=1e-8):
+    return _create_hgq_quantizer(k, i, f, overflow, round_mode, place, axis_kwargs, gamma)
+
+
+def create_hgq_data_quantizer(k, i, f, overflow, round_mode, axis_kwargs, gamma=1e-8):
+    return _create_hgq_quantizer(k, i, f, overflow, round_mode, "datalane", axis_kwargs, gamma)
+
+
+def _create_hgq_quantizer(k, i, f, overflow, round_mode, place, axis_kwargs, gamma):
     quantizer_config = QuantizerConfig(
         q_type="kif",
         place=place,
@@ -246,20 +255,8 @@ def create_hgq_parameters_quantizer(k, i, f, overflow, round_mode, place, axis_k
         f0=f,
         overflow_mode=overflow,
         round_mode=round_mode,
-        **axis_kwargs,
-    )
-    return HGQQuantizer(config=quantizer_config)
-
-
-def create_hgq_data_quantizer(k, i, f, overflow, round_mode, axis_kwargs, gamma=1e-8):
-    quantizer_config = QuantizerConfig(
-        q_type="kif",
-        place="datalane",
-        k0=k,
-        i0=i,
-        f0=f,
-        overflow_mode=overflow,
-        round_mode=round_mode,
+        ir=MonoL1(gamma),
+        fr=MonoL1(gamma),
         **axis_kwargs,
     )
     return HGQQuantizer(config=quantizer_config)
