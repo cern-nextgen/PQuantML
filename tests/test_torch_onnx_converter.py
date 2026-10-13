@@ -144,7 +144,7 @@ def test_conv2d_onnx(cfg, bias, tmp_path):
 #     )
 #     x = torch.randn(2, IN_C, L)
 #     with torch.no_grad():
-#         model(x)git 
+#      model(x)
 #     _apply_compression(model)
 
 #     torch_out = _torch_out(model, x)
