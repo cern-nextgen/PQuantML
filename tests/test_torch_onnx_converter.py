@@ -22,7 +22,6 @@ from pquant.layers import (  # noqa: E402
     PQAvgPool2d,
     PQBatchNorm1d,
     PQBatchNorm2d,
-    PQConv1d,
     PQConv2d,
     PQDense,
     PQMultiheadAttention,
@@ -145,7 +144,7 @@ def test_conv2d_onnx(cfg, bias, tmp_path):
 #     )
 #     x = torch.randn(2, IN_C, L)
 #     with torch.no_grad():
-#         model(x)
+#         model(x)git 
 #     _apply_compression(model)
 
 #     torch_out = _torch_out(model, x)
