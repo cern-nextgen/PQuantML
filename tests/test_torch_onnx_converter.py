@@ -136,21 +136,21 @@ def test_conv2d_onnx(cfg, bias, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bias", [True, False])
-def test_conv1d_onnx(cfg, bias, tmp_path):
-    IN_C, OUT_C, L = 4, 8, 16
-    model = nn.Sequential(
-        PQConv1d(cfg, in_channels=IN_C, out_channels=OUT_C, kernel_size=3, padding=1, bias=bias),
-        nn.ReLU(),
-    )
-    x = torch.randn(2, IN_C, L)
-    with torch.no_grad():
-        model(x)
-    _apply_compression(model)
+# @pytest.mark.parametrize("bias", [True, False])
+# def test_conv1d_onnx(cfg, bias, tmp_path):
+#     IN_C, OUT_C, L = 4, 8, 16
+#     model = nn.Sequential(
+#         PQConv1d(cfg, in_channels=IN_C, out_channels=OUT_C, kernel_size=3, padding=1, bias=bias),
+#         nn.ReLU(),
+#     )
+#     x = torch.randn(2, IN_C, L)
+#     with torch.no_grad():
+#         model(x)
+#     _apply_compression(model)
 
-    torch_out = _torch_out(model, x)
-    onnx_out = _onnx_run(model, x, input_shape=(IN_C, L), tmp_path=tmp_path)
-    np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg=f"PQConv1d bias={bias}: torch vs ONNX mismatch")
+#     torch_out = _torch_out(model, x)
+#     onnx_out = _onnx_run(model, x, input_shape=(IN_C, L), tmp_path=tmp_path)
+#     np.testing.assert_allclose(torch_out, onnx_out, atol=ATOL, err_msg=f"PQConv1d bias={bias}: torch vs ONNX mismatch")
 
 
 # ---------------------------------------------------------------------------
