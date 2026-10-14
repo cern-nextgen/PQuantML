@@ -530,7 +530,7 @@ def mdmm_config(
             "enable_pruning": True,
             "constraint_type": constraint_type,
             "target_value": target_value,
-            "metric_type": metric_type,
+            "metric": {"metric_type": metric_type},
             "target_sparsity": 0.8,
             "rf": 1,
             "epsilon": 1e-3,

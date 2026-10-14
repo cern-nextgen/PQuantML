@@ -164,23 +164,81 @@ There are more details about every pruning method:
 | `t_delta`                  | int      | `50`        | Steps used to aggregate statistics.         |
 | `t_start_collecting_batch` | int      | `50`        | Steps to skip before collecting statistics. |
 
+(mdmm-pruning)=
 #### MDMM Pruning
-| **Field**          | **Type**              | **Default**                | **Description**                                                                 |
-|--------------------|-----------------------|----------------------------|---------------------------------------------------------------------------------|
-| `pruning_method`   | str                   | `"mdmm"`                   | Selects this pruning schema.                                                    |
-| `constraint_type`  | ConstraintType        | `"Equality"`               | Constraint form: `Equality`, `LessThanOrEqual`, or `GreaterThanOrEqual`.        |
-| `target_value`     | float                 | `0.0`                      | Target value for the chosen metric (used for the general constraint).           |
-| `metric_type`      | MetricType            | `"UnstructuredSparsity"`   | Metric being constrained: `UnstructuredSparsity` or `StructuredSparsity`.       |
-| `target_sparsity`  | float                 | `0.9`                      | Target sparsity when constraining sparsity.                                     |
-| `rf`               | int                   | `1`                        | Regularization / frequency parameter.                                           |
-| `epsilon`          | float                 | `1.0e-03`                  | Feasibility tolerance.                                                          |
-| `scale`            | float                 | `10.0`                     | Penalty scaling for constraint violation.                                       |
-| `damping`          | float                 | `1.0`                      | Damping term for numerical stability.                                           |
-| `use_grad`         | bool                  | `false`                    | Use gradient information during updates.                                        |
-| `l0_mode`          | `"coarse"` \| `"smooth"` | `"coarse"`              | L0 approximation mode.                                                          |
-| `scale_mode`       | `"mean"` \| `"sum"`   | `"mean"`                   | Aggregation mode for penalties.                                                 |
-| `constraint_lr`    | float                 | `1.0e-03`                  | Learning rate for the Lagrange multiplier (dual variable).                      |
 
+See the [practical MDMM guide](mdmm.md) for metric selection, constraint examples, training stages, and limitations. The defaults below are model defaults; the ready-made FPGA and PACA configurations override some of them.
+
+| **Field**          | **Type**             | **Default**               | **Description**                                              |
+|--------------------|-----------------------|----------------------------|--------------------------------------------------------------|
+| `pruning_method`   | str                   | `"mdmm"`                       | Selects this pruning schema.                                 |
+| `constraint_type`  | ConstraintType        | `"Equality"`               | Constraint form: `Equality`, `LessThanOrEqual`, or `GreaterThanOrEqual`. |
+| `target_value`     | float                 | `0.0`                      | Target value for the chosen metric (used for the general constraint). |
+| `metric`           | metric block          | `UnstructuredSparsity`     | Nested per-metric block: `metric_type` plus that metric's own parameters; see **MDMM metric types** below. |
+| `target_sparsity`  | float                 | `0.9`                      | Desired zero-weight fraction inside `UnstructuredSparsity`; other metrics do not use it. |
+| `rf`               | int                   | `1`                        | Reuse factor: weights per group for structured and FPGA metrics. |
+| `epsilon`          | float                 | `1.0e-03`                  | Near-zero cutoff for weights, coarse group counts, and PACA binary support. |
+| `scale`            | float                 | `10.0`                     | Penalty scaling for constraint violation.                    |
+| `damping`          | float                 | `1.0`                      | Damping term for numerical stability.                        |
+| `use_grad`         | bool                  | `false`                    | Update the multiplier by optimizer gradient ascent when true; use explicit updates when false. |
+| `l0_mode`          | `"coarse"` \| `"smooth"` | `"coarse"`              | Zero-count approximation for unstructured and FPGA metrics. |
+| `scale_mode`       | `"mean"` \| `"sum"`      | `"mean"`                 | Normalize the unstructured metric by the number of weights, or leave its sum unchanged. |
+| `constraint_lr`    | float                 | `1.0e-03`                  | Step size for explicit multiplier updates when `use_grad: false`. |
+
+
+##### MDMM metric types
+
+The `metric` block selects which quantity the MDMM constraint drives via its `metric_type` discriminator; the metric's exclusive parameters sit in the same block, while shared knobs (`epsilon`, `rf`, `l0_mode`, ...) stay at the `pruning_parameters` level:
+
+```yaml
+pruning_parameters:
+  pruning_method: mdmm
+  constraint_type: GreaterThanOrEqual
+  target_value: 0.9
+  l0_mode: smooth
+  metric:
+    metric_type: "FPGAAwareSparsity"
+    target_resource: "DSP"
+```
+
+Use the nested layout shown above: `metric_type` and metric-specific parameters belong inside `metric`. Only the PACA metric requires 4D convolution weights.
+
+| **metric_type**        | **Constrains**                                                                |
+|------------------------|-------------------------------------------------------------------------------|
+| `UnstructuredSparsity` | Element-wise (L0/L1) sparsity toward `target_sparsity`.                        |
+| `StructuredSparsity`   | Fraction of weight groups of size `rf` whose L2 norm is at most `epsilon`.     |
+| `FPGAAwareSparsity`    | Fraction of zero DSP/BRAM weight groups, modelling FPGA resource packing.      |
+| `PACAPatternSparsity`  | Mean distance of each conv kernel to a small set of dominant binary patterns.  |
+
+**`FPGAAwareSparsity` parameters** (inside the `metric` block when `metric_type: FPGAAwareSparsity`):
+
+| **Field**         | **Type**            | **Default** | **Description**                                                             |
+|-------------------|---------------------|-------------|-----------------------------------------------------------------------------|
+| `precision`       | int                 | `16`        | Weight bit-width used to derive BRAM packing.                               |
+| `target_resource` | `"DSP"` \| `"BRAM"` | `"DSP"`     | Hardware resource whose group-sparsity is measured.                         |
+| `bram_width`      | int                 | `36`        | BRAM word width; sets how many DSP groups pack into one BRAM (`BRAM` only).  |
+
+Weights are grouped into DSP blocks of size `rf`; for `target_resource: BRAM`, `c = bram_width // precision` (or `2*bram_width // precision` when not divisible) consecutive DSP groups pack into one BRAM block. In coarse mode the metric reports the fraction of groups whose L2 norm is at most `epsilon`; smooth mode averages a differentiable approximation instead.
+
+```{note}
+The metric measures the *zero*-group fraction, so pair it with `constraint_type: GreaterThanOrEqual` and `target_value` set to the wanted sparsity (as `mdmm_fpga_config()` does). Use `l0_mode: smooth` with it: the smooth surrogate makes the group count differentiable, which the constraint needs to actually move weights.
+```
+
+**`PACAPatternSparsity` parameters** (inside the `metric` block when `metric_type: PACAPatternSparsity`):
+
+| **Field**              | **Type**                                        | **Default**        | **Description**                                              |
+|------------------------|-------------------------------------------------|--------------------|--------------------------------------------------------------|
+| `num_patterns_to_keep` | int                                             | `16`               | Maximum number of dominant kernel patterns retained.        |
+| `beta`                 | float                                           | `0.75`             | Requested cumulative frequency coverage in `[0, 1]`, subject to the pattern-count cap. |
+| `distance_metric`      | `"hamming"` \| `"valued_hamming"` \| `"cosine"` | `"valued_hamming"` | Distance from each kernel to its closest dominant pattern.   |
+
+```{note}
+`PACAPatternSparsity` always pairs with an equality constraint at target `0` (driving every kernel onto a dominant pattern); the config model sets `constraint_type` and `target_value` for you. During fine-tuning the kernels are projected onto their closest dominant pattern.
+```
+
+```{note}
+`FPGAAwareSparsity` supports vector, matrix, and higher-dimensional weights. `PACAPatternSparsity` operates on 4D convolution weights and is a no-op on other shapes. Ready-made configs are available via `mdmm_fpga_config()` and `mdmm_paca_config()`.
+```
 
 Optionally, there is also FITCompress method implemented for PyTorch-only:
 ### FitCompress method

@@ -4,6 +4,9 @@ pytest test_ap.py
 KERAS_BACKEND="torch" pytest test_ap.py
 pytest test_pdp.py
 KERAS_BACKEND="torch" pytest test_pdp.py
+pytest test_mdmm.py test_mdmm_metrics.py
+KERAS_BACKEND="torch" pytest test_mdmm.py test_mdmm_metrics.py
+KERAS_BACKEND="torch" pytest test_torch_mdmm.py
 pytest test_wanda.py
 KERAS_BACKEND="torch" pytest test_wanda.py
 pytest test_torch_pruning_layers.py

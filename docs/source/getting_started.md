@@ -27,6 +27,10 @@ config.quantization_parameters.default_weight_fractional_bits = 3.
 config.quantization_parameters.use_relu_multiplier = False
 ```
 
+### MDMM pruning (constraint-based)
+
+MDMM (Modified Differential Method of Multipliers) adds a constraint loss for a chosen sparsity metric. Use `mdmm_config()` for unstructured sparsity, `mdmm_fpga_config()` for DSP/BRAM group sparsity, or `mdmm_paca_config()` for convolution-kernel patterns. The [practical MDMM guide](mdmm.md) explains the nested configuration, training stages, and metric-specific limitations; parameter defaults remain in the [Usage Reference](mdmm-pruning).
+
 ### Building a model
 PQuantML supports two ways of defining compressed models. Below we illustrate both approaches using a simple jet-tagging architecture.
 

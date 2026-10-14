@@ -58,6 +58,7 @@ Contents
    install
    getting_started
    reference
+   mdmm
    faq
 
 
