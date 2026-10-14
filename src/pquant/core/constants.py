@@ -19,6 +19,8 @@ class QuantizationGranularity(str, Enum):
     PER_TENSOR = "per_tensor"
     PER_CHANNEL = "per_channel"
     PER_WEIGHT = "per_weight"
+    PER_BLOCK = "per_block"
+    PER_TOKEN = "per_token"
 
 
 PRUNING_MODEL_REGISTRY = {

@@ -11,7 +11,7 @@ from pquant.core.torch.layers import (
     PQBatchNorm2d,
     PQWeightBiasBase,
 )
-from pquant.core.torch.quantizer import Quantizer
+from pquant.core.torch.quantizer import Quantizer, quantizer_options
 
 _PQUANTML_LAYER_TYPES = (PQWeightBiasBase, PQAvgPoolBase, PQBatchNorm1d, PQBatchNorm2d, PQActivation)
 
@@ -266,6 +266,7 @@ def _insert_missing_quantizers(traced, edges_to_quantize, config):
             is_data=True,
             granularity=QuantizationGranularity.PER_TENSOR,
             hgq_gamma=qp.hgq_gamma,
+            **quantizer_options(config),
         )
 
     def _enable_pquantml_output_quantization(layer):
@@ -282,6 +283,7 @@ def _insert_missing_quantizers(traced, edges_to_quantize, config):
                 is_data=True,
                 hgq_gamma=layer.hgq_gamma,
                 place="datalane",
+                **quantizer_options(layer.config),
             ).to(device)
 
     modules = dict(traced.named_modules())

@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from torch import maximum, minimum, relu, tanh
 
-from pquant.core.torch.quantizer import Quantizer
+from pquant.core.torch.quantizer import Quantizer, quantizer_options
 
 T = TypeVar("T")
 
@@ -108,6 +108,7 @@ class PQActivation(nn.Module):
             place="datalane",
             dynamic_data=self.dynamic_data,
             granularity=self.config.quantization_parameters.granularity,
+            **quantizer_options(self.config),
         )
         self.input_quantizer = Quantizer(
             k=self.k_input,
@@ -121,6 +122,7 @@ class PQActivation(nn.Module):
             place="datalane",
             dynamic_data=self.dynamic_data,
             granularity=self.config.quantization_parameters.granularity,
+            **quantizer_options(self.config),
         )
         if self.use_hgq:
             self.input_quantizer.quantizer.build(input_shape)
@@ -332,6 +334,7 @@ class PQSoftmax(nn.Module):
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
                 dynamic_data=self.config.quantization_parameters.dynamic_data_quantization,
+                **quantizer_options(self.config),
             )
 
         self.input_quantizer = _data_quantizer(self.k_input, self.i_input, self.f_input)
