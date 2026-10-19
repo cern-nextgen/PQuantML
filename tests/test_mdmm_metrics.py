@@ -284,6 +284,7 @@ def test_pydantic_metric_defaults(metric_type, expected_parameters):
 
 def test_pydantic_default_mdmm_parameters():
     pruning_parameters = MDMMPruningModel()
+    assert pruning_parameters.enable_pruning is True
     assert pruning_parameters.metric.metric_type is MetricType.UNSTRUCTURED
     assert pruning_parameters.constraint_type is ConstraintType.EQUALITY
     assert pruning_parameters.target_value == 0.0

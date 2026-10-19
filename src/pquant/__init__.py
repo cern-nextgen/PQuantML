@@ -21,6 +21,7 @@ if backend == "torch":
         pdp_config,
         wanda_config,
     )
+    from .core import preset_configs
     from .core.torch import (
         activations,
         layers,
@@ -63,6 +64,8 @@ if backend == "torch":
     _forwards.append("mdmm_paca_config")
     _forwards.append("pdp_config")
     _forwards.append("wanda_config")
+    sys.modules[f"{__name__}.preset_configs"] = preset_configs
+    _forwards.append("preset_configs")
     _forwards.append("fitcompress_config")
     _forwards.append("load_from_file")
     _forwards.append("load_from_dictionary")
@@ -88,6 +91,7 @@ else:
         pdp_config,
         wanda_config,
     )
+    from .core import preset_configs
     from .core.keras import activations, layers, pruning_methods, quantizer
     from .core.keras.layers import (
         add_compression_layers,
@@ -122,6 +126,8 @@ else:
     _forwards.append("mdmm_paca_config")
     _forwards.append("pdp_config")
     _forwards.append("wanda_config")
+    sys.modules[f"{__name__}.preset_configs"] = preset_configs
+    _forwards.append("preset_configs")
     _forwards.append("load_from_file")
     _forwards.append("load_from_dictionary")
     _forwards.append("PQConfig")

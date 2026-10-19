@@ -8,7 +8,7 @@ pruning_parameters:
   threshold_decay: 0.
   sparsity: 0.90
   t_delta: 100
-  t_start_collecting_batch: 100
+  t_start_collecting_batch: 10
 quantization_parameters:
   default_weight_keep_negatives: 1.
   default_weight_integer_bits: 0.
