@@ -15,9 +15,10 @@ This page tracks the development status of PQuantML features.
 | Model fit support | ✅ Complete | Works in v0.1.0 |
 | Alkaid converter support        | ✅ Complete | Works in v0.1.0 |
 | Onnx converter support          | ✅ Complete | Works in v0.1.0 |
-| Knowledge distillation  | ⏳ In progress | Initial prototype available in v0.1.0 |
+| Knowledge distillation  | ✅ Complete | Testing on different use cases |
 | Implementation of HGQ and pruning layers in Torch  | ✅ Complete | Works in v0.1.0 |
 | Additional test coverage for pruning methods | ⏳ Will be in the next release | Due to the next release|
-| CI/CD pipeline                   | 🚧 Work in progress    | Due to the next release |
+| CI/CD pipeline                   | ✅ Complete    | Will be included in the next release |
 | MDMM pruning algorithm metrics extension               | 🚧 Work in progress    | Due to the next release |
+| LLM-Assisted HPO framework  | ⏳  Will be in the next release | Due to the next release|
 | Documentation                   | 🚧 Improving    | Expanded monthly |
