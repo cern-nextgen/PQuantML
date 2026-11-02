@@ -266,6 +266,8 @@ def _insert_missing_quantizers(traced, edges_to_quantize, config):
             is_data=True,
             granularity=QuantizationGranularity.PER_TENSOR,
             hgq_gamma=qp.hgq_gamma,
+            block_size=qp.block_size,
+            dynamic_data_inference=qp.dynamic_data_inference,
         )
 
     def _enable_pquantml_output_quantization(layer):
@@ -282,6 +284,8 @@ def _insert_missing_quantizers(traced, edges_to_quantize, config):
                 is_data=True,
                 hgq_gamma=layer.hgq_gamma,
                 place="datalane",
+                block_size=layer.block_size,
+                dynamic_data_inference=layer.dynamic_data_inference,
             ).to(device)
 
     modules = dict(traced.named_modules())

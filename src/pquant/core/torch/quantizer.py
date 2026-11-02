@@ -1,5 +1,8 @@
+import math
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from pquant.core.constants import QuantizationGranularity
 from pquant.core.torch.fixed_point_quantizer import get_fixed_quantizer
@@ -36,6 +39,8 @@ class Quantizer(nn.Module):
         place="datalane",
         dynamic_data=True,
         shape=None,
+        block_size=128,
+        dynamic_data_inference=False,
     ):
         super().__init__()
 
@@ -44,7 +49,10 @@ class Quantizer(nn.Module):
         self.use_hgq = is_heterogeneous
         self.is_data = is_data
         self.dynamic_data = dynamic_data
+        self.dynamic_data_inference = dynamic_data_inference
+        self.block_size = block_size
         self.granularity = QuantizationGranularity(granularity).value
+        self.shape = shape
 
         # Params even when using HGQ, as they are used during hls4ml conversion
         param_shape = () if (is_data or self.use_hgq) else self.compute_weight_param_shape(shape)
@@ -67,6 +75,41 @@ class Quantizer(nn.Module):
         self.hgq_gamma = hgq_gamma
         _register_final_compression_flag(self)
 
+    @property
+    def row_wise(self):
+        return self.granularity in (QuantizationGranularity.PER_TOKEN, QuantizationGranularity.PER_BLOCK)
+
+    @property
+    def channel_wise(self):
+        return self.granularity in (
+            QuantizationGranularity.PER_CHANNEL,
+            QuantizationGranularity.PER_BLOCK,
+            QuantizationGranularity.PER_TOKEN,
+        )
+
+    @property
+    def blocked(self):
+        if self.granularity != QuantizationGranularity.PER_BLOCK or self.use_hgq:
+            return False
+        return self.is_data or (self.shape is not None and len(self.shape) == 2)
+
+    def _block(self, x):
+        n = x.shape[-1]
+        pad = (-n) % self.block_size
+        if pad:
+            x = F.pad(x, (0, pad))
+        return x.reshape(*x.shape[:-1], -1, self.block_size), n
+
+    @staticmethod
+    def _unblock(xb, n):
+        return xb.reshape(*xb.shape[:-2], -1)[..., :n]
+
+    def expand_bits(self, bits, shape):
+        if self.blocked and bits.ndim == 3 and len(shape) == 2:
+            bits = bits.expand(bits.shape[0], bits.shape[1], self.block_size).reshape(bits.shape[0], -1)
+            return bits[:, : shape[1]]
+        return bits
+
     def get_quantization_bits(self):
         if self.use_hgq:
             return self.quantizer.k, self.quantizer.i, self.quantizer.f
@@ -77,8 +120,8 @@ class Quantizer(nn.Module):
         if self.use_hgq:
             return self.quantizer.bits_(shape)
         else:
-            b = self.i + self.f + self.k
-            return torch.ones(shape).to(b.device) * b
+            b = self.expand_bits(self.i + self.f + self.k, shape)
+            return torch.ones(shape, device=b.device) * b
 
     def _sync_hgq_mirror_bits(self):
         if not self.quantizer.built:
@@ -96,35 +139,47 @@ class Quantizer(nn.Module):
         else:
             self.i.data = torch.as_tensor(i, dtype=self.i.dtype, device=self.i.device).broadcast_to(self.i.shape).clone()
             self.f.data = torch.as_tensor(f, dtype=self.f.dtype, device=self.f.device).broadcast_to(self.f.shape).clone()
+            self.b.data = self.k + self.i + self.f
 
     def post_pre_train_function(self):
         self.is_pretraining = False
 
     def calculate_bits_from_abs(self, abs_x):
         m = torch.ceil(torch.log2(abs_x + 1e-6))
-        int_bits = torch.clamp(m, min=-8).clamp(max=self.b - self.k.to(m.device))
+        int_bits = torch.clamp(m, min=-8).clamp(max=self.b - self.k)
         frac_bits = torch.clamp(self.b - int_bits - self.k, min=0)
         return int_bits, frac_bits
 
+    @property
+    def data_range_is_dynamic(self):
+        return self.is_data and self.dynamic_data and (self.training or self.dynamic_data_inference)
+
     def compute_data_dynamic_bits(self, x):
-        if not (self.training and self.dynamic_data):
+        if not self.data_range_is_dynamic:
             _, i, f = self.get_quantization_bits()
             return i, f
-        abs_x = torch.amax(torch.abs(x.detach()))
+        if self.row_wise:
+            abs_x = torch.amax(torch.abs(x.detach()), dim=-1, keepdim=True)
+        else:
+            abs_x = torch.amax(torch.abs(x.detach()))
         return self.calculate_bits_from_abs(abs_x)
 
     def compute_weight_param_shape(self, shape):
         if shape is None or self.granularity == QuantizationGranularity.PER_TENSOR or len(shape) == 1:
             return ()
-        elif self.granularity == QuantizationGranularity.PER_CHANNEL:
+        elif self.blocked:
+            return (shape[0], math.ceil(shape[1] / self.block_size), 1)
+        elif self.channel_wise:
             return (shape[0],) + (1,) * (len(shape) - 1)  # Channels first
         else:
             return shape
 
     def _reduce_absmax(self, x):
-        if self.is_data or self.granularity == QuantizationGranularity.PER_TENSOR or x.ndim == 1:
+        if self.granularity == QuantizationGranularity.PER_TENSOR or x.ndim == 1:
             return torch.amax(torch.abs(x))
-        if self.granularity == QuantizationGranularity.PER_CHANNEL:
+        if self.blocked:
+            return torch.amax(torch.abs(x), dim=-1, keepdim=True)
+        if self.channel_wise:
             return torch.amax(torch.abs(x), dim=tuple(range(1, x.ndim)), keepdim=True)
         if self.granularity == QuantizationGranularity.PER_WEIGHT:
             return torch.abs(x)
@@ -141,20 +196,36 @@ class Quantizer(nn.Module):
             return self.compute_data_dynamic_bits(x)
         return self.compute_weight_dynamic_bits(x)
 
-    def forward(self, x):
-        if self.use_hgq:
-            return self.quantizer(x, training=self.training)
-        if self._final_compression_done:
-            return self.quantizer(x, k=self.k, i=self.i, f=self.f, training=False)
-        i, f = self.compute_dynamic_bits(x)
+    def _remember_bits(self, i, f):
         with torch.no_grad():
-            if self.i.shape == i.shape and self.f.shape == f.shape:
+            if self.is_data and self.row_wise and i.shape != self.i.shape:
+                i_max = i.detach().amax()
+                self.i.copy_(i_max)
+                self.f.copy_(self.b - self.k - i_max)
+            elif self.i.shape == i.shape and self.f.shape == f.shape:
                 self.i.copy_(i)
                 self.f.copy_(f)
             else:
                 self.i.data = i
                 self.f.data = f
-        return self.quantizer(x, k=self.k, i=i, f=f, training=self.training)
+
+    def forward(self, x):
+        if self.use_hgq:
+            return self.quantizer(x, training=self.training)
+        blocked = self.blocked and x.ndim > 1
+        if blocked:
+            x, n = self._block(x)
+        if self._final_compression_done and not self.data_range_is_dynamic:
+            x = self.quantizer(x, k=self.k, i=self.i, f=self.f, training=False)
+        else:
+            i, f = self.compute_dynamic_bits(x)
+            training = self.training and not self._final_compression_done
+            if training:
+                self._remember_bits(i, f)
+            x = self.quantizer(x, k=self.k, i=i, f=f, training=training)
+        if blocked:
+            x = self._unblock(x, n)
+        return x
 
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:
@@ -176,10 +247,7 @@ class Quantizer(nn.Module):
             self._sync_hgq_mirror_bits()
             _mark_final_compression_done(self)
             return
-        _, i, f = self.get_quantization_bits()
-        self.i.data = i
-        self.f.data = f
-        self.b.data = i + f
+        self.b.data = self.k + self.i + self.f
         _mark_final_compression_done(self)
 
 
