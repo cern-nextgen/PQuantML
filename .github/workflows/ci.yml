@@ -109,7 +109,11 @@ jobs:
         if: matrix.parity_tests
         env:
           CUDA_VISIBLE_DEVICES: ""
-        run: pytest -v --durations=20 ${{ matrix.parity_tests }}
+        # triton segfaults when loaded after tensorflow (LLVM symbol clash);
+        # it is not needed on CPU.
+        run: |
+          python -m pip uninstall -y triton
+          pytest -v --durations=20 ${{ matrix.parity_tests }}
 
   build:
     name: Build distribution
