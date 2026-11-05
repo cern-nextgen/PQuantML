@@ -45,12 +45,14 @@ jobs:
               tests/test_ap.py
               tests/test_pdp.py
               tests/test_wanda.py
-              tests/test_torch_pruning_layers.py
               tests/test_quantizer_parity.py
               tests/test_keras_compression_layers.py
               tests/test_keras_onnx_converter.py
               tests/test_keras_alkaid_conversion.py
               tests/test_hgq_keras.py
+            # Loads torch + keras/TF in one process; run separately on CPU
+            # to avoid CUDA library clashes (segfaults, exit 139).
+            parity_tests: tests/test_torch_pruning_layers.py
           - backend: torch
             tests: >-
               tests/test_ap.py
@@ -100,6 +102,12 @@ jobs:
 
       - name: Run tests
         run: pytest -v --durations=20 ${{ matrix.tests }}
+
+      - name: Run torch/keras parity tests (CPU, isolated)
+        if: matrix.parity_tests
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+        run: pytest -v --durations=20 ${{ matrix.parity_tests }}
 
   build:
     name: Build distribution
