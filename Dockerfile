@@ -7,8 +7,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-# Copy the full context (incl. .git and README.md) before installing:
-# setuptools-scm needs .git to compute the version.
 COPY . .
 
 RUN pip install --no-cache-dir --upgrade pip \

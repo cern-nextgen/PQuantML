@@ -50,8 +50,6 @@ jobs:
               tests/test_keras_onnx_converter.py
               tests/test_keras_alkaid_conversion.py
               tests/test_hgq_keras.py
-            # Loads torch + keras/TF in one process; run separately on CPU
-            # to avoid CUDA library clashes (segfaults, exit 139).
             parity_tests: tests/test_torch_pruning_layers.py
           - backend: torch
             tests: >-
@@ -109,8 +107,6 @@ jobs:
         if: matrix.parity_tests
         env:
           CUDA_VISIBLE_DEVICES: ""
-        # triton segfaults when loaded after tensorflow (LLVM symbol clash);
-        # it is not needed on CPU.
         run: |
           python -m pip uninstall -y triton
           pytest -v --durations=20 ${{ matrix.parity_tests }}
