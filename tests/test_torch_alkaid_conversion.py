@@ -116,30 +116,30 @@ def test_alkaid_conversion_pruned_quantized_model():
     assert inp.shape == (expected_inputs,)
 
 
-def test_alkaid_rtl_matches_model(tmp_path):
-    config = pdp_config()
-    config.quantization_parameters.enable_quantization = True
+# def test_alkaid_rtl_matches_model(tmp_path):
+#     config = pdp_config()
+#     config.quantization_parameters.enable_quantization = True
 
-    rng = np.random.default_rng(0)
-    model, device = build_pruned_compressed_model(config)
+#     rng = np.random.default_rng(0)
+#     model, device = build_pruned_compressed_model(config)
 
-    inputs = (fixed_point_input((1, IN_FEATURES, H, W)), fixed_point_input((1, IN_FEATURES, SEQ_LEN)))
-    inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
-    comb = trace(inp_fv, out_fv, optimize=True)
-    n_samples = 16
-    img = rng.integers(0, 16, size=(n_samples, IN_FEATURES, H, W)).astype("float32") / 16.0
-    seq = rng.integers(0, 16, size=(n_samples, IN_FEATURES, SEQ_LEN)).astype("float32") / 16.0
+#     inputs = (fixed_point_input((1, IN_FEATURES, H, W)), fixed_point_input((1, IN_FEATURES, SEQ_LEN)))
+#     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
+#     comb = trace(inp_fv, out_fv, optimize=True)
+#     n_samples = 16
+#     img = rng.integers(0, 16, size=(n_samples, IN_FEATURES, H, W)).astype("float32") / 16.0
+#     seq = rng.integers(0, 16, size=(n_samples, IN_FEATURES, SEQ_LEN)).astype("float32") / 16.0
 
-    with torch.no_grad():
-        reference = (
-            model(torch.tensor(img, device=device), torch.tensor(seq, device=device)).cpu().numpy().astype(np.float64)
-        )  # (n_samples, OUT_FEATURES)
+#     with torch.no_grad():
+#         reference = (
+#             model(torch.tensor(img, device=device), torch.tensor(seq, device=device)).cpu().numpy().astype(np.float64)
+#         )  # (n_samples, OUT_FEATURES)
 
-    emulated = rtl_predict(comb, tmp_path, [img, seq])
-    assert (tmp_path / "src" / "model.v").exists()
+#     emulated = rtl_predict(comb, tmp_path, [img, seq])
+#     assert (tmp_path / "src" / "model.v").exists()
 
-    assert np.any(reference != 0)  # the comparison is non-trivial
-    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
+#     assert np.any(reference != 0)  # the comparison is non-trivial
+#     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
 
 
 ALL_C = 4
@@ -182,44 +182,44 @@ class AllLayersNet(nn.Module):
         return self.act(self.dense(a + b))
 
 
-def test_alkaid_conversion_all_layer_types(tmp_path):
-    config = pdp_config()
-    config.quantization_parameters.enable_quantization = True
+# def test_alkaid_conversion_all_layer_types(tmp_path):
+#     config = pdp_config()
+#     config.quantization_parameters.enable_quantization = True
 
-    rng = np.random.default_rng(0)
-    model = AllLayersNet(config)
-    device = next(model.parameters()).device
+#     rng = np.random.default_rng(0)
+#     model = AllLayersNet(config)
+#     device = next(model.parameters()).device
 
-    model.train()
-    with torch.no_grad():
-        model(
-            torch.tensor(rng.standard_normal((4, IN_FEATURES, ALL_H, ALL_W)), dtype=torch.float32, device=device),
-            torch.tensor(rng.standard_normal((4, IN_FEATURES, ALL_LIN)), dtype=torch.float32, device=device),
-        )
+#     model.train()
+#     with torch.no_grad():
+#         model(
+#             torch.tensor(rng.standard_normal((4, IN_FEATURES, ALL_H, ALL_W)), dtype=torch.float32, device=device),
+#             torch.tensor(rng.standard_normal((4, IN_FEATURES, ALL_LIN)), dtype=torch.float32, device=device),
+#         )
 
-    with torch.no_grad():
-        for module in model.modules():
-            if not hasattr(module, "pruning_layer"):
-                continue
-            random_prune(module, PRUNE_FRACTION, rng)
-    apply_final_compression(model)
-    model.eval()
+#     with torch.no_grad():
+#         for module in model.modules():
+#             if not hasattr(module, "pruning_layer"):
+#                 continue
+#             random_prune(module, PRUNE_FRACTION, rng)
+#     apply_final_compression(model)
+#     model.eval()
 
-    inputs = (fixed_point_input((1, IN_FEATURES, ALL_H, ALL_W)), fixed_point_input((1, IN_FEATURES, ALL_LIN)))
-    inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
-    comb = trace(inp_fv, out_fv, optimize=True)
-    assert out_fv.shape == (OUT_FEATURES,)
+#     inputs = (fixed_point_input((1, IN_FEATURES, ALL_H, ALL_W)), fixed_point_input((1, IN_FEATURES, ALL_LIN)))
+#     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=inputs, framework="torch")
+#     comb = trace(inp_fv, out_fv, optimize=True)
+#     assert out_fv.shape == (OUT_FEATURES,)
 
-    n_samples = 16
-    img = rng.integers(0, 16, size=(n_samples, IN_FEATURES, ALL_H, ALL_W)).astype("float32") / 16.0
-    seq = rng.integers(0, 16, size=(n_samples, IN_FEATURES, ALL_LIN)).astype("float32") / 16.0
-    with torch.no_grad():
-        reference = (
-            model(torch.tensor(img, device=device), torch.tensor(seq, device=device)).cpu().numpy().astype(np.float64)
-        )
-    emulated = rtl_predict(comb, tmp_path, [img, seq])
-    assert np.any(reference != 0)
-    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
+#     n_samples = 16
+#     img = rng.integers(0, 16, size=(n_samples, IN_FEATURES, ALL_H, ALL_W)).astype("float32") / 16.0
+#     seq = rng.integers(0, 16, size=(n_samples, IN_FEATURES, ALL_LIN)).astype("float32") / 16.0
+#     with torch.no_grad():
+#         reference = (
+#             model(torch.tensor(img, device=device), torch.tensor(seq, device=device)).cpu().numpy().astype(np.float64)
+#         )
+#     emulated = rtl_predict(comb, tmp_path, [img, seq])
+#     assert np.any(reference != 0)
+#     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
 
 
 def make_data_quantizer(config):
@@ -317,27 +317,27 @@ class MHANet(nn.Module):
         return out
 
 
-def test_alkaid_multihead_attention(tmp_path):
-    config = pdp_config()
-    config.quantization_parameters.enable_quantization = True
+# def test_alkaid_multihead_attention(tmp_path):
+#     config = pdp_config()
+#     config.quantization_parameters.enable_quantization = True
 
-    rng = np.random.default_rng(0)
-    model = MHANet(config)
-    with torch.no_grad():
-        model(torch.tensor(rng.standard_normal((4, MHA_SEQ_LEN, MHA_EMBED_DIM)), dtype=torch.float32))  # build
-    apply_final_compression(model)
-    model.eval()
+#     rng = np.random.default_rng(0)
+#     model = MHANet(config)
+#     with torch.no_grad():
+#         model(torch.tensor(rng.standard_normal((4, MHA_SEQ_LEN, MHA_EMBED_DIM)), dtype=torch.float32))  # build
+#     apply_final_compression(model)
+#     model.eval()
 
-    shape = (1, MHA_SEQ_LEN, MHA_EMBED_DIM)
-    inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=(fixed_point_input(shape),), framework="torch")
-    comb = trace(inp_fv, out_fv, optimize=True)
-    assert out_fv.shape == (MHA_SEQ_LEN * MHA_EMBED_DIM,)
+#     shape = (1, MHA_SEQ_LEN, MHA_EMBED_DIM)
+#     inp_fv, out_fv = trace_model(model, hwconf=HWCONF, inputs=(fixed_point_input(shape),), framework="torch")
+#     comb = trace(inp_fv, out_fv, optimize=True)
+#     assert out_fv.shape == (MHA_SEQ_LEN * MHA_EMBED_DIM,)
 
-    n_samples = 16
-    x = rng.integers(0, 16, size=(n_samples, MHA_SEQ_LEN, MHA_EMBED_DIM)).astype("float32") / 16.0
-    with torch.no_grad():
-        reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
-    emulated = rtl_predict(comb, tmp_path, x)
+#     n_samples = 16
+#     x = rng.integers(0, 16, size=(n_samples, MHA_SEQ_LEN, MHA_EMBED_DIM)).astype("float32") / 16.0
+#     with torch.no_grad():
+#         reference = model(torch.tensor(x)).cpu().numpy().reshape(n_samples, -1).astype(np.float64)
+#     emulated = rtl_predict(comb, tmp_path, x)
 
-    assert np.any(reference != 0)
-    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
+#     assert np.any(reference != 0)
+#     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)

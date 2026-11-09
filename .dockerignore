@@ -1,0 +1,17 @@
+# Keep .git: setuptools-scm needs it to compute the package version
+**/__pycache__
+**/.pytest_cache
+**/.ipynb_checkpoints
+*.egg-info
+build/
+dist/
+site/
+logs/
+mlruns/
+data/
+docs/_build/
+*.db
+*.diff
+*.log
+venv/
+.venv/

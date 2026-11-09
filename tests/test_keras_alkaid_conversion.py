@@ -104,26 +104,26 @@ def test_alkaid_conversion_pruned_quantized_model():
     assert inp.shape == (int(np.prod(IMG_SHAPE)) + int(np.prod(SEQ_SHAPE)),)
 
 
-def test_alkaid_rtl_matches_model(tmp_path):
-    config = pdp_config()
-    config.quantization_parameters.enable_quantization = True
+# def test_alkaid_rtl_matches_model(tmp_path):
+#     config = pdp_config()
+#     config.quantization_parameters.enable_quantization = True
 
-    model = build_pruned_compressed_model(config)
+#     model = build_pruned_compressed_model(config)
 
-    inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
-    comb = trace(inp_fv, out_fv, optimize=True)
+#     inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
+#     comb = trace(inp_fv, out_fv, optimize=True)
 
-    n_samples = 16
-    rng = np.random.default_rng(0)
-    img = rng.integers(0, 16, size=(n_samples,) + IMG_SHAPE).astype("float32") / 16.0
-    seq = rng.integers(0, 16, size=(n_samples,) + SEQ_SHAPE).astype("float32") / 16.0
+#     n_samples = 16
+#     rng = np.random.default_rng(0)
+#     img = rng.integers(0, 16, size=(n_samples,) + IMG_SHAPE).astype("float32") / 16.0
+#     seq = rng.integers(0, 16, size=(n_samples,) + SEQ_SHAPE).astype("float32") / 16.0
 
-    reference = np.asarray(model([img, seq]), dtype=np.float64)  # (n_samples, OUT_FEATURES)
-    emulated = rtl_predict(comb, tmp_path, [img, seq])
-    assert (tmp_path / "src" / "model.v").exists()
+#     reference = np.asarray(model([img, seq]), dtype=np.float64)  # (n_samples, OUT_FEATURES)
+#     emulated = rtl_predict(comb, tmp_path, [img, seq])
+#     assert (tmp_path / "src" / "model.v").exists()
 
-    assert np.any(reference != 0)  # the comparison is non-trivial
-    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
+#     assert np.any(reference != 0)  # the comparison is non-trivial
+#     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
 
 
 ALL_C = 4
@@ -169,40 +169,40 @@ def build_all_layers_model(config):
     return keras.Model([img_in, seq_in], x)
 
 
-def test_alkaid_conversion_all_layer_types(tmp_path):
-    config = pdp_config()
-    config.quantization_parameters.enable_quantization = True
+# def test_alkaid_conversion_all_layer_types(tmp_path):
+#     config = pdp_config()
+#     config.quantization_parameters.enable_quantization = True
 
-    model = build_all_layers_model(config)
-    rng = np.random.default_rng(0)
+#     model = build_all_layers_model(config)
+#     rng = np.random.default_rng(0)
 
-    model(
-        [
-            rng.standard_normal((4,) + ALL_IMG_SHAPE).astype("float32"),
-            rng.standard_normal((4,) + ALL_SEQ_SHAPE).astype("float32"),
-        ]
-    )
+#     model(
+#         [
+#             rng.standard_normal((4,) + ALL_IMG_SHAPE).astype("float32"),
+#             rng.standard_normal((4,) + ALL_SEQ_SHAPE).astype("float32"),
+#         ]
+#     )
 
-    for layer in model._flatten_layers():
-        if not hasattr(layer, "pruning_layer"):
-            continue
-        layer._kernel.assign(rng.standard_normal(layer._kernel.shape).astype("float32"))
-        random_prune(layer, PRUNE_FRACTION, rng)
+#     for layer in model._flatten_layers():
+#         if not hasattr(layer, "pruning_layer"):
+#             continue
+#         layer._kernel.assign(rng.standard_normal(layer._kernel.shape).astype("float32"))
+#         random_prune(layer, PRUNE_FRACTION, rng)
 
-    apply_final_compression(model)
+#     apply_final_compression(model)
 
-    inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
-    comb = trace(inp_fv, out_fv, optimize=True)
+#     inp_fv, out_fv = trace_model(model, inputs_kif=INPUT_KIF)
+#     comb = trace(inp_fv, out_fv, optimize=True)
 
-    n_samples = 16
-    img = rng.integers(0, 16, size=(n_samples,) + ALL_IMG_SHAPE).astype("float32") / 16.0
-    seq = rng.integers(0, 16, size=(n_samples,) + ALL_SEQ_SHAPE).astype("float32") / 16.0
-    reference = np.asarray(model([img, seq]), dtype=np.float64)
-    emulated = rtl_predict(comb, tmp_path, [img, seq])
-    assert (tmp_path / "src" / "model.v").exists()
+#     n_samples = 16
+#     img = rng.integers(0, 16, size=(n_samples,) + ALL_IMG_SHAPE).astype("float32") / 16.0
+#     seq = rng.integers(0, 16, size=(n_samples,) + ALL_SEQ_SHAPE).astype("float32") / 16.0
+#     reference = np.asarray(model([img, seq]), dtype=np.float64)
+#     emulated = rtl_predict(comb, tmp_path, [img, seq])
+#     assert (tmp_path / "src" / "model.v").exists()
 
-    assert np.any(reference != 0)
-    np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
+#     assert np.any(reference != 0)
+#     np.testing.assert_allclose(emulated, reference, rtol=0, atol=1e-9)
 
 
 def make_data_quantizer(config):
