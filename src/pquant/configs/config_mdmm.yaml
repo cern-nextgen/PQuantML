@@ -6,7 +6,8 @@ pruning_parameters:
   disable_pruning_for_layers: [] # Disable pruning for these layers, even if enable_pruning is true
   constraint_type: "Equality"
   target_value: 0.0
-  metric_type: "UnstructuredSparsity"
+  metric:
+    metric_type: "UnstructuredSparsity"
   target_sparsity: 0.9
   rf: 1
   epsilon: 1.0e-03
