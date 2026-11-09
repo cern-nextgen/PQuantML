@@ -23,6 +23,12 @@ class QuantizationGranularity(str, Enum):
     PER_TOKEN = "per_token"
 
 
+class DynamicDataMode(str, Enum):
+    NEVER = "never"
+    TRAINING = "training"
+    ALWAYS = "always"
+
+
 PRUNING_MODEL_REGISTRY = {
     "cs": CSPruningModel,
     "dst": DSTPruningModel,

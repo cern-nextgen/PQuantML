@@ -37,8 +37,8 @@ from pquant.layers import (  # noqa: E402
 )
 
 from pquant import post_training_prune  # noqa: E402
+from pquant.core.constants import DynamicDataMode, QuantizationGranularity  # noqa: E402
 from pquant.core.hyperparameter_optimization import PQConfig  # noqa: E402
-from pquant.core.constants import QuantizationGranularity  # noqa: E402
 
 BATCH_SIZE = 4
 OUT_FEATURES = 32
@@ -2074,8 +2074,12 @@ def test_lazily_built_quantizers_follow_eval_mode(dense_input):
 def test_row_wise_quantization_power_of_two_width(config_pdp, granularity):
     per_block = granularity == QuantizationGranularity.PER_BLOCK
     q = config_pdp.quantization_parameters
-    q.enable_quantization, q.granularity, q.block_size, q.dynamic_data_quantization = True, granularity, 4, True
-    q.default_weight_fractional_bits, q.default_data_keep_negatives = 3.0, 1.0
+    q.enable_quantization = True
+    q.granularity = granularity
+    q.block_size = 4
+    q.dynamic_data_mode = DynamicDataMode.TRAINING
+    q.default_weight_fractional_bits = 3.0
+    q.default_data_keep_negatives = 1.0
     ramp = torch.linspace(-0.9, 0.9, 4)
     weights = torch.cat([ramp * s for s in (1.0, 2.0**-3, 2.0**-6, 2.0**-9)]).repeat(4, 1)
     x = torch.cat([ramp * s for s in (8.0, 1.0, 2.0**-4, 2.0**-8)]).repeat(BATCH_SIZE, 1)
@@ -2088,9 +2092,9 @@ def test_row_wise_quantization_power_of_two_width(config_pdp, granularity):
     wq = layer.weight_quantizer
     if per_block:
         assert wq.i.shape == (4, 4, 1)
-        assert torch.equal(wq.i[:, :, 0], torch.tensor([0.0, -3.0, -6.0, -9.0]).expand(4, 4))
-        assert torch.equal(wq.f[:, :, 0], torch.tensor([3.0, 6.0, 9.0, 12.0]).expand(4, 4))
-        step_w = torch.tensor([2.0**-3, 2.0**-6, 2.0**-9, 2.0**-12]).repeat_interleave(4)
+        assert torch.equal(wq.i[:, :, 0], torch.tensor([0.0, -3.0, -6.0, -8.0]).expand(4, 4))
+        assert torch.equal(wq.f[:, :, 0], torch.tensor([3.0, 6.0, 9.0, 11.0]).expand(4, 4))
+        step_w = torch.tensor([2.0**-3, 2.0**-6, 2.0**-9, 2.0**-11]).repeat_interleave(4)
         step_x = torch.tensor([2.0**-4, 2.0**-7, 2.0**-11, 2.0**-15]).repeat_interleave(4)
     else:
         assert wq.i.shape == (4, 1) and torch.all(wq.i == 0) and torch.all(wq.f == 3)
@@ -2104,8 +2108,12 @@ def test_row_wise_quantization_power_of_two_width(config_pdp, granularity):
 def test_row_wise_quantization_non_power_of_two_width(config_pdp, granularity):
     per_block = granularity == QuantizationGranularity.PER_BLOCK
     q = config_pdp.quantization_parameters
-    q.enable_quantization, q.granularity, q.block_size, q.dynamic_data_quantization = True, granularity, 4, True
-    q.default_weight_fractional_bits, q.default_data_keep_negatives, q.dynamic_data_inference = 3.0, 1.0, True
+    q.enable_quantization = True
+    q.granularity = granularity
+    q.block_size = 4
+    q.dynamic_data_mode = DynamicDataMode.ALWAYS
+    q.default_weight_fractional_bits = 3.0
+    q.default_data_keep_negatives = 1.0
     ramp = torch.linspace(-0.9, 0.9, 4)
     weights = torch.cat([ramp, ramp, ramp[:2] * 2.0**-6]).repeat(3, 1)
     x = torch.cat([ramp, ramp, ramp[:2] * 2.0**-7]).repeat(BATCH_SIZE, 1)
@@ -2113,7 +2121,7 @@ def test_row_wise_quantization_non_power_of_two_width(config_pdp, granularity):
     with torch.no_grad():
         layer._weight.copy_(weights)
     layer.train()
-    layer(x)  
+    layer(x)
     layer.eval()
 
     for quantizer, tensor in ((layer.weight_quantizer, weights), (layer.input_quantizer, x)):

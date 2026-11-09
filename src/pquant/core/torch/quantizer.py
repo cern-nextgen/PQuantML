@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from pquant.core.constants import QuantizationGranularity
+from pquant.core.constants import DynamicDataMode, QuantizationGranularity
 from pquant.core.torch.fixed_point_quantizer import get_fixed_quantizer
 from pquant.core.torch.hgq_quantizer import HGQQuantizer
 
@@ -37,10 +37,9 @@ class Quantizer(nn.Module):
         granularity=QuantizationGranularity.PER_TENSOR,
         hgq_gamma=1e-8,
         place="datalane",
-        dynamic_data=True,
         shape=None,
         block_size=128,
-        dynamic_data_inference=False,
+        dynamic_data_mode=DynamicDataMode.NEVER,
     ):
         super().__init__()
 
@@ -48,8 +47,7 @@ class Quantizer(nn.Module):
         self.round_mode = round_mode
         self.use_hgq = is_heterogeneous
         self.is_data = is_data
-        self.dynamic_data = dynamic_data
-        self.dynamic_data_inference = dynamic_data_inference
+        self.dynamic_data_mode = DynamicDataMode(dynamic_data_mode).value
         self.block_size = block_size
         self.granularity = QuantizationGranularity(granularity).value
         self.shape = shape
@@ -92,6 +90,10 @@ class Quantizer(nn.Module):
         if self.granularity != QuantizationGranularity.PER_BLOCK or self.use_hgq:
             return False
         return self.is_data or (self.shape is not None and len(self.shape) == 2)
+
+    @property
+    def always_dynamic(self):
+        return self.is_data and self.dynamic_data_mode == DynamicDataMode.ALWAYS
 
     def _block(self, x):
         n = x.shape[-1]
@@ -150,19 +152,18 @@ class Quantizer(nn.Module):
         frac_bits = torch.clamp(self.b - int_bits - self.k, min=0)
         return int_bits, frac_bits
 
-    @property
-    def data_range_is_dynamic(self):
-        return self.is_data and self.dynamic_data and (self.training or self.dynamic_data_inference)
-
     def compute_data_dynamic_bits(self, x):
-        if not self.data_range_is_dynamic:
-            _, i, f = self.get_quantization_bits()
-            return i, f
-        if self.row_wise:
-            abs_x = torch.amax(torch.abs(x.detach()), dim=-1, keepdim=True)
-        else:
-            abs_x = torch.amax(torch.abs(x.detach()))
-        return self.calculate_bits_from_abs(abs_x)
+        use_dynamic_bits = self.dynamic_data_mode == DynamicDataMode.ALWAYS or (
+            self.dynamic_data_mode == DynamicDataMode.TRAINING and self.training
+        )
+        if use_dynamic_bits:
+            if self.row_wise:
+                abs_x = torch.amax(torch.abs(x.detach()), dim=-1, keepdim=True)
+            else:
+                abs_x = torch.amax(torch.abs(x.detach()))
+            return self.calculate_bits_from_abs(abs_x)
+        _, i, f = self.get_quantization_bits()
+        return i, f
 
     def compute_weight_param_shape(self, shape):
         if shape is None or self.granularity == QuantizationGranularity.PER_TENSOR or len(shape) == 1:
@@ -215,7 +216,7 @@ class Quantizer(nn.Module):
         blocked = self.blocked and x.ndim > 1
         if blocked:
             x, n = self._block(x)
-        if self._final_compression_done and not self.data_range_is_dynamic:
+        if self._final_compression_done and not self.always_dynamic:
             x = self.quantizer(x, k=self.k, i=self.i, f=self.f, training=False)
         else:
             i, f = self.compute_dynamic_bits(x)

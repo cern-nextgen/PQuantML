@@ -76,7 +76,7 @@ class PQActivation(keras.layers.Layer):
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.hgq_heterogeneous = config.quantization_parameters.hgq_heterogeneous
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
-        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
+        self.dynamic_data_mode = config.quantization_parameters.dynamic_data_mode
 
         self.post_fitcompress_calibration = False
         self.saved_inputs = []
@@ -99,7 +99,7 @@ class PQActivation(keras.layers.Layer):
                 is_heterogeneous=self.use_hgq,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
-                dynamic_data=self.dynamic_data,
+                dynamic_data_mode=self.dynamic_data_mode,
                 granularity=self.config.quantization_parameters.granularity,
             )
         if self.quantize_output:
@@ -113,7 +113,7 @@ class PQActivation(keras.layers.Layer):
                 is_heterogeneous=self.use_hgq,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
-                dynamic_data=self.dynamic_data,
+                dynamic_data_mode=self.dynamic_data_mode,
                 granularity=self.config.quantization_parameters.granularity,
             )
 
@@ -282,7 +282,7 @@ class PQSoftmax(keras.layers.Layer):
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.hgq_beta = config.quantization_parameters.hgq_beta
         self.enable_quantization = config.quantization_parameters.enable_quantization
-        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
+        self.dynamic_data_mode = config.quantization_parameters.dynamic_data_mode
         self.is_pretraining = True
 
         i_data = config.quantization_parameters.default_data_integer_bits
@@ -335,7 +335,7 @@ class PQSoftmax(keras.layers.Layer):
                 is_heterogeneous=self.use_hgq,
                 hgq_gamma=self.hgq_gamma,
                 place="datalane",
-                dynamic_data=self.dynamic_data,
+                dynamic_data_mode=self.dynamic_data_mode,
             )
 
         self.input_quantizer = _data_quantizer(self.k_input, self.i_input, self.f_input)

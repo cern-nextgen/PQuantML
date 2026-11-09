@@ -1,4 +1,4 @@
-from pquant.core.constants import QuantizationGranularity
+from pquant.core.constants import DynamicDataMode, QuantizationGranularity
 from pquant.core.hyperparameter_optimization import PQConfig, dst_config, pdp_config, wanda_config
 
 _WEIGHT_BITS = (1, 0, 7)
@@ -20,7 +20,7 @@ def _quantization(
     learned,
     hgq_beta=None,
     hgq_gamma=None,
-    dynamic_data=False,
+    dynamic_data_mode=DynamicDataMode.NEVER,
 ):
     granularity = QuantizationGranularity(granularity)
     if learned and granularity == QuantizationGranularity.PER_CHANNEL:
@@ -39,7 +39,7 @@ def _quantization(
         "overflow_mode_data": overflow_mode_data,
         "overflow_mode_parameters": overflow_mode_parameters,
         "round_mode": round_mode,
-        "dynamic_data_quantization": dynamic_data,
+        "dynamic_data_mode": DynamicDataMode(dynamic_data_mode).value,
     }
     if learned:
         section.update(hgq_beta=hgq_beta, hgq_gamma=hgq_gamma)
@@ -84,7 +84,7 @@ def quantized(
     overflow_mode_parameters=_OVERFLOW_MODE_PARAMETERS,
     round_mode=_ROUND_MODE,
     epochs=100,
-    dynamic_data=True,
+    dynamic_data_mode=DynamicDataMode.TRAINING,
 ):
     return _build(
         _no_pruning(),
@@ -96,7 +96,7 @@ def quantized(
             overflow_mode_parameters,
             round_mode,
             learned=False,
-            dynamic_data=dynamic_data,
+            dynamic_data_mode=dynamic_data_mode,
         ),
         training_parameters={"pretraining_epochs": 0, "epochs": epochs, "fine_tuning_epochs": 0},
     )
@@ -141,7 +141,7 @@ def quantized_unstructured_pruning(
     round_mode=_ROUND_MODE,
     epochs=100,
     fine_tuning_epochs=0,
-    dynamic_data=True,
+    dynamic_data_mode=DynamicDataMode.TRAINING,
 ):
     return _build(
         dst_config(),
@@ -154,7 +154,7 @@ def quantized_unstructured_pruning(
             overflow_mode_parameters,
             round_mode,
             learned=False,
-            dynamic_data=dynamic_data,
+            dynamic_data_mode=dynamic_data_mode,
         ),
         training_parameters={"pretraining_epochs": 0, "epochs": epochs, "fine_tuning_epochs": fine_tuning_epochs},
     )
@@ -171,7 +171,7 @@ def quantized_structured_pruning(
     pretraining_epochs=10,
     epochs=100,
     fine_tuning_epochs=10,
-    dynamic_data=True,
+    dynamic_data_mode=DynamicDataMode.TRAINING,
 ):
     return _build(
         pdp_config(),
@@ -184,7 +184,7 @@ def quantized_structured_pruning(
             overflow_mode_parameters,
             round_mode,
             learned=False,
-            dynamic_data=dynamic_data,
+            dynamic_data_mode=dynamic_data_mode,
         ),
         training_parameters={
             "pretraining_epochs": pretraining_epochs,
@@ -207,7 +207,7 @@ def quantized_nm_pruning(
     epochs=100,
     prune_at_epoch=10,
     calibration_batches=100,
-    dynamic_data=True,
+    dynamic_data_mode=DynamicDataMode.TRAINING,
 ):
     return _build(
         wanda_config(),
@@ -220,7 +220,7 @@ def quantized_nm_pruning(
             overflow_mode_parameters,
             round_mode,
             learned=False,
-            dynamic_data=dynamic_data,
+            dynamic_data_mode=dynamic_data_mode,
         ),
         training_parameters={"pretraining_epochs": pretraining_epochs, "epochs": epochs, "fine_tuning_epochs": 0},
     )

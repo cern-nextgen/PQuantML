@@ -107,7 +107,7 @@ class PQWeightBiasBase(keras.layers.Layer):
         self.use_fitcompress = config.fitcompress_parameters.enable_fitcompress
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.granularity = config.quantization_parameters.granularity
-        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
+        self.dynamic_data_mode = config.quantization_parameters.dynamic_data_mode
         self.final_compression_done = False
         self.built = False
         self.parallelization_factor = -1
@@ -157,7 +157,7 @@ class PQWeightBiasBase(keras.layers.Layer):
             granularity=in_granularity,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
-            dynamic_data=self.dynamic_data,
+            dynamic_data_mode=self.dynamic_data_mode,
         )
         self.output_quantizer = Quantizer(
             k=self.k_output,
@@ -170,7 +170,7 @@ class PQWeightBiasBase(keras.layers.Layer):
             granularity=out_granularity,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
-            dynamic_data=self.dynamic_data,
+            dynamic_data_mode=self.dynamic_data_mode,
         )
 
     def set_enable_pruning(self, enable_pruning):
@@ -1224,7 +1224,7 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
         self.in_quant_granularity = in_quant_granularity
         self.weight_quant_granularity = weight_quant_granularity
         self.bias_quant_granularity = bias_quant_granularity
-        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
+        self.dynamic_data_mode = config.quantization_parameters.dynamic_data_mode
         self.config = config
         self.f_weight = self.f_bias = ops.convert_to_tensor(config.quantization_parameters.default_weight_fractional_bits)
         self.i_weight = self.i_bias = ops.convert_to_tensor(config.quantization_parameters.default_weight_integer_bits)
@@ -1256,7 +1256,7 @@ class PQBatchNormalization(keras.layers.BatchNormalization):
             granularity=in_granularity,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
-            dynamic_data=self.dynamic_data,
+            dynamic_data_mode=self.dynamic_data_mode,
         )
         self.weight_quantizer = Quantizer(
             k=1.0,
@@ -1442,7 +1442,7 @@ class PQAvgPoolBase(keras.layers.Layer):
         self.hgq_gamma = config.quantization_parameters.hgq_gamma
         self.hgq_beta = config.quantization_parameters.hgq_beta
         self.hgq_heterogeneous = config.quantization_parameters.hgq_heterogeneous
-        self.dynamic_data = config.quantization_parameters.dynamic_data_quantization
+        self.dynamic_data_mode = config.quantization_parameters.dynamic_data_mode
         self._is_pretraining = True
         self.quantize_input = quantize_input
         self.quantize_output = quantize_output
@@ -1477,7 +1477,7 @@ class PQAvgPoolBase(keras.layers.Layer):
             granularity=in_granularity,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
-            dynamic_data=self.dynamic_data,
+            dynamic_data_mode=self.dynamic_data_mode,
         )
         self.output_quantizer = Quantizer(
             k=1.0,
@@ -1490,7 +1490,7 @@ class PQAvgPoolBase(keras.layers.Layer):
             granularity=out_granularity,
             hgq_gamma=self.hgq_gamma,
             place="datalane",
-            dynamic_data=self.dynamic_data,
+            dynamic_data_mode=self.dynamic_data_mode,
         )
         self.input_quantizer.build(input_shape)
         self.output_quantizer.build(self.compute_output_shape(input_shape))

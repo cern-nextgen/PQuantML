@@ -5,7 +5,7 @@ from hgq.regularizers import MonoL1
 from keras import ops
 from quantizers import get_fixed_quantizer
 
-from pquant.core.constants import QuantizationGranularity
+from pquant.core.constants import DynamicDataMode, QuantizationGranularity
 
 
 @keras.saving.register_keras_serializable(package="PQuantML")
@@ -23,7 +23,7 @@ class Quantizer(keras.layers.Layer):
         granularity=QuantizationGranularity.PER_TENSOR,
         hgq_gamma=1e-8,
         place="datalane",
-        dynamic_data=True,
+        dynamic_data_mode=DynamicDataMode.NEVER,
     ):
         super().__init__()
         self.k_init = float(k)
@@ -34,7 +34,9 @@ class Quantizer(keras.layers.Layer):
         self.round_mode = round_mode
         self.use_hgq = is_heterogeneous
         self.is_data = is_data
-        self.dynamic_data = dynamic_data
+        self.dynamic_data_mode = DynamicDataMode(dynamic_data_mode).value
+        if self.dynamic_data_mode == DynamicDataMode.ALWAYS:
+            raise ValueError("dynamic_data_mode='always' is not supported by the Keras backend, use 'never' or 'training'")
         self.place = place
         self.granularity = QuantizationGranularity(granularity).value
         self.quantizer = create_quantizer(
@@ -60,7 +62,7 @@ class Quantizer(keras.layers.Layer):
         return int_bits, frac_bits
 
     def compute_data_dynamic_bits(self, x):
-        if not self.dynamic_data:
+        if self.dynamic_data_mode == DynamicDataMode.NEVER:
             _, i, f = self.get_quantization_bits()
             return i, f
         abs_x = ops.max(ops.abs(x))
@@ -177,6 +179,10 @@ class Quantizer(keras.layers.Layer):
     @classmethod
     def from_config(cls, config):
         use_hgq = config["is_heterogeneous"]
+        legacy_dynamic_data = config.pop("dynamic_data", True)  # models saved before dynamic_data_mode existed
+        dynamic_data_mode = config.pop(
+            "dynamic_data_mode", DynamicDataMode.TRAINING if legacy_dynamic_data else DynamicDataMode.NEVER
+        )
         instance = cls(
             k=config.pop("k"),
             i=config.pop("i"),
@@ -187,7 +193,7 @@ class Quantizer(keras.layers.Layer):
             is_data=config.pop("is_data"),
             granularity=config.pop("granularity"),
             place=config.pop("place"),
-            dynamic_data=config.pop("dynamic_data", True),
+            dynamic_data_mode=dynamic_data_mode,
             hgq_gamma=config.pop("hgq_gamma", 1e-8),
         )
 
@@ -210,7 +216,7 @@ class Quantizer(keras.layers.Layer):
                 "is_heterogeneous": self.use_hgq,
                 "granularity": self.granularity,
                 "place": self.place,
-                "dynamic_data": self.dynamic_data,
+                "dynamic_data_mode": self.dynamic_data_mode,
             }
         )
         if self.use_hgq:
