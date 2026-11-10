@@ -34,7 +34,9 @@ If you require additional parameters for the training or optimization loops, ple
 | `quantize_input`                 | bool     | `true`      | Whether inputs to layers are quantized by default.                     |
 | `quantize_output`                | bool     | `true`      | Whether outputs of layers are quantized by default.                    |
 | `enable_quantization`            | bool     | `true`      | Global switch to enable or disable quantization.                       |
-| `granularity` | str | `"per_tensor"` | Whether bitwidths are shared across the whole tensor, per-channel, or per-weight. |
+| `granularity` | str | `"per_tensor"` | Bitwidth sharing: `per_tensor`, `per_channel`, `per_weight`, or (PyTorch, non-HGQ only) `per_block` along the last axis and `per_token` per row of a data tensor. |
+| `block_size` | int | `128` | Block length along the last axis for `per_block` granularity; the tensor is zero-padded to a multiple of it. |
+| `dynamic_data_mode` | str | `"never"` | When data-lane bitwidths are measured from the data instead of taken from the config: `never`, `training` (in train mode, until final compression) or `always` (also after final compression). |
 | `hgq_gamma`                      | float    | `1e-8`      | L1 penalty per learned bit (HGQ) on the trainable `i` and `f`; only `f` in WRAP mode. Must be >= 0. |
 | `hgq_beta`                       | float    | `1e-5`      | HGQ loss coefficient scaling EBOPs.                                    |
 | `layer_specific`                 | dict     | `{}`        | Dictionary for per-layer quantization overrides.                       |

@@ -19,6 +19,14 @@ class QuantizationGranularity(str, Enum):
     PER_TENSOR = "per_tensor"
     PER_CHANNEL = "per_channel"
     PER_WEIGHT = "per_weight"
+    PER_BLOCK = "per_block"
+    PER_TOKEN = "per_token"
+
+
+class DynamicDataMode(str, Enum):
+    NEVER = "never"
+    TRAINING = "training"
+    ALWAYS = "always"
 
 
 PRUNING_MODEL_REGISTRY = {

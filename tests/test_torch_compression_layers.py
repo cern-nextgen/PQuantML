@@ -3,6 +3,7 @@ import os
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.nn import (
     AvgPool2d,
@@ -36,6 +37,7 @@ from pquant.layers import (  # noqa: E402
 )
 
 from pquant import post_training_prune  # noqa: E402
+from pquant.core.constants import DynamicDataMode, QuantizationGranularity  # noqa: E402
 from pquant.core.hyperparameter_optimization import PQConfig  # noqa: E402
 
 BATCH_SIZE = 4
@@ -2066,3 +2068,81 @@ def test_lazily_built_quantizers_follow_eval_mode(dense_input):
 
     model.train()
     assert all(q.training for q in quantizers)
+
+
+@pytest.mark.parametrize("granularity", [QuantizationGranularity.PER_BLOCK, QuantizationGranularity.PER_TOKEN])
+def test_row_wise_quantization_power_of_two_width(config_pdp, granularity):
+    per_block = granularity == QuantizationGranularity.PER_BLOCK
+    q = config_pdp.quantization_parameters
+    q.enable_quantization = True
+    q.granularity = granularity
+    q.block_size = 4
+    q.dynamic_data_mode = DynamicDataMode.TRAINING
+    q.default_weight_fractional_bits = 3.0
+    q.default_data_keep_negatives = 1.0
+    ramp = torch.linspace(-0.9, 0.9, 4)
+    weights = torch.cat([ramp * s for s in (1.0, 2.0**-3, 2.0**-6, 2.0**-9)]).repeat(4, 1)
+    x = torch.cat([ramp * s for s in (8.0, 1.0, 2.0**-4, 2.0**-8)]).repeat(BATCH_SIZE, 1)
+    layer = PQDense(config_pdp, 16, 4, bias=False, enable_pruning=False)
+    with torch.no_grad():
+        layer._weight.copy_(weights)
+    layer.train()
+    layer(x)
+
+    wq = layer.weight_quantizer
+    if per_block:
+        assert wq.i.shape == (4, 4, 1)
+        assert torch.equal(wq.i[:, :, 0], torch.tensor([0.0, -3.0, -6.0, -8.0]).expand(4, 4))
+        assert torch.equal(wq.f[:, :, 0], torch.tensor([3.0, 6.0, 9.0, 11.0]).expand(4, 4))
+        step_w = torch.tensor([2.0**-3, 2.0**-6, 2.0**-9, 2.0**-11]).repeat_interleave(4)
+        step_x = torch.tensor([2.0**-4, 2.0**-7, 2.0**-11, 2.0**-15]).repeat_interleave(4)
+    else:
+        assert wq.i.shape == (4, 1) and torch.all(wq.i == 0) and torch.all(wq.f == 3)
+        step_w, step_x = torch.full((16,), 2.0**-3), torch.full((16,), 2.0**-4)
+    assert torch.all((layer.weight - weights).abs() <= step_w / 2)
+    assert torch.all((layer.input_quantizer(x) - x).abs() <= step_x / 2)
+    assert torch.all((layer.weight[:, 8:] != 0) == per_block)
+
+
+@pytest.mark.parametrize("granularity", [QuantizationGranularity.PER_BLOCK, QuantizationGranularity.PER_TOKEN])
+def test_row_wise_quantization_non_power_of_two_width(config_pdp, granularity):
+    per_block = granularity == QuantizationGranularity.PER_BLOCK
+    q = config_pdp.quantization_parameters
+    q.enable_quantization = True
+    q.granularity = granularity
+    q.block_size = 4
+    q.dynamic_data_mode = DynamicDataMode.ALWAYS
+    q.default_weight_fractional_bits = 3.0
+    q.default_data_keep_negatives = 1.0
+    ramp = torch.linspace(-0.9, 0.9, 4)
+    weights = torch.cat([ramp, ramp, ramp[:2] * 2.0**-6]).repeat(3, 1)
+    x = torch.cat([ramp, ramp, ramp[:2] * 2.0**-7]).repeat(BATCH_SIZE, 1)
+    layer = PQDense(config_pdp, 10, 3, bias=False, enable_pruning=False)
+    with torch.no_grad():
+        layer._weight.copy_(weights)
+    layer.train()
+    layer(x)
+    layer.eval()
+
+    for quantizer, tensor in ((layer.weight_quantizer, weights), (layer.input_quantizer, x)):
+        assert quantizer.blocked == per_block
+        if per_block:
+            blocked, n = quantizer._block(tensor)
+            assert n == 10 and blocked.shape == (*tensor.shape[:-1], 3, 4)
+            assert torch.all(blocked[..., -1, 2:] == 0) and torch.equal(blocked[..., -1, :2], tensor[:, 8:])
+            assert torch.equal(quantizer._unblock(blocked, n), tensor)
+
+    wq = layer.weight_quantizer
+    if per_block:
+        assert wq.i.shape == (3, 3, 1) and torch.equal(wq.i[:, :, 0], torch.tensor([0.0, 0.0, -6.0]).expand(3, 3))
+        step_w = torch.tensor([2.0**-3] * 8 + [2.0**-9] * 2)
+        step_x = torch.tensor([2.0**-7] * 8 + [2.0**-14] * 2)
+    else:
+        assert wq.i.shape == (3, 1) and torch.all(wq.i == 0)
+        step_w, step_x = torch.full((10,), 2.0**-3), torch.full((10,), 2.0**-7)
+    xq = layer.input_quantizer(x)
+    assert layer.weight.shape == weights.shape and xq.shape == x.shape
+    assert torch.all((layer.weight - weights).abs() <= step_w / 2)
+    assert torch.all((xq - x).abs() <= step_x / 2)
+    assert torch.all((layer.weight[:, 8:] != 0) == per_block)
+    torch.testing.assert_close(layer(x), F.linear(xq, layer.weight))

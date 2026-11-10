@@ -217,7 +217,7 @@ def make_data_quantizer(config):
         is_data=True,
         hgq_gamma=qp.hgq_gamma,
         place="datalane",
-        dynamic_data=qp.dynamic_data_quantization,
+        dynamic_data_mode=qp.dynamic_data_mode,
     )
 
 
