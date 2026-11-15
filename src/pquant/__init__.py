@@ -16,6 +16,8 @@ if backend == "torch":
         load_from_dictionary,
         load_from_file,
         mdmm_config,
+        mdmm_fpga_config,
+        mdmm_paca_config,
         pdp_config,
         wanda_config,
     )
@@ -58,6 +60,8 @@ if backend == "torch":
     _forwards.append("cs_config")
     _forwards.append("dst_config")
     _forwards.append("mdmm_config")
+    _forwards.append("mdmm_fpga_config")
+    _forwards.append("mdmm_paca_config")
     _forwards.append("pdp_config")
     _forwards.append("wanda_config")
     sys.modules[f"{__name__}.preset_configs"] = preset_configs
@@ -82,6 +86,8 @@ else:
         load_from_dictionary,
         load_from_file,
         mdmm_config,
+        mdmm_fpga_config,
+        mdmm_paca_config,
         pdp_config,
         wanda_config,
     )
@@ -116,6 +122,8 @@ else:
     _forwards.append("cs_config")
     _forwards.append("dst_config")
     _forwards.append("mdmm_config")
+    _forwards.append("mdmm_fpga_config")
+    _forwards.append("mdmm_paca_config")
     _forwards.append("pdp_config")
     _forwards.append("wanda_config")
     sys.modules[f"{__name__}.preset_configs"] = preset_configs

@@ -1,28 +1,8 @@
-import inspect
-
 import torch
 import torch.nn as nn
 
-from pquant.core.torch.pruning_methods.constraint_functions import (
-    EqualityConstraint,
-    GreaterThanOrEqualConstraint,
-    LessThanOrEqualConstraint,
-)
-from pquant.core.torch.pruning_methods.metric_functions import (
-    StructuredSparsityMetric,
-    UnstructuredSparsityMetric,
-)
-
-_METRIC_REGISTRY = {
-    "UnstructuredSparsity": UnstructuredSparsityMetric,
-    "StructuredSparsity": StructuredSparsityMetric,
-}
-
-_CONSTRAINT_REGISTRY = {
-    "Equality": EqualityConstraint,
-    "LessThanOrEqual": LessThanOrEqualConstraint,
-    "GreaterThanOrEqual": GreaterThanOrEqualConstraint,
-}
+from pquant.core.torch.pruning_methods import constraint_functions, metric_functions
+from pquant.data_models.pruning_model import CONSTRAINT_REGISTRY, METRIC_REGISTRY
 
 
 class MDMM(nn.Module):
@@ -46,48 +26,37 @@ class MDMM(nn.Module):
         if self.built:
             return
         pruning_parameters = self.config.pruning_parameters
-        metric_type = pruning_parameters.metric_type
-        constraint_type = pruning_parameters.constraint_type
-        target_value = pruning_parameters.target_value
-        target_sparsity = pruning_parameters.target_sparsity
-        l0_mode = pruning_parameters.l0_mode
-        scale_mode = pruning_parameters.scale_mode
+        metric_model = pruning_parameters.metric
+        metric_class = getattr(metric_functions, METRIC_REGISTRY[metric_model.metric_type])
+        metric_function = metric_class(**metric_model.runtime_kwargs(pruning_parameters))
 
-        candidate_kwargs = {
-            "epsilon": pruning_parameters.epsilon,
-            "target_sparsity": target_sparsity,
-            "l0_mode": l0_mode,
-            "scale_mode": scale_mode,
-            "rf": pruning_parameters.rf,
-        }
-
-        metric_cls = _METRIC_REGISTRY.get(metric_type)
-        if metric_cls is None:
-            raise ValueError(f"Unknown metric_type: {metric_type}")
-        sig = inspect.signature(getattr(metric_cls, "__init__", metric_cls))
-        metric_kwargs = {k: v for k, v in candidate_kwargs.items() if v is not None and k in sig.parameters}
-        metric_fn = metric_cls(**metric_kwargs)
-
-        common_args = {
-            "metric_fn": metric_fn,
-            "target_value": target_value,
+        constraint_kwargs = {
+            "metric_fn": metric_function,
+            "target_value": pruning_parameters.target_value,
             "scale": pruning_parameters.scale,
             "damping": pruning_parameters.damping,
             "use_grad": pruning_parameters.use_grad,
             "lr": pruning_parameters.constraint_lr,
         }
 
-        constraint_type_cls = _CONSTRAINT_REGISTRY.get(constraint_type)
-        if constraint_type_cls is None:
-            raise ValueError(f"Unknown constraint_type: {constraint_type}")
-        self.constraint_layer = constraint_type_cls(**common_args)
+        constraint_class = getattr(constraint_functions, CONSTRAINT_REGISTRY[pruning_parameters.constraint_type])
+        self.constraint_layer = constraint_class(**constraint_kwargs)
 
         self.register_buffer("mask", torch.ones(tuple(input_shape)))
         self.built = True
 
+    def _compute_hard_mask(self, weight, epsilon):
+        # During fine-tuning, a metric that defines its own projection (e.g. PACA pattern
+        # pruning) supplies the mask; otherwise use the magnitude threshold. The layer only
+        # checks for the capability, so it stays metric-agnostic (no metric-type branching).
+        metric_fn = getattr(self.constraint_layer, "metric_fn", None)
+        if self._is_finetuning and hasattr(metric_fn, "get_projection_mask"):
+            return metric_fn.get_projection_mask(weight).to(weight.dtype)
+        return (weight.abs() > epsilon).to(weight.dtype)
+
     def forward(self, weight):
         epsilon = self.config.pruning_parameters.epsilon
-        hard_mask = (weight.abs() > epsilon).to(weight.dtype)
+        hard_mask = self._compute_hard_mask(weight, epsilon)
         not_active = self._is_pretraining or self._is_finetuning
 
         if not not_active:
@@ -108,8 +77,10 @@ class MDMM(nn.Module):
     def get_hard_mask(self, weight=None):
         if weight is None:
             return self.mask
-        epsilon = self.config.pruning_parameters.epsilon
-        return (weight.abs() > epsilon).to(weight.dtype)
+        # Route through _compute_hard_mask so sparsity/EBOPs reporting agrees with what the
+        # forward pass actually applies (during PACA fine-tuning that is the projection
+        # mask, not the magnitude threshold).
+        return self._compute_hard_mask(weight, self.config.pruning_parameters.epsilon)
 
     def get_layer_sparsity(self, weight):
         return self.get_hard_mask(weight).sum() / weight.numel()
