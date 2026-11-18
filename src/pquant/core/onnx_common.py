@@ -1,6 +1,5 @@
 """
-Backend-agnostic ONNX node emitters shared by the PQuant Keras and torch
-ONNX converters.
+Backend-agnostic half of the PQuant ONNX converters.
 
 Fixed-point (k, i, f) mapping
 ------------------------------
@@ -17,14 +16,24 @@ Standard ONNX (QDQ):
              = [0,     2^i - 2^(-f)]  unsigned
   Rounding is always nearest-even (QuantizeLinear behaviour).
 
-All quantization parameters (k, i, f) are accepted as anything ``to_np`` can
-convert: torch tensors, Keras/TF tensors, numpy arrays, or Python scalars.
+Quantization bits are read from the layers' ``Quantizer`` objects and may be torch
+tensors, Keras variables, numpy arrays or Python scalars (anything ``to_np`` converts).
 """
+
+import dataclasses
+import logging
+import warnings
+from collections import defaultdict
+from enum import Enum
 
 import numpy as np
 import onnx
 import onnx.helper as oh
 import onnx.numpy_helper as onh
+
+MIN_OPSET = 13  # Squeeze/Unsqueeze/ReduceSum take axes as an input and DequantizeLinear is per-channel from here on
+IR_VERSION = 6  # ir_version stamped on the exported models
+INT_CONTAINER_BITS = 8  # QuantizeLinear/DequantizeLinear use int8/uint8 containers
 
 ROUND_MODE_MAP = {
     "TRN": "FLOOR",
@@ -36,6 +45,150 @@ ROUND_MODE_MAP = {
     "RND_INF": "ROUND",
 }
 
+DEFAULT_TARGET = "reference"
+DYNAMIC_BATCH = "dynamic"  # batch_size override that clears a preset's fixed batch
+
+
+class QuantFormat(str, Enum):
+    """How quantization is expressed in the exported graph."""
+
+    QONNX = "qonnx"  # QONNX ``Quant`` custom nodes (hls4ml, FINN)
+    QDQ = "qdq"  # QuantizeLinear/DequantizeLinear pairs, float32 weights
+    QDQ_INT_WEIGHTS = "qdq_int_weights"  # QDQ pairs, weights stored as int8/uint8 + DequantizeLinear
+    INTEGER_OPS = "integer_ops"  # MatMulInteger for Dense layers; implies integer weights
+
+
+@dataclasses.dataclass(frozen=True)
+class ExportOptions:
+    """Everything that varies between ONNX consumers."""
+
+    quant_format: QuantFormat = QuantFormat.QDQ
+    include_clip: bool = True
+    opset: int = MIN_OPSET
+    batch_size: int | None = None
+    strict: bool = False
+    description: str = dataclasses.field(default="", compare=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, "quant_format", QuantFormat(self.quant_format))
+        if self.opset < MIN_OPSET:
+            raise ValueError(f"opset {self.opset} is not supported; the ONNX export needs opset >= {MIN_OPSET}")
+
+    @property
+    def use_qonnx(self) -> bool:
+        return self.quant_format is QuantFormat.QONNX
+
+    @property
+    def integer_ops(self) -> bool:
+        return self.quant_format is QuantFormat.INTEGER_OPS
+
+    @property
+    def store_integer_weights(self) -> bool:
+        return self.quant_format in (QuantFormat.QDQ_INT_WEIGHTS, QuantFormat.INTEGER_OPS)
+
+
+_QDQ_INT8 = ExportOptions(
+    quant_format=QuantFormat.QDQ_INT_WEIGHTS,
+    include_clip=False,
+    description="Fusable int8 QDQ graph for onnxruntime, TensorRT, QNN and OpenVINO; dynamic batch.",
+)
+
+TARGETS: dict[str, ExportOptions] = {
+    "reference": ExportOptions(
+        description="Bit-exact emulation of the trained fake quantization: QDQ with float weights and Clip "
+        "nodes, runs on plain onnxruntime.  Validate the other targets against this one."
+    ),
+    "qonnx": ExportOptions(
+        quant_format=QuantFormat.QONNX,
+        batch_size=1,
+        description="QONNX Quant nodes for hls4ml and FINN; static batch of 1.",
+    ),
+    "aie4ml": ExportOptions(
+        quant_format=QuantFormat.QDQ_INT_WEIGHTS,
+        include_clip=False,
+        batch_size=1,
+        description="QDQ with int8 weights and no Clip nodes for the aie4ml AI Engine flow; static batch of 1.",
+    ),
+    "qdq-int8": _QDQ_INT8,
+    "onnxruntime": _QDQ_INT8,
+    "tensorrt": _QDQ_INT8,
+    "integer-ops": ExportOptions(
+        quant_format=QuantFormat.INTEGER_OPS,
+        description="MatMulInteger Dense layers with an int32 accumulator; onnxruntime CPU only, torch models only.",
+    ),
+}
+
+
+def list_targets() -> dict[str, str]:
+    """Return {target name: description} for every registered export target."""
+    return {name: options.description for name, options in TARGETS.items()}
+
+
+def resolve_export_options(target=DEFAULT_TARGET, *, include_clip=None, opset=None, batch_size=None, strict=None):
+    """Look up a target preset and apply explicit overrides on top of it."""
+    if isinstance(target, ExportOptions):
+        options = target
+    else:
+        options = TARGETS.get(target) if isinstance(target, str) else None
+        if options is None:
+            raise ValueError(f"unknown export target {target!r}; choose one of {sorted(TARGETS)}")
+    overrides = {"include_clip": include_clip, "opset": opset, "batch_size": batch_size, "strict": strict}
+    changes = {name: value for name, value in overrides.items() if value is not None}
+    if batch_size == DYNAMIC_BATCH:
+        changes["batch_size"] = None
+    return dataclasses.replace(options, **changes)
+
+
+class OnnxExportWarning(UserWarning):
+    """The export format cannot reproduce a trained quantizer's behaviour exactly."""
+
+
+_EXACT_QDQ_ROUND_MODE = "RND_CONV"  # QuantizeLinear rounds half to even
+_FLOOR_ROUND_MODES = ("TRN", "TRN_ZERO")  # differ from rounding on every off-grid value, not just on ties
+
+# kind: (severity, message).  Listed in severity order, so that errors are raised before anything is warned about.
+_ISSUES = {
+    "container": (
+        "error",
+        "quantizers wider than the int8/uint8 QuantizeLinear container cannot be exported in the {fmt!r} format: "
+        "{names}.  Use target='qonnx' (explicit bit widths) or reduce the bit width.",
+    ),
+    "saturation": (
+        "warning",
+        "without Clip nodes (include_clip=False) the graph saturates at the int8/uint8 container range instead of "
+        "the trained fixed-point range for: {names}.  Outputs match only while values stay in range; set "
+        "include_clip=True for an exact graph.",
+    ),
+    "wrap": ("warning", "WRAP overflow has no ONNX equivalent; the export saturates instead for: {names}."),
+    "truncation": (
+        "warning",
+        "QuantizeLinear rounds half to even, but these quantizers were trained with truncation: {names}.  "
+        "Exported values differ wherever an input is not already on the grid; target='qonnx' keeps the mode.",
+    ),
+    "ties": (
+        "note",
+        "QuantizeLinear breaks ties half to even; these quantizers use another tie rule and may differ on exact "
+        "half-LSB inputs: {names}.",
+    ),
+}
+
+
+def _summarize(names, limit=5):
+    shown = ", ".join(names[:limit])
+    return shown if len(names) <= limit else f"{shown} (+{len(names) - limit} more)"
+
+
+def cast_to_int_container(name, values, dtype):
+    """Cast on-grid integer-valued floats to the int8/uint8 container, failing loudly on overflow."""
+    info = np.iinfo(dtype)
+    rounded = np.round(values)
+    if rounded.min() < info.min or rounded.max() > info.max:
+        raise ValueError(
+            f"ONNX export: {name} needs integer values in [{int(rounded.min())}, {int(rounded.max())}], outside the "
+            f"{np.dtype(dtype).name} container.  Use target='qonnx' or a float-weight target such as 'reference'."
+        )
+    return rounded.astype(dtype)
+
 
 def to_np(tensor):
     """Convert a torch/Keras/TF tensor (or scalar) to a float32 numpy array."""
@@ -44,233 +197,256 @@ def to_np(tensor):
     return np.asarray(tensor, dtype=np.float32)
 
 
-def add_initializer(initializers, name, array):
-    """Register a constant tensor and return its name."""
-    initializers.append(onh.from_array(array, name=name))
-    return name
-
-
-def add_float_scalar(initializers, name, value):
-    return add_initializer(initializers, name, np.array(value, dtype=np.float32))
-
-
-def add_int64_array(initializers, name, values):
-    return add_initializer(initializers, name, np.array(values, dtype=np.int64))
-
-
-def add_transpose(name, input_name, perm, nodes):
-    """Emit a Transpose node and return the output name."""
-    out = f"{name}_transpose_{''.join(str(p) for p in perm)}"
-    nodes.append(oh.make_node("Transpose", inputs=[input_name], outputs=[out], perm=list(perm)))
-    return out
-
-
 def to_list(v, n):
     """Normalize a scalar-or-sequence layer attribute (kernel/stride/...) to an n-length list."""
     return list(v) if hasattr(v, "__iter__") else [v] * n
 
 
-def symmetric_pads(padding, ndim):
-    """Expand a symmetric padding spec to the ONNX [begin_0, ..., end_0, ...] form."""
-    per_axis = to_list(padding, ndim)
-    return per_axis + per_axis
-
-
-def conv_padding_attrs(padding, ndim):
-    """Map a Keras/torch conv padding spec to ONNX (auto_pad, pads) attributes."""
+def _padding_attrs(padding, ndim):
+    """ONNX padding attributes for a Keras/torch spec: "same"/"valid", or symmetric per-axis amounts."""
     if isinstance(padding, str):
-        return ("SAME_UPPER" if padding == "same" else "VALID"), None
-    return "NOTSET", symmetric_pads(padding, ndim)
+        return {"auto_pad": "SAME_UPPER" if padding == "same" else "VALID"}
+    return {"auto_pad": "NOTSET", "pads": to_list(padding, ndim) * 2}  # [begin_0, ..., end_0, ...]
 
 
-def fixed_point_clip_range(signed, i_val, f_val, overflow_mode):
+def normalize_input_shapes(input_shape):
+    """``input_shape`` as a list of per-input shapes; a single shape means a single input."""
+    shapes = list(input_shape)
+    if not (shapes and all(isinstance(s, (list, tuple)) for s in shapes)):
+        shapes = [shapes]
+    return [tuple(None if d is None else int(d) for d in s) for s in shapes]
+
+
+def tensor_info(name, dtype, shape, batch_size=None):
+    """Graph input/output description; ``shape`` excludes the batch dim (dynamic unless ``batch_size`` is given)."""
+    return oh.make_tensor_value_info(name, oh.np_dtype_to_tensor_dtype(np.dtype(dtype)), [batch_size, *shape])
+
+
+def quantizer_bits(quantizer):
+    """(k, i, f) of a quantizer as float32 numpy arrays."""
+    return tuple(to_np(bits) for bits in quantizer.get_quantization_bits())
+
+
+def scalar_bits(quantizer):
+    """(signed, i, f) of a quantizer as Python scalars (the first element if the bits are not per-tensor)."""
+    k, i, f = (float(bits.ravel()[0]) for bits in quantizer_bits(quantizer))
+    return k == 1, i, f
+
+
+def _fixed_point_clip_range(signed, i, f, overflow_mode):
     """Representable [min, max] of a fixed-point grid with i integer and f fractional bits."""
-    clip_max = float(2.0**i_val - 2.0 ** (-f_val))
+    clip_max = float(2.0**i - 2.0**-f)
     if not signed:
         return 0.0, clip_max
     if overflow_mode == "SAT_SYM":
         return -clip_max, clip_max  # symmetric: excludes -2^i
-    return float(-(2.0**i_val)), clip_max  # SAT: -2^i
+    return float(-(2.0**i)), clip_max
 
 
-def quant_node(name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT"):
-    """Build a QONNX Quant node.  Returns ([node], output_name)."""
-    k_np, i_np, f_np = to_np(k), to_np(i), to_np(f)
-    k_val = int(k_np.ravel()[0])
-    if f_np.size > 1:
-        # The Quant node holds a single scale/bit_width; widen to cover every element.
-        i_np = i_np.ravel().max()
-        f_np = f_np.ravel().min()
-    i_val = float(i_np)
-    f_val = float(f_np)
-    scale = float(2.0 ** (-f_val))
-    bit_width = float(k_val + i_val + f_val)
-    qonnx_rnd = ROUND_MODE_MAP.get(rounding_mode, "ROUND")
-    # SAT_SYM excludes the most-negative value → QONNX narrow=1
-    narrow = 1 if (k_val == 1 and overflow_mode == "SAT_SYM") else 0
-
-    scale_name = add_float_scalar(initializers, f"{name_prefix}_scale", scale)
-    zp_name = add_float_scalar(initializers, f"{name_prefix}_zero_point", 0.0)
-    bw_name = add_float_scalar(initializers, f"{name_prefix}_bit_width", bit_width)
-    out_name = f"{name_prefix}_quantized"
-
-    node = oh.make_node(
-        op_type="Quant",
-        inputs=[input_name, scale_name, zp_name, bw_name],
-        outputs=[out_name],
-        domain="qonnx.custom_op.general",
-        signed=k_val,
-        narrow=narrow,
-        rounding_mode=qonnx_rnd,
-    )
-    return [node], out_name
-
-
-def qdq_node(
-    name_prefix, input_name, rounding_mode, k, i, f, initializers, overflow_mode="SAT", include_clip=True
-):  # noqa: ARG001 (rounding_mode kept for the shared quant_fn signature)
-    """Build QuantizeLinear+DequantizeLinear nodes, optionally preceded by a Clip.
-
-    Returns ([nodes], output_name).  Set include_clip=False to skip the Clip node
-    (safe when values are guaranteed to be in-range at inference time).
-    """
-    k_val = int(to_np(k).ravel()[0])
-    i_val = float(to_np(i).ravel()[0])
-    f_val = float(to_np(f).ravel()[0])
-    signed = k_val == 1
-    clip_min, clip_max = fixed_point_clip_range(signed, i_val, f_val, overflow_mode)
-    zp_val = np.int8(0) if signed else np.uint8(0)
-
-    scale_name = add_float_scalar(initializers, f"{name_prefix}_scale", 2.0 ** (-f_val))
-    zp_name = add_initializer(initializers, f"{name_prefix}_zero_point", np.array(zp_val))
-    quantized_name = f"{name_prefix}_quantized"
-    out_name = f"{name_prefix}_dequantized"
-
-    nodes = []
-    quantize_input = input_name
-    if include_clip:
-        clip_min_name = add_float_scalar(initializers, f"{name_prefix}_clip_min", clip_min)
-        clip_max_name = add_float_scalar(initializers, f"{name_prefix}_clip_max", clip_max)
-        quantize_input = f"{name_prefix}_clipped"
-        nodes.append(oh.make_node("Clip", inputs=[input_name, clip_min_name, clip_max_name], outputs=[quantize_input]))
-    nodes.append(oh.make_node("QuantizeLinear", inputs=[quantize_input, scale_name, zp_name], outputs=[quantized_name]))
-    nodes.append(oh.make_node("DequantizeLinear", inputs=[quantized_name, scale_name, zp_name], outputs=[out_name]))
-    return nodes, out_name
-
-
-def per_channel_scale(f_np, out_channels):
+def _per_channel_scale(f, out_channels):
     """Return the (out_channels,) scale vector, or None when f varies within a channel."""
-    if f_np.size % out_channels != 0:
+    if f.size % out_channels != 0:
         return None
-    f_per_channel = f_np.reshape(out_channels, -1)
+    f_per_channel = f.reshape(out_channels, -1)
     if not np.allclose(f_per_channel, f_per_channel[:, :1]):
         return None
     return (2.0 ** (-f_per_channel[:, 0])).astype(np.float32)
 
 
-def int_weight_node(name_prefix, weight_np, k, f, initializers):
-    """
-    Store a weight tensor as int8/uint8 + DequantizeLinear.
+class GraphBuilder:
+    """The ONNX graph under construction, emitted in the format that ``options`` describes."""
 
-    weight_np must already be in ONNX layout and on the fixed-point grid
-    (guaranteed after apply_final_compression).  Converts by dividing by the
-    scale and casting — no re-rounding needed.
+    def __init__(self, options: ExportOptions):
+        self.options = options
+        self.nodes: list[onnx.NodeProto] = []
+        self.initializers: list[onnx.TensorProto] = []
+        self._issues: dict[str, list[str]] = defaultdict(list)  # kind (see _ISSUES) → the quantizers concerned
 
-    Granularity handling:
-    - per-tensor  (f has one element): single scale, standard DequantizeLinear.
-    - per-channel (f constant within each output channel): 1D scale with axis=0.
-    - per-weight  (f fully per-element): ONNX has no per-weight quantization;
-      falls back to float32 storage (no DequantizeLinear node).
+    def node(self, op_type, inputs, output, **attrs):
+        self.nodes.append(oh.make_node(op_type, inputs=inputs, outputs=[output], **attrs))
+        return output
 
-    Returns ([nodes], output_name).
-    """
-    k_val = int(to_np(k).ravel()[0])
-    dtype = np.int8 if k_val == 1 else np.uint8
-    out_channels = weight_np.shape[0]
-    f_np = to_np(f)
+    def initializer(self, name, array):
+        """Register a constant tensor and return its name."""
+        self.initializers.append(onh.from_array(np.asarray(array), name=name))
+        return name
 
-    if f_np.size == 1:
-        scale_np = np.array(2.0 ** (-float(f_np.ravel()[0])), dtype=np.float32)
-        int_weights = np.round(weight_np / float(scale_np)).astype(dtype)
-        per_channel = False
-    else:
-        scale_np = per_channel_scale(f_np, out_channels)
-        if scale_np is None:
-            float_name = add_initializer(initializers, f"{name_prefix}_float", weight_np)
-            return [], float_name
-        broadcast_scale = scale_np.reshape((out_channels,) + (1,) * (weight_np.ndim - 1))
-        int_weights = np.round(weight_np / broadcast_scale).astype(dtype)
-        per_channel = True
+    def float_scalar(self, name, value):
+        return self.initializer(name, np.array(value, dtype=np.float32))
 
-    int_name = add_initializer(initializers, f"{name_prefix}_int", int_weights)
-    scale_name = add_initializer(initializers, f"{name_prefix}_dq_scale", scale_np)
-    zp_np = np.zeros(out_channels, dtype=dtype) if per_channel else np.array(dtype(0))
-    zp_name = add_initializer(initializers, f"{name_prefix}_dq_zp", zp_np)
+    def int64(self, name, values):
+        return self.initializer(name, np.array(values, dtype=np.int64))
 
-    out_name = f"{name_prefix}_dequantized"
-    node_kwargs = {"axis": 0} if per_channel else {}
-    node = oh.make_node("DequantizeLinear", inputs=[int_name, scale_name, zp_name], outputs=[out_name], **node_kwargs)
-    return [node], out_name
+    def transpose(self, prefix, x, perm):
+        return self.node("Transpose", [x], f"{prefix}_transpose_{''.join(map(str, perm))}", perm=list(perm))
 
+    def squeeze(self, prefix, x, axes):
+        """Remove the given size-1 axes (a no-op when ``axes`` is empty)."""
+        if not axes:
+            return x
+        return self.node("Squeeze", [x, self.int64(f"{prefix}_squeeze_axes", sorted(axes))], f"{prefix}_squeeze")
 
-def emit_param(prefix, name, arr, quantizer, nodes, initializers, use_qonnx, store_integer_weights):
-    """Emit the ONNX value for a learnable parameter (kernel/bias/gamma/beta) and return its name.
+    def unsqueeze(self, prefix, x, axes):
+        return self.node("Unsqueeze", [x, self.int64(f"{prefix}_unsqueeze_axes", axes)], f"{prefix}_unsqueeze")
 
-    arr must already be in ONNX layout (e.g. OIHW for conv kernels).
-    """
-    if use_qonnx:
-        fp_name = add_initializer(initializers, f"{prefix}_{name}_fp", arr)
-        k, i, f = quantizer.get_quantization_bits()
-        q_nodes, out = quant_node(
-            f"{prefix}_{name}", fp_name, quantizer.round_mode, k, i, f, initializers, overflow_mode=quantizer.overflow
+    def reduce(self, op_type, x, axes, output, keepdims=1):
+        """Reduce* node; ``axes`` became an input in opset 13 for ReduceSum and in opset 18 for the others."""
+        if self.options.opset >= (13 if op_type == "ReduceSum" else 18):
+            return self.node(op_type, [x, self.int64(f"{output}_axes", axes)], output, keepdims=keepdims)
+        return self.node(op_type, [x], output, axes=axes, keepdims=keepdims)
+
+    def quantize(self, quantizer, prefix, x):
+        """Quantize ``x`` on the quantizer's fixed-point grid: a QONNX Quant node or a (Clip +) Q/DQ pair."""
+        if self.options.use_qonnx:
+            self._check(quantizer, prefix)
+            return self._qonnx_quant(quantizer, prefix, x)
+        codes, scale, zero_point = self.quantize_linear(quantizer, prefix, x)
+        return self.node("DequantizeLinear", [codes, scale, zero_point], f"{prefix}_dequantized")
+
+    def quantize_linear(self, quantizer, prefix, x):
+        """(Clip +) QuantizeLinear to int8/uint8 codes.  Returns the (codes, scale, zero_point) tensor names."""
+        self._check(quantizer, prefix)
+        signed, i, f = scalar_bits(quantizer)
+        scale = self.float_scalar(f"{prefix}_scale", 2.0**-f)
+        zero_point = self.initializer(f"{prefix}_zero_point", np.array(0, dtype=np.int8 if signed else np.uint8))
+        if self.options.include_clip:
+            clip_min, clip_max = _fixed_point_clip_range(signed, i, f, quantizer.overflow)
+            bounds = [self.float_scalar(f"{prefix}_clip_min", clip_min), self.float_scalar(f"{prefix}_clip_max", clip_max)]
+            x = self.node("Clip", [x, *bounds], f"{prefix}_clipped")
+        return self.node("QuantizeLinear", [x, scale, zero_point], f"{prefix}_quantized"), scale, zero_point
+
+    def _check(self, quantizer, name):
+        """Record what the export format cannot reproduce of a data quantizer's behaviour (the kinds of ``_ISSUES``)."""
+        if quantizer.overflow.startswith("WRAP"):
+            self._issues["wrap"].append(name)
+        if self.options.use_qonnx:
+            return  # Quant carries the bit width, the rounding mode and the narrow range explicitly
+        k, i, f = quantizer_bits(quantizer)
+        signed = int(k.ravel()[0]) == 1
+        bits = int(np.max(k + i + f))
+        if bits > INT_CONTAINER_BITS:
+            self._issues["container"].append(f"{name} ({bits} bits)")
+        elif not self.options.include_clip and (bits < INT_CONTAINER_BITS or (signed and quantizer.overflow == "SAT_SYM")):
+            self._issues["saturation"].append(name)
+        round_mode = quantizer.round_mode.upper().removeprefix("S_")
+        if round_mode != _EXACT_QDQ_ROUND_MODE:
+            kind = "truncation" if round_mode in _FLOOR_ROUND_MODES else "ties"
+            self._issues[kind].append(f"{name} ({quantizer.round_mode})")
+
+    def _report_issues(self):
+        """Raise, warn about or log what ``_check`` recorded; warnings are errors with ``strict``."""
+        for kind, (severity, template) in _ISSUES.items():
+            names = self._issues.get(kind)
+            if not names:
+                continue
+            message = "ONNX export: " + template.format(fmt=self.options.quant_format.value, names=_summarize(names))
+            if severity == "error" or (severity == "warning" and self.options.strict):
+                raise ValueError(message)
+            if severity == "warning":
+                warnings.warn(message, OnnxExportWarning, stacklevel=4)  # the caller of convert_to_onnx
+            else:
+                logging.info(message)
+
+    def _qonnx_quant(self, quantizer, prefix, x):
+        k, i, f = quantizer_bits(quantizer)
+        signed = int(k.ravel()[0])
+        # The Quant node holds a single scale/bit_width; widen to cover every element.
+        i, f = float(i.max()), float(f.min())
+        inputs = [
+            x,
+            self.float_scalar(f"{prefix}_scale", 2.0**-f),
+            self.float_scalar(f"{prefix}_zero_point", 0.0),
+            self.float_scalar(f"{prefix}_bit_width", signed + i + f),
+        ]
+        return self.node(
+            "Quant",
+            inputs,
+            f"{prefix}_quantized",
+            domain="qonnx.custom_op.general",
+            signed=signed,
+            narrow=int(signed == 1 and quantizer.overflow == "SAT_SYM"),  # SAT_SYM excludes the most-negative value
+            rounding_mode=ROUND_MODE_MAP.get(quantizer.round_mode, "ROUND"),
         )
-        nodes.extend(q_nodes)
-        return out
-    if store_integer_weights:
-        k, _, f = quantizer.get_quantization_bits()
-        q_nodes, out = int_weight_node(f"{prefix}_{name}", arr, k, f, initializers)
-        nodes.extend(q_nodes)
-        return out
-    return add_initializer(initializers, f"{prefix}_{name}", arr)
+
+    def quantize_input(self, layer, prefix, x):
+        """Apply the layer's input quantizer if the layer uses it."""
+        return self._quantize_lane(layer, "input", f"{prefix}_in", x)
+
+    def quantize_output(self, layer, prefix, x):
+        """Apply the layer's output quantizer if the layer uses it."""
+        return self._quantize_lane(layer, "output", f"{prefix}_out", x)
+
+    def _quantize_lane(self, layer, lane, prefix, x):
+        quantizer = getattr(layer, f"{lane}_quantizer", None)  # the layers create their quantizers conditionally
+        if quantizer is not None and getattr(layer, f"quantize_{lane}") and layer.enable_quantization:
+            x = self.quantize(quantizer, prefix, x)
+        return x
+
+    def param(self, layer, prefix, name, array, quantizer):
+        """Emit a learnable parameter (kernel/bias/gamma/beta) of ``layer`` and return its tensor name."""
+        prefix = f"{prefix}_{name}"
+        if quantizer is None or not self.quantizes_params(layer):
+            return self.initializer(prefix, array)
+        if self.options.use_qonnx:
+            return self._qonnx_quant(quantizer, prefix, self.initializer(f"{prefix}_fp", array))
+        return self._integer_param(quantizer, prefix, array)
+
+    def quantizes_params(self, layer):
+        """Whether ``layer``'s parameters are exported in quantized form (Quant nodes or integer codes)."""
+        return layer.enable_quantization and (self.options.use_qonnx or self.options.store_integer_weights)
+
+    def _integer_param(self, quantizer, prefix, array):
+        """Store a parameter as int8/uint8 codes + DequantizeLinear."""
+        k, _, f = quantizer_bits(quantizer)
+        dtype = np.int8 if int(k.ravel()[0]) == 1 else np.uint8
+        if f.size == 1:
+            scale, attrs = np.array(2.0 ** -float(f.ravel()[0]), dtype=np.float32), {}
+        else:
+            scale, attrs = _per_channel_scale(f, array.shape[0]), {"axis": 0}
+            if scale is None:  # per-weight scales have no ONNX equivalent
+                return self.initializer(f"{prefix}_float", array)
+        codes = cast_to_int_container(prefix, array / scale.reshape((-1,) + (1,) * (array.ndim - 1)), dtype)
+        inputs = [
+            self.initializer(f"{prefix}_int", codes),
+            self.initializer(f"{prefix}_dq_scale", scale),
+            self.initializer(f"{prefix}_dq_zp", np.zeros(scale.shape, dtype=dtype)),
+        ]
+        return self.node("DequantizeLinear", inputs, f"{prefix}_dequantized", **attrs)
+
+    def save(self, graph_name, inputs, outputs, output_path):
+        """Assemble the ModelProto from the graph inputs/outputs (``tensor_info`` lists), validate and save it."""
+        self._report_issues()
+        input_names = {info.name for info in inputs}
+        for idx, info in enumerate(outputs):
+            if info.name in input_names:  # ONNX forbids a graph input from also being a graph output
+                info.name = self.node("Identity", [info.name], f"{info.name}_identity_out{idx}")
+        graph = oh.make_graph(self.nodes, graph_name, inputs, outputs, initializer=self.initializers)
+        opset_imports = [oh.make_opsetid("", self.options.opset)]
+        if self.options.use_qonnx:
+            opset_imports.append(oh.make_opsetid("qonnx.custom_op.general", 1))
+        model_proto = oh.make_model(graph, opset_imports=opset_imports)
+        model_proto.ir_version = IR_VERSION
+        onnx.checker.check_model(model_proto)
+        onnx.save(model_proto, output_path)
+        logging.info("Saved %s model → %s", self.options.quant_format.value, output_path)
+        return model_proto
 
 
-def apply_quantizer(quantizer, prefix, current, nodes, initializers, quant_fn):
-    """Emit quant_fn nodes for one Quantizer and return the new tensor name."""
-    k, i, f = quantizer.get_quantization_bits()
-    new_nodes, out = quant_fn(prefix, current, quantizer.round_mode, k, i, f, initializers, overflow_mode=quantizer.overflow)
-    nodes.extend(new_nodes)
-    return out
-
-
-def maybe_quant_input(layer, prefix, current, nodes, initializers, quant_fn):
-    # input_quantizer is created conditionally, so guard it; the bool flags are always present.
-    if getattr(layer, "input_quantizer", None) is not None and layer.quantize_input and layer.enable_quantization:
-        current = apply_quantizer(layer.input_quantizer, f"{prefix}_in", current, nodes, initializers, quant_fn)
-    return current
-
-
-def maybe_quant_output(layer, prefix, current, nodes, initializers, quant_fn):
-    if getattr(layer, "output_quantizer", None) is not None and layer.quantize_output and layer.enable_quantization:
-        current = apply_quantizer(layer.output_quantizer, f"{prefix}_out", current, nodes, initializers, quant_fn)
-    return current
-
-
-def emit_getitem(prefix, input_name, spec, rank, nodes, initializers):
+def add_getitem(g, prefix, x, spec, rank):
     """Translate a constant Python indexing spec into ONNX Slice (+ Squeeze)."""
     if not isinstance(spec, tuple):
         spec = (spec,)
-    n_ellipsis = sum(1 for s in spec if s is Ellipsis)
-    if n_ellipsis > 1:
+    ellipses = [pos for pos, s in enumerate(spec) if s is Ellipsis]
+    if len(ellipses) > 1:
         raise TypeError("indexing with more than one Ellipsis is not supported in ONNX export")
-    if n_ellipsis:
-        pos = spec.index(Ellipsis)
-        fill = rank - (len(spec) - 1)
-        spec = spec[:pos] + (slice(None),) * fill + spec[pos + 1 :]
+    if ellipses:
+        pos = ellipses[0]
+        spec = spec[:pos] + (slice(None),) * (rank - len(spec) + 1) + spec[pos + 1 :]
     if len(spec) > rank:
         raise TypeError(f"indexing spec has {len(spec)} dims but tensor rank is {rank}")
 
     int64_max = np.iinfo(np.int64).max
-    starts, ends, axes, steps, squeeze_axes = [], [], [], [], []
+    slices, squeeze_axes = [], []  # slices: (start, end, axis, step)
     for axis, s in enumerate(spec):
         if isinstance(s, slice):
             if s.start is None and s.stop is None and s.step in (None, 1):
@@ -278,242 +454,156 @@ def emit_getitem(prefix, input_name, spec, rank, nodes, initializers):
             step = 1 if s.step is None else int(s.step)
             if step < 1:
                 raise TypeError("slice steps < 1 are not supported in ONNX export")
-            starts.append(0 if s.start is None else int(s.start))
-            ends.append(int64_max if s.stop is None else int(s.stop))
-            axes.append(axis)
-            steps.append(step)
+            start = 0 if s.start is None else int(s.start)
+            slices.append((start, int64_max if s.stop is None else int(s.stop), axis, step))
         elif isinstance(s, int):
-            starts.append(s)
-            ends.append(int64_max if s == -1 else s + 1)
-            axes.append(axis)
-            steps.append(1)
+            slices.append((s, int64_max if s == -1 else s + 1, axis, 1))
             squeeze_axes.append(axis)
         else:
             raise TypeError(f"unsupported index element {s!r} for ONNX export (constant int/slice/Ellipsis only)")
 
-    current = input_name
-    if axes:
-        slice_inputs = [current]
-        for part, vals in (("starts", starts), ("ends", ends), ("axes", axes), ("steps", steps)):
-            slice_inputs.append(add_int64_array(initializers, f"{prefix}_slice_{part}", vals))
-        current = f"{prefix}_slice"
-        nodes.append(oh.make_node("Slice", inputs=slice_inputs, outputs=[current]))
-    if squeeze_axes:
-        current = emit_squeeze(prefix, current, squeeze_axes, nodes, initializers)
-    return current
+    if slices:
+        parts = zip(("starts", "ends", "axes", "steps"), zip(*slices))
+        x = g.node("Slice", [x] + [g.int64(f"{prefix}_slice_{part}", vals) for part, vals in parts], f"{prefix}_slice")
+    return g.squeeze(prefix, x, squeeze_axes)
 
 
-def emit_squeeze(prefix, input_name, axes, nodes, initializers):
-    """Emit an ONNX Squeeze removing the given size-1 axes (no-op if axes is empty).
+def add_activation(g, layer, prefix, x):
+    """PQActivation, in the order of its forward: relu multiplier, input quantizer, activation, output quantizer."""
+    name = layer.activation_name
+    if name == "relu" and layer.use_multiplier and not layer.use_hgq:
+        scale = 2.0 ** round(float(to_np(layer.multiplier).ravel()[0]))
+        x = g.node("Mul", [x, g.float_scalar(f"{prefix}_mul_scale", scale)], f"{prefix}_scaled")
+    x = g.quantize_input(layer, prefix, x)
 
-    Squeeze takes axes as an input tensor from opset 13 on (the converter minimum).
-    """
-    if not axes:
-        return input_name
-    ax_name = add_int64_array(initializers, f"{prefix}_squeeze_axes", sorted(axes))
-    out = f"{prefix}_squeeze"
-    nodes.append(oh.make_node("Squeeze", inputs=[input_name, ax_name], outputs=[out]))
-    return out
-
-
-def emit_unsqueeze(prefix, input_name, axes, nodes, initializers):
-    """Emit an ONNX Unsqueeze inserting size-1 dims at the given axes."""
-    ax_name = add_int64_array(initializers, f"{prefix}_unsqueeze_axes", axes)
-    out = f"{prefix}_unsqueeze"
-    nodes.append(oh.make_node("Unsqueeze", inputs=[input_name, ax_name], outputs=[out]))
-    return out
-
-
-def add_quantized_softmax(sm, prefix, current, nodes, initializers, quant_fn, kpm_mask=None):
-    """Emit the PQuant quantized-softmax decomposition over the last axis."""
-    enable = sm.enable_quantization
-    scaler = float(sm.input_scaler)
-    stable = bool(sm.stable)
-
-    # 1) Softmax input quantizer.
-    if sm.quantize_input and enable:
-        current = apply_quantizer(sm.input_quantizer, f"{prefix}_sm_in_q", current, nodes, initializers, quant_fn)
-
-    # 2) Stable max-subtract over the last axis (ReduceMax keeps axes as an attribute).
-    if stable:
-        m_name = f"{prefix}_sm_max"
-        nodes.append(oh.make_node("ReduceMax", inputs=[current], outputs=[m_name], axes=[-1], keepdims=1))
-        exp_in = f"{prefix}_sm_sub"
-        nodes.append(oh.make_node("Sub", inputs=[m_name, current], outputs=[exp_in]))
+    out = f"{prefix}_act"
+    if name in ("relu", "tanh"):
+        g.node(name.capitalize(), [x], out)
+    elif name == "hard_tanh":
+        g.node("Clip", [x, g.float_scalar(f"{prefix}_htanh_min", -1.0), g.float_scalar(f"{prefix}_htanh_max", 1.0)], out)
+    elif name == "leaky_relu":
+        g.node("LeakyRelu", [x], out, alpha=layer.activation_function.negative_slope)
+    elif name == "gelu":
+        _add_gelu(g, prefix, x, out, getattr(layer.activation_function, "approximate", "none"))
     else:
-        exp_in = current
-
-    # 3) Quantized exp table: optional input QDQ, Exp of (-scaler * x) for the
-    #    stable branch (+scaler otherwise), optional output QDQ.
-    exp_table = sm.exp_table
-    if exp_table.quantize_input and enable:
-        exp_in = apply_quantizer(exp_table.input_quantizer, f"{prefix}_sm_exp_in_q", exp_in, nodes, initializers, quant_fn)
-    coeff = -scaler if stable else scaler
-    exp_arg = exp_in
-    if coeff != 1.0:
-        coeff_name = add_float_scalar(initializers, f"{prefix}_sm_exp_coeff", coeff)
-        exp_arg = f"{prefix}_sm_exp_arg"
-        nodes.append(oh.make_node("Mul", inputs=[exp_in, coeff_name], outputs=[exp_arg]))
-    numerator = f"{prefix}_sm_exp"
-    nodes.append(oh.make_node("Exp", inputs=[exp_arg], outputs=[numerator]))
-    if exp_table.quantize_output and enable:
-        numerator = apply_quantizer(
-            exp_table.output_quantizer, f"{prefix}_sm_exp_out_q", numerator, nodes, initializers, quant_fn
-        )
-
-    # 3b) Optional key-padding mask: zero the exp-numerator at masked positions.
-    if kpm_mask is not None:
-        kpm_f = f"{prefix}_sm_mask_f"
-        nodes.append(oh.make_node("Cast", inputs=[kpm_mask], outputs=[kpm_f], to=onnx.TensorProto.FLOAT))
-        masked = f"{prefix}_sm_masked"
-        nodes.append(oh.make_node("Mul", inputs=[kpm_f, numerator], outputs=[masked]))
-        numerator = masked
-
-    # 4) Sum over the last axis (ReduceSum takes axes as an input from opset 13).
-    sum_axes = add_int64_array(initializers, f"{prefix}_sm_sum_axes", [-1])
-    sums = f"{prefix}_sm_sum"
-    nodes.append(oh.make_node("ReduceSum", inputs=[numerator, sum_axes], outputs=[sums], keepdims=1))
-
-    # 5) Quantized reciprocal table: input QDQ, 1/(x+eps), output QDQ.
-    inv_table = sm.inv_table
-    inv_in = sums
-    if inv_table.quantize_input and enable:
-        inv_in = apply_quantizer(inv_table.input_quantizer, f"{prefix}_sm_inv_in_q", inv_in, nodes, initializers, quant_fn)
-    eps_name = add_float_scalar(initializers, f"{prefix}_sm_eps", float(sm.epsilon))
-    inv_add = f"{prefix}_sm_inv_add"
-    nodes.append(oh.make_node("Add", inputs=[inv_in, eps_name], outputs=[inv_add]))
-    divisor = f"{prefix}_sm_inv"
-    nodes.append(oh.make_node("Reciprocal", inputs=[inv_add], outputs=[divisor]))
-    if inv_table.quantize_output and enable:
-        divisor = apply_quantizer(
-            inv_table.output_quantizer, f"{prefix}_sm_inv_out_q", divisor, nodes, initializers, quant_fn
-        )
-
-    # 6) Multiply numerator by reciprocal.
-    out = f"{prefix}_sm_out"
-    nodes.append(oh.make_node("Mul", inputs=[numerator, divisor], outputs=[out]))
-    current = out
-
-    # 7) Softmax output quantizer.
-    if sm.quantize_output and enable:
-        current = apply_quantizer(sm.output_quantizer, f"{prefix}_sm_out_q", current, nodes, initializers, quant_fn)
-    return current
+        raise TypeError(f"PQActivation: unsupported activation {name!r} for ONNX export")
+    return g.quantize_output(layer, prefix, out)
 
 
-def split_heads(x_name, pfx, num_heads, head_dim, nodes, initializers):
-    """(B, L, E) → (B, num_heads, L, head_dim) using runtime Shape ops so B and L stay dynamic."""
-    shape_out = f"{pfx}_shape"
-    nodes.append(oh.make_node("Shape", inputs=[x_name], outputs=[shape_out]))
+def _add_gelu(g, prefix, x, out, approximate):
+    """Decompose gelu so the default opset works; ONNX added a Gelu op only in opset 20."""
+    p = f"{prefix}_gelu"
 
-    idx0 = add_int64_array(initializers, f"{pfx}_gi0", 0)
-    idx1 = add_int64_array(initializers, f"{pfx}_gi1", 1)
-    ax0 = add_int64_array(initializers, f"{pfx}_ax0", [0])
-    heads_1d = add_int64_array(initializers, f"{pfx}_H_1d", [num_heads])
-    head_dim_1d = add_int64_array(initializers, f"{pfx}_hd_1d", [head_dim])
+    def const(name, value):
+        return g.float_scalar(f"{p}_{name}", value)
 
-    batch_scalar = f"{pfx}_b_sc"
-    length_scalar = f"{pfx}_l_sc"
-    batch_1d = f"{pfx}_b_1d"
-    length_1d = f"{pfx}_l_1d"
-    shape_4d = f"{pfx}_shape4d"
-    reshaped = f"{pfx}_reshaped"
-    transposed = f"{pfx}_transposed"
-
-    nodes.append(oh.make_node("Gather", inputs=[shape_out, idx0], outputs=[batch_scalar]))
-    nodes.append(oh.make_node("Gather", inputs=[shape_out, idx1], outputs=[length_scalar]))
-    nodes.append(oh.make_node("Unsqueeze", inputs=[batch_scalar, ax0], outputs=[batch_1d]))
-    nodes.append(oh.make_node("Unsqueeze", inputs=[length_scalar, ax0], outputs=[length_1d]))
-    nodes.append(oh.make_node("Concat", inputs=[batch_1d, length_1d, heads_1d, head_dim_1d], outputs=[shape_4d], axis=0))
-    nodes.append(oh.make_node("Reshape", inputs=[x_name, shape_4d], outputs=[reshaped]))
-    # (B, L, H, head_dim) → (B, H, L, head_dim)
-    nodes.append(oh.make_node("Transpose", inputs=[reshaped], outputs=[transposed], perm=[0, 2, 1, 3]))
-    return transposed
+    if approximate == "tanh":
+        # 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+        t = g.node("Pow", [x, const("three", 3.0)], f"{p}_x3")
+        t = g.node("Mul", [t, const("c1", 0.044715)], f"{p}_cx3")
+        t = g.node("Add", [x, t], f"{p}_inner")
+        t = g.node("Mul", [t, const("sqrt2_over_pi", np.sqrt(2.0 / np.pi))], f"{p}_scaled")
+        t = g.node("Tanh", [t], f"{p}_tanh")
+    else:
+        # Exact: 0.5 * x * (1 + erf(x / sqrt(2)))
+        t = g.node("Mul", [x, const("inv_sqrt2", 1.0 / np.sqrt(2.0))], f"{p}_scaled")
+        t = g.node("Erf", [t], f"{p}_erf")
+    t = g.node("Add", [t, const("one", 1.0)], f"{p}_plus1")
+    t = g.node("Mul", [x, t], f"{p}_xprod")
+    g.node("Mul", [t, const("half", 0.5)], out)
 
 
-def merge_heads(x_name, pfx, embed_dim, nodes, initializers):
-    """(B, H, T, head_dim) → (B, T, embed_dim): the inverse of split_heads."""
-    transposed = f"{pfx}_t"  # (B, T, H, head_dim)
-    shape_out = f"{pfx}_shape"
-    nodes.append(oh.make_node("Transpose", inputs=[x_name], outputs=[transposed], perm=[0, 2, 1, 3]))
-    nodes.append(oh.make_node("Shape", inputs=[transposed], outputs=[shape_out]))
-
-    idx0 = add_int64_array(initializers, f"{pfx}_gi0", 0)
-    idx1 = add_int64_array(initializers, f"{pfx}_gi1", 1)
-    ax0 = add_int64_array(initializers, f"{pfx}_ax0", [0])
-    embed_1d = add_int64_array(initializers, f"{pfx}_E_1d", [embed_dim])
-
-    batch_scalar = f"{pfx}_b_sc"
-    length_scalar = f"{pfx}_t_sc"
-    batch_1d = f"{pfx}_b_1d"
-    length_1d = f"{pfx}_t_1d"
-    shape_3d = f"{pfx}_shape3d"
-    merged = f"{pfx}_merged"
-
-    nodes.append(oh.make_node("Gather", inputs=[shape_out, idx0], outputs=[batch_scalar]))
-    nodes.append(oh.make_node("Gather", inputs=[shape_out, idx1], outputs=[length_scalar]))
-    nodes.append(oh.make_node("Unsqueeze", inputs=[batch_scalar, ax0], outputs=[batch_1d]))
-    nodes.append(oh.make_node("Unsqueeze", inputs=[length_scalar, ax0], outputs=[length_1d]))
-    nodes.append(oh.make_node("Concat", inputs=[batch_1d, length_1d, embed_1d], outputs=[shape_3d], axis=0))
-    nodes.append(oh.make_node("Reshape", inputs=[transposed, shape_3d], outputs=[merged]))
-    return merged
+def _add_weighted_op(g, layer, prefix, x, op_type, weight, bias, **attrs):
+    """Input quantizer → ``op_type`` fed with the layer's weight and optional bias → output quantizer."""
+    x = g.quantize_input(layer, prefix, x)
+    inputs = [x, g.param(layer, prefix, "weight", weight, layer.weight_quantizer)]
+    if bias is not None:
+        inputs.append(g.param(layer, prefix, "bias", bias, layer.bias_quantizer))
+    out = g.node(op_type, inputs, f"{prefix}_{op_type.lower()}", **attrs)
+    return g.quantize_output(layer, prefix, out)
 
 
-def emit_mha_core(
-    mha, prefix, q_proj_out, k_proj_out, v_proj_out, nodes, initializers, quant_fn, key_padding_mask, attn_mask
-):
-    """Scaled-dot-product attention between projected Q/K/V, quantized softmax included.
+def add_dense(g, layer, prefix, x, weight, bias, rank):
+    """PQDense with ``weight`` in [out, in] layout, applied to a rank-``rank`` input."""
+    if rank == 2:  # Gemm only accepts rank-2 inputs
+        return _add_weighted_op(g, layer, prefix, x, "Gemm", weight, bias, transB=1)
 
-    Returns (context_name, avg_attn_name): the merged (B, T, E) context ready for
-    the output projection, and the attention weights averaged over heads.
-    """
-    q_heads = split_heads(q_proj_out, f"{prefix}_q", mha.num_heads, mha.head_dim, nodes, initializers)
-    k_heads = split_heads(k_proj_out, f"{prefix}_k", mha.num_heads, mha.head_dim, nodes, initializers)
-    v_heads = split_heads(v_proj_out, f"{prefix}_v", mha.num_heads, mha.head_dim, nodes, initializers)
+    x = g.quantize_input(layer, prefix, x)
+    if g.quantizes_params(layer):
+        # A quantized weight keeps its output channels on axis 0 and is transposed in the graph.
+        quantized = g.param(layer, prefix, "weight", weight, layer.weight_quantizer)
+        weight_t = g.node("Transpose", [quantized], f"{prefix}_weight_T", perm=[1, 0])
+    else:
+        weight_t = g.initializer(f"{prefix}_weight_T", weight.T)
+    out = g.node("MatMul", [x, weight_t], f"{prefix}_matmul")
+    if bias is not None:
+        out = g.node("Add", [out, g.param(layer, prefix, "bias", bias, layer.bias_quantizer)], f"{prefix}_biased")
+    return g.quantize_output(layer, prefix, out)
 
-    k_transposed = f"{prefix}_k_T"
-    nodes.append(oh.make_node("Transpose", inputs=[k_heads], outputs=[k_transposed], perm=[0, 1, 3, 2]))
 
-    raw_scores = f"{prefix}_scores_raw"
-    scaled_scores = f"{prefix}_scores_scaled"
-    scale_name = add_float_scalar(initializers, f"{prefix}_attn_scale", float(mha.scale))
-    nodes.append(oh.make_node("MatMul", inputs=[q_heads, k_transposed], outputs=[raw_scores]))
-    nodes.append(oh.make_node("Mul", inputs=[raw_scores, scale_name], outputs=[scaled_scores]))
-    current = scaled_scores
-
-    if attn_mask is not None:
-        masked_scores = f"{prefix}_scores_masked"
-        nodes.append(oh.make_node("Add", inputs=[current, attn_mask], outputs=[masked_scores]))
-        current = masked_scores
-
-    kpm_mult = None
-    if key_padding_mask is not None:
-        kpm_not = f"{prefix}_kpm_not"
-        nodes.append(oh.make_node("Not", inputs=[key_padding_mask], outputs=[kpm_not]))
-        kpm_axes = add_int64_array(initializers, f"{prefix}_kpm_axes", [1, 2])
-        kpm_mult = f"{prefix}_kpm_mask"  # (B, 1, 1, S) bool, cast to float inside the softmax
-        nodes.append(oh.make_node("Unsqueeze", inputs=[kpm_not, kpm_axes], outputs=[kpm_mult]))
-
-    attn_weights = add_quantized_softmax(
-        mha.softmax, f"{prefix}_attn", current, nodes, initializers, quant_fn, kpm_mask=kpm_mult
+def add_conv(g, layer, prefix, x, kernel, bias, strides, dilations, padding, groups):
+    """PQConv with ``kernel`` in ONNX [out, in/groups, *spatial] layout on a channels-first input."""
+    ndim = kernel.ndim - 2
+    attrs = dict(
+        kernel_shape=list(kernel.shape[2:]),
+        strides=to_list(strides, ndim),
+        dilations=to_list(dilations, ndim),
+        group=groups,
+        **_padding_attrs(padding, ndim),
     )
-
-    context = f"{prefix}_ctx_raw"
-    nodes.append(oh.make_node("MatMul", inputs=[attn_weights, v_heads], outputs=[context]))
-    merged = merge_heads(context, f"{prefix}_ctx", mha.embed_dim, nodes, initializers)
-
-    # Average attention weights over heads: (B, H, T, S) → (B, T, S)
-    avg_attn = f"{prefix}_avg_attn_weights"
-    nodes.append(oh.make_node("ReduceMean", inputs=[attn_weights], outputs=[avg_attn], axes=[1], keepdims=0))
-    return merged, avg_attn
+    return _add_weighted_op(g, layer, prefix, x, "Conv", kernel, bias, **attrs)
 
 
-def save_model(graph, output_path, opset, use_qonnx=False, ir_version=6):
-    """Assemble the ModelProto for a finished graph, validate it, and save it."""
-    opset_imports = [oh.make_opsetid("", opset)]
-    if use_qonnx:
-        opset_imports.append(oh.make_opsetid("qonnx.custom_op.general", 1))
-    model_proto = oh.make_model(graph, opset_imports=opset_imports)
-    model_proto.ir_version = ir_version
-    onnx.checker.check_model(model_proto)
-    onnx.save(model_proto, output_path)
-    return model_proto
+def _add_quantized_softmax(g, softmax, prefix, x, mask=None):
+    """PQSoftmax over the last axis: exp and reciprocal lookup tables, each with its own quantizers."""
+    p = f"{prefix}_sm"
+    exp_table, inv_table = softmax.exp_table, softmax.inv_table
+    x = g.quantize_input(softmax, p, x)
+    if softmax.stable:  # max(x) - x, so that the exp table only sees non-negative values
+        x = g.node("Sub", [g.reduce("ReduceMax", x, [-1], f"{p}_max"), x], f"{p}_sub")
+
+    x = g.quantize_input(exp_table, f"{p}_exp", x)
+    coeff = float(softmax.input_scaler) * (-1.0 if softmax.stable else 1.0)
+    if coeff != 1.0:
+        x = g.node("Mul", [x, g.float_scalar(f"{p}_exp_coeff", coeff)], f"{p}_exp_arg")
+    numerator = g.quantize_output(exp_table, f"{p}_exp", g.node("Exp", [x], f"{p}_exp"))
+    if mask is not None:  # zero the masked positions
+        mask = g.node("Cast", [mask], f"{p}_mask_f", to=onnx.TensorProto.FLOAT)
+        numerator = g.node("Mul", [mask, numerator], f"{p}_masked")
+
+    total = g.quantize_input(inv_table, f"{p}_inv", g.reduce("ReduceSum", numerator, [-1], f"{p}_sum"))
+    total = g.node("Add", [total, g.float_scalar(f"{p}_eps", float(softmax.epsilon))], f"{p}_inv_add")
+    divisor = g.quantize_output(inv_table, f"{p}_inv", g.node("Reciprocal", [total], f"{p}_inv"))
+    return g.quantize_output(softmax, p, g.node("Mul", [numerator, divisor], f"{p}_out"))
+
+
+def add_mha(g, mha, prefix, query, key, value, dense, key_padding_mask=None, attn_mask=None):
+    """PQMultiheadAttention on batch-first (B, L, E) inputs.  Returns (output, head-averaged attention weights)."""
+
+    def project(layer, name, x):
+        """(B, L, E) → projection → (B, H, L, head_dim); the 0s in the Reshape keep the batch and length dims dynamic."""
+        x = dense(g, layer, f"{prefix}_{name}_proj", x, 3)
+        shape = g.int64(f"{prefix}_{name}_shape", [0, 0, mha.num_heads, mha.head_dim])
+        x = g.node("Reshape", [x, shape], f"{prefix}_{name}_reshaped")
+        return g.node("Transpose", [x], f"{prefix}_{name}_transposed", perm=[0, 2, 1, 3])
+
+    q = project(mha.q_proj, "q", query)
+    k = project(mha.k_proj, "k", key)
+    v = project(mha.v_proj, "v", value)
+
+    key_t = g.node("Transpose", [k], f"{prefix}_k_T", perm=[0, 1, 3, 2])
+    scores = g.node("MatMul", [q, key_t], f"{prefix}_scores_raw")
+    scores = g.node("Mul", [scores, g.float_scalar(f"{prefix}_attn_scale", float(mha.scale))], f"{prefix}_scores_scaled")
+    if attn_mask is not None:
+        scores = g.node("Add", [scores, attn_mask], f"{prefix}_scores_masked")
+    keep = None
+    if key_padding_mask is not None:  # (B, S) "is padding" → (B, 1, 1, S) "keep"
+        keep = g.unsqueeze(f"{prefix}_kpm", g.node("Not", [key_padding_mask], f"{prefix}_kpm_not"), [1, 2])
+    weights = _add_quantized_softmax(g, mha.softmax, f"{prefix}_attn", scores, mask=keep)
+
+    # (B, H, T, head_dim) → (B, T, E)
+    context = g.node("MatMul", [weights, v], f"{prefix}_ctx_raw")
+    context = g.node("Transpose", [context], f"{prefix}_ctx_t", perm=[0, 2, 1, 3])
+    context = g.node("Reshape", [context, g.int64(f"{prefix}_ctx_shape", [0, 0, mha.embed_dim])], f"{prefix}_ctx_merged")
+    out = dense(g, mha.out_proj, f"{prefix}_out_proj", context, 3)
+    return out, g.reduce("ReduceMean", weights, [1], f"{prefix}_avg_attn_weights", keepdims=0)
