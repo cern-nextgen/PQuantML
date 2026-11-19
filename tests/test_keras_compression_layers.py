@@ -2287,3 +2287,9 @@ def test_layer_type_checkpoint_save_load(tmp_path, layer_type, use_hgq):
 
     for orig, w in zip(original_weights, model.weights):
         np.testing.assert_array_equal(orig, np.array(w), err_msg=f"[{layer_type}] Checkpoint weight mismatch: {w.name}")
+
+
+def test_mha_use_hccs_is_torch_only(config_pdp):
+    config_pdp.quantization_parameters.use_hccs = True
+    with pytest.raises(NotImplementedError):
+        PQMultiheadAttention(config_pdp, embed_dim=IN_FEATURES, num_heads=2)

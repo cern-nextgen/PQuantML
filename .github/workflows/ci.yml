@@ -58,6 +58,9 @@ jobs:
               tests/test_pdp.py
               tests/test_wanda.py
               tests/test_torch_compression_layers.py
+              tests/test_torch_fold_layers.py
+              tests/test_hccs.py
+              tests/test_dynamic_tracking.py
               tests/test_torch_onnx_converter.py
               tests/test_torch_alkaid_conversion.py
               tests/test_torch_checkpoint.py

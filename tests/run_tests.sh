@@ -10,6 +10,9 @@ pytest test_torch_pruning_layers.py
 pytest test_quantizer_parity.py
 pytest test_keras_compression_layers.py
 KERAS_BACKEND="torch" pytest test_torch_compression_layers.py
+KERAS_BACKEND=torch pytest test_torch_fold_layers.py
+KERAS_BACKEND=torch pytest test_hccs.py
+KERAS_BACKEND=torch pytest test_dynamic_tracking.py
 KERAS_BACKEND=torch pytest test_torch_onnx_converter.py
 pytest test_keras_onnx_converter.py
 KERAS_BACKEND=torch pytest test_torch_alkaid_conversion.py

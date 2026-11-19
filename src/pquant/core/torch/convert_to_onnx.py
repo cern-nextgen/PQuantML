@@ -42,6 +42,7 @@ from onnx import TensorProto
 os.environ["KERAS_BACKEND"] = "torch"  # must be set before any keras/pquant import
 
 from pquant.core.torch.activations import PQActivation  # noqa: E402
+from pquant.core.torch.hccs import HCCSLearned  # noqa: E402
 from pquant.core.torch.layers import (  # noqa: E402
     PQAvgPool1d,
     PQAvgPool2d,
@@ -822,10 +823,10 @@ def _add_mha(module, prefix, q_input, k_input, v_input, nodes, initializers, qua
     value names so downstream getitem(mha, 0) / getitem(mha, 1) work in the FX
     converter.
 
-    Note: if ``approximate_softmax=True`` the module uses a polynomial
-    approximation in PyTorch, but ONNX has no equivalent standard op — a plain
-    ``Softmax`` node is emitted instead.
+    Note: an attention layer built with ``use_hccs`` is not exported yet.
     """
+    if isinstance(module.softmax, HCCSLearned):
+        raise NotImplementedError("ONNX export: an attention layer with an HCCSLearned softmax is not supported yet")
     H = module.num_heads
     head_dim = module.head_dim
     E = module.embed_dim
@@ -921,7 +922,7 @@ def _add_mha(module, prefix, q_input, k_input, v_input, nodes, initializers, qua
         )
         nodes.extend(q_nodes)
 
-    # --- Softmax (dim=-1); approximate_softmax falls back to standard Softmax in ONNX ---
+    # --- Softmax (dim=-1) ---
     attn_w_name = f"{prefix}_attn_weights"
     nodes.append(oh.make_node("Softmax", inputs=[current], outputs=[attn_w_name], axis=-1))
     current = attn_w_name
@@ -1001,10 +1002,85 @@ def _add_mha(module, prefix, q_input, k_input, v_input, nodes, initializers, qua
 # ---------------------------------------------------------------------------
 
 
+HCCS_DOMAIN = "aie4ml"
+HCCS_OP = "HCCSSoftmax"
+_HCCS_ATTRIBUTES = ("B", "S", "Dmax", "param_sets", "inv_shift", "use_clb", "axis")
+
+
+def _add_hccs(module, prefix, current, nodes, initializers, quant_fn):
+    """An HCCSLearned as aie4ml imports it: its input lane, then per head one ``aie4ml.HCCSSoftmax`` carrying that
+    head's integers (the importer takes one parameter set per node) followed by the output lane."""
+    if not str(module.mode).startswith("uint8"):
+        raise ValueError(f"ONNX export: aie4ml's HCCS softmax emits uint8, this module runs mode {module.mode!r}")
+
+    def lane(q, name, src):
+        k, i, f = q.get_quantization_bits()
+        overflow = getattr(q, "overflow", "SAT")
+        new_nodes, out = quant_fn(f"{prefix}_{name}", src, q.round_mode, k, i, f, initializers, overflow_mode=overflow)
+        nodes.extend(new_nodes)
+        return out
+
+    current = lane(module.input_quantizer, "in", current)
+    params = module.export_params()
+    heads = module.num_heads
+    sources = [current]
+    if heads > 1:
+        sizes = f"{prefix}_head_sizes"
+        initializers.append(onh.from_array(np.ones(heads, dtype=np.int64), name=sizes))
+        sources = [f"{prefix}_head{h}" for h in range(heads)]
+        nodes.append(oh.make_node("Split", inputs=[current, sizes], outputs=sources, axis=1))
+    outputs = []
+    for h in range(heads):
+        probs = f"{prefix}_p{h}"
+        nodes.append(
+            oh.make_node(
+                HCCS_OP,
+                inputs=[sources[h]],
+                outputs=[probs],
+                name=f"{prefix}_softmax{h}",
+                domain=HCCS_DOMAIN,
+                axis=-1,
+                B=[int(params["B"][h])],
+                S=[int(params["S"][h])],
+                Dmax=[int(params["DMAX"][h])],
+                param_sets=1,
+                inv_shift=int(module.inv_shift),
+                use_clb=int(str(module.mode).endswith("_clb")),
+            )
+        )
+        outputs.append(lane(module.output_quantizer, f"out{h}", probs))
+    if heads == 1:
+        return outputs[0]
+    nodes.append(oh.make_node("Concat", inputs=outputs, outputs=[f"{prefix}_out"], axis=1))
+    return f"{prefix}_out"
+
+
+def _attach_hccs_function(model_proto, opset):
+    """The body of ``aie4ml.HCCSSoftmax``, a plain Softmax: onnxruntime runs the file, aie4ml lowers the node to HCCS."""
+    if not any(n.domain == HCCS_DOMAIN and n.op_type == HCCS_OP for n in model_proto.graph.node):
+        return
+    softmax = oh.make_node("Softmax", ["X"], ["Y"], name="softmax")
+    softmax.attribute.append(onnx.AttributeProto(name="axis", ref_attr_name="axis", type=onnx.AttributeProto.INT))
+    function = oh.make_function(
+        HCCS_DOMAIN,
+        HCCS_OP,
+        ["X"],
+        ["Y"],
+        [softmax],
+        opset_imports=[oh.make_opsetid("", opset)],
+        attributes=list(_HCCS_ATTRIBUTES),
+    )
+    model_proto.functions.append(function)
+    model_proto.opset_import.append(oh.make_opsetid(HCCS_DOMAIN, 1))
+    model_proto.ir_version = max(model_proto.ir_version, 8)  # model-local functions
+
+
 def _emit_module(
     module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops=False
 ):
     """Emit ONNX nodes for a single PQuant or standard torch.nn module."""
+    if isinstance(module, HCCSLearned):
+        return _add_hccs(module, prefix, current, nodes, initializers, quant_fn)
     if isinstance(module, PQDense):
         return _add_dense(
             module, prefix, current, nodes, initializers, quant_fn, use_qonnx, store_integer_weights, integer_ops
@@ -1292,6 +1368,7 @@ def convert_to_onnx(
         opset_imports.append(oh.make_opsetid("qonnx.custom_op.general", 1))
     model_proto = oh.make_model(graph, opset_imports=opset_imports)
     model_proto.ir_version = 6
+    _attach_hccs_function(model_proto, opset)
 
     onnx.checker.check_model(model_proto)
     onnx.save(model_proto, output_path)
@@ -1490,6 +1567,7 @@ class _PQTracer(_fx.Tracer):
         PQAvgPool2d,
         PQMultiheadAttention,
         PQActivation,
+        HCCSLearned,
         Quantizer,
     )
 
@@ -1615,6 +1693,9 @@ def convert_to_onnx_fx(
                 # Store tuple so operator.getitem(node, 0/1) resolves correctly.
                 node_to_name[node] = (out_name, avg_attn_name)
             else:
+                masked = any(a is not None for a in (*node.args[1:], *node.kwargs.values()))
+                if isinstance(mod, HCCSLearned) and masked:
+                    raise NotImplementedError("ONNX export: aie4ml.HCCSSoftmax takes no key mask")
                 current = _emit_module(
                     mod,
                     mod_prefix,
@@ -1788,6 +1869,7 @@ def convert_to_onnx_fx(
         opset_imports.append(oh.make_opsetid("qonnx.custom_op.general", 1))
     model_proto = oh.make_model(onnx_graph, opset_imports=opset_imports)
     model_proto.ir_version = 6
+    _attach_hccs_function(model_proto, opset)
 
     onnx.checker.check_model(model_proto)
     onnx.save(model_proto, output_path)

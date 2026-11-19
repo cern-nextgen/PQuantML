@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.nn.common_types import _size_1_t, _size_2_t
 
 from pquant.core.torch.activations import PQActivation, PQSoftmax
+from pquant.core.torch.hccs import HCCSLearned
 from pquant.core.torch.quantizer import Quantizer, _mark_final_compression_done, _register_final_compression_flag
 from pquant.core.torch.utils import get_pruning_layer
 
@@ -120,6 +121,7 @@ class PQWeightBiasBase(nn.Module):
                 place="datalane",
                 block_size=self.block_size,
                 dynamic_data_mode=self.dynamic_data_mode,
+                i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
             )
         self.weight_quantizer = Quantizer(
             k=self.k_weight,
@@ -165,6 +167,7 @@ class PQWeightBiasBase(nn.Module):
                 place="datalane",
                 block_size=self.block_size,
                 dynamic_data_mode=self.dynamic_data_mode,
+                i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
             )
 
         self.n_parallel = math.prod(tuple(input_shape)[1:-1])
@@ -640,6 +643,7 @@ class PQAvgPoolBase(nn.Module):
             place="datalane",
             block_size=self.block_size,
             dynamic_data_mode=self.dynamic_data_mode,
+            i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
         )
         self.output_quantizer = Quantizer(
             k=self.k_output,
@@ -654,6 +658,7 @@ class PQAvgPoolBase(nn.Module):
             place="datalane",
             block_size=self.block_size,
             dynamic_data_mode=self.dynamic_data_mode,
+            i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
         )
         self.input_shape = (1,) + input_shape[1:]
         self.train(self.training)  # the new quantizers must follow the layer's current train/eval mode
@@ -851,6 +856,7 @@ class PQBatchNormBase:
             place="datalane",
             block_size=self.block_size,
             dynamic_data_mode=self.dynamic_data_mode,
+            i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
         )
         self.weight_quantizer = Quantizer(
             k=self.k_weight,
@@ -1012,6 +1018,269 @@ class PQBatchNorm1d(PQBatchNormBase, nn.BatchNorm1d):
         )
 
 
+def _token_weights(padding_mask, batch_first):
+    if padding_mask is None:
+        return None
+    real = ~padding_mask if batch_first else ~padding_mask.transpose(0, 1)
+    return real.unsqueeze(-1)
+
+
+def _masked_moments(x, w):
+    """Per-channel mean, biased variance and token count of ``x``, weighted by ``w`` (None: all tokens)."""
+    dims = tuple(range(x.ndim - 1))
+    if w is None:
+        n = torch.tensor(float(x[..., 0].numel()), device=x.device, dtype=x.dtype)
+        return x.mean(dim=dims), x.var(dim=dims, unbiased=False), n
+    w = w.to(x.dtype)
+    n = w.sum().clamp(min=1.0)
+    mean = (x * w).sum(dim=dims) / n
+    var = ((x - mean).square() * w).sum(dim=dims) / n
+    return mean, var, n
+
+
+class _FusedBatchNorm(nn.Module):
+    """The BatchNorm inside a fused layer: gamma, beta and the running statistics, unquantized."""
+
+    def __init__(self, num_features, eps, momentum):
+        super().__init__()
+        self.eps = eps
+        self.momentum = momentum
+        self.weight = nn.Parameter(torch.ones(num_features))
+        self.bias = nn.Parameter(torch.zeros(num_features))
+        self.register_buffer("running_mean", torch.zeros(num_features))
+        self.register_buffer("running_var", torch.ones(num_features))
+        self.register_buffer("num_batches_tracked", torch.tensor(0, dtype=torch.long))
+        self.register_buffer("pending_mean", torch.zeros(num_features))
+        self.register_buffer("pending_var", torch.ones(num_features))
+        self.register_buffer("pending", torch.tensor(False))
+
+    def batch_stats(self, x, w=None):
+        """This batch's moments; their running update waits for ``flush`` (safe for a compiled backward)."""
+        mean, var, n = _masked_moments(x.to(self.running_mean.dtype), w)
+        with torch.no_grad():
+            self.pending_mean.copy_(mean)
+            self.pending_var.copy_(var * (n / (n - 1.0).clamp(min=1.0)))
+            self.pending.fill_(True)
+        return mean, var
+
+    def flush(self):
+        with torch.no_grad():
+            p = self.pending
+            n = self.num_batches_tracked + p.long()
+            m = self.momentum if self.momentum is not None else 1.0 / n.clamp(min=1).to(self.running_mean.dtype)
+            self.running_mean.copy_(torch.where(p, torch.lerp(self.running_mean, self.pending_mean, m), self.running_mean))
+            self.running_var.copy_(torch.where(p, torch.lerp(self.running_var, self.pending_var, m), self.running_var))
+            self.num_batches_tracked.copy_(n)
+            self.pending.fill_(False)
+
+    def train(self, mode=True):
+        if not mode:
+            self.flush()
+        return super().train(mode)
+
+    def gain(self):
+        return self.weight / torch.sqrt(self.running_var + self.eps)
+
+    def rescale(self, x, w=None):
+        """Training, input side: centre with the batch statistics, scale by sigma_run / sigma_batch."""
+        mean, var = self.batch_stats(x, w)
+        return (x - mean) * torch.sqrt((self.running_var + self.eps) / (var + self.eps))
+
+    def renormalise(self, y, b, w=None, axis=-1):
+        """Training, output side: undo the gain, add the bias ``b``, normalise with the batch statistics."""
+        shape = [1] * y.dim()
+        shape[axis] = -1
+        s = self.gain()
+        y = y / torch.where(s.abs() < 1e-6, torch.full_like(s, 1e-6), s).reshape(shape) + b.reshape(shape)
+        mean, var = self.batch_stats(y.movedim(axis, -1), w)
+        y = (y - mean.reshape(shape)) * torch.rsqrt(var + self.eps).reshape(shape)
+        return y * self.weight.reshape(shape) + self.bias.reshape(shape)
+
+    def extra_repr(self):
+        return f"{self.weight.numel()}, eps={self.eps}, momentum={self.momentum}"
+
+
+class _FoldedLayerBase:
+    """Shared by the fused layers; ``_fold`` returns (folded weight, deployed bias, bias before bn_out)."""
+
+    def _init_fold(self, bias_bits):
+        if self._bias is None:
+            raise ValueError(f"{type(self).__name__}: the fold needs a bias to fold into (bias=True)")
+        self.bias_bits = None if bias_bits is None else int(bias_bits)
+        self.freeze_statistics = False
+
+    def post_epoch_function(self, epoch, total_epochs):
+        """After pretraining, the last epoch of a training stage trains on the deployed function."""
+        self.freeze_statistics = not self.is_pretraining and epoch == total_epochs - 2
+
+    def _check_is_built(self, input_shape):
+        if self.built:
+            return
+        super()._check_is_built(input_shape)
+        if self.bias_bits is not None:
+            lane = Quantizer(
+                k=self.k_bias,
+                i=0.0,
+                f=self.bias_bits - self.k_bias,
+                overflow=self.overflow_mode_parameters,
+                round_mode=self.round_mode,
+                is_heterogeneous=False,
+                granularity=self.bias_quant_granularity,
+                shape=self._bias.shape,
+            )
+            self.bias_quantizer = lane.to(self._bias.device).train(self.training)
+
+    def _bias_on_lane(self, b):
+        """Quantize the deployed bias; a fixed lane's integer bits follow it at constant width."""
+        lane = self.bias_quantizer
+        if not lane.use_hgq:
+            with torch.no_grad():
+                i_max = lane.i + lane.f
+                i = torch.minimum(torch.ceil(torch.log2(b.abs().max() + 1e-6)).clamp(min=0.0), i_max)
+                lane.i.copy_(i)
+                lane.f.copy_(i_max - i)
+        return self.quantize(b, lane)
+
+    def _bias_error(self, b):
+        """The lane's rounding of the deployed bias, which training adds to the output."""
+        b = b.detach()
+        return self._bias_on_lane(b) - b
+
+    def _deployed(self):
+        w, b, _ = self._fold()
+        return w, self._bias_on_lane(b)
+
+    @property
+    def weight(self):
+        return self._weight if self._final_compression_done else self._deployed()[0]
+
+    @property
+    def bias(self):
+        return self._bias if self._final_compression_done else self._deployed()[1]
+
+    def apply_final_compression(self):
+        if not self._final_compression_done:
+            self._weight.data, self._bias.data = self._deployed()
+            _mark_final_compression_done(self)
+
+    def _masked_weight_bits(self, bw_ker):
+        """Zero the bit counts of weights that are zero after the fold."""
+        return bw_ker * (self.weight.detach() != 0)
+
+
+class PQDenseBatchNorm(_FoldedLayerBase, PQDense):
+    """:class:`PQDense` with a BatchNorm folded in on its input (``bn_in``: BN -> Dense) and/or output (``bn_out``:
+    Dense -> BN), trained on the folded weight: in eval mode the layer is the deployed Dense. ``padding_mask``
+    (``(batch, seq_len)``, True on padding) keeps padded tokens out of the batch statistics. ``out_perm`` /
+    ``out_scale`` permute and scale the output channels before ``bn_out``. The folded bias gets a fixed lane
+    ``bias_bits`` wide (None: the configured lane)."""
+
+    def __init__(
+        self,
+        config,
+        in_features,
+        out_features,
+        bn_in=False,
+        bn_out=False,
+        out_perm=None,
+        out_scale=None,
+        bias_bits=16,
+        eps=1e-5,
+        momentum=0.1,
+        batch_first=False,
+        **kwargs,
+    ):
+        super().__init__(config, in_features, out_features, **kwargs)
+        self._init_fold(bias_bits)
+        self.bn_in = _FusedBatchNorm(in_features, eps, momentum) if bn_in else None
+        self.bn_out = _FusedBatchNorm(out_features, eps, momentum) if bn_out else None
+        self.batch_first = batch_first
+        self._out_scale_fn = out_scale if callable(out_scale) else None
+        constant = out_scale is not None and not callable(out_scale)
+        scale = torch.as_tensor(out_scale, dtype=torch.float32).detach().clone() if constant else None
+        self.register_buffer("out_scale", scale)
+        perm = None if out_perm is None else torch.as_tensor(out_perm, dtype=torch.long).clone()
+        self.register_buffer("out_perm", perm, persistent=False)
+
+    def _out_scale_vector(self):
+        return self.out_scale if self._out_scale_fn is None else self._out_scale_fn()
+
+    def _fold(self):
+        w, b = self._prune(self._weight), self._bias
+        if self.bn_in is not None:
+            self.bn_in.flush()
+            b = b + torch.mv(w, self.bn_in.bias)
+            w = w * self.bn_in.gain()
+        if self.out_perm is not None:
+            w, b = w[self.out_perm], b[self.out_perm]
+        g = self._out_scale_vector()
+        if g is not None:
+            w, b = w * g.unsqueeze(1), b * g
+        b_pre = b
+        if self.bn_out is not None:
+            self.bn_out.flush()
+            s = self.bn_out.gain()
+            w, b = w * s.unsqueeze(1), (b - self.bn_out.running_mean) * s + self.bn_out.bias
+        w = self.quantize(w, self.weight_quantizer)
+        if self.bn_in is not None:
+            b = b - torch.mv(w, self.bn_in.running_mean.clone())  # clone: flush rewrites the buffer in place
+        return w, b, b_pre
+
+    def forward(self, x, padding_mask=None):
+        x = self.pre_forward(x)
+        if self._final_compression_done:
+            return self._post_forward(F.linear(x, self._weight, self._bias))
+        w, b, b_pre = self._fold()
+        if self.freeze_statistics or not self.training:
+            return self._post_forward(F.linear(x, w, self._bias_on_lane(b)))
+        tokens = _token_weights(padding_mask, self.batch_first)
+        if self.bn_in is not None:
+            x = self.bn_in.rescale(x, tokens)
+        y = F.linear(x, w)
+        y = y + b_pre if self.bn_out is None else self.bn_out.renormalise(y, b_pre, tokens)
+        return self._post_forward(y + self._bias_error(b))
+
+    def extra_repr(self):
+        return f"{super().extra_repr()}bias_bits={self.bias_bits} batch_first={self.batch_first} "
+
+
+class _ConvBatchNormBase(_FoldedLayerBase):
+    """Conv -> BN fused as PQDenseBatchNorm's ``bn_out``; ``bias_bits``, ``eps`` and ``momentum`` are keyword-only."""
+
+    def __init__(self, *args, bias_bits=16, eps=1e-5, momentum=0.1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._init_fold(bias_bits)
+        self.bn_out = _FusedBatchNorm(self.out_channels, eps, momentum)
+
+    def _fold(self):
+        bn = self.bn_out
+        bn.flush()
+        s = bn.gain()
+        w = self._prune(self._weight) * s.reshape(-1, *[1] * (self._weight.dim() - 1))
+        return self.quantize(w, self.weight_quantizer), (self._bias - bn.running_mean) * s + bn.bias, self._bias
+
+    def forward(self, x):
+        x = self.pre_forward(x)
+        if self._final_compression_done:
+            return self._post_forward(self._conv_forward(x, self._weight, self._bias))
+        w, b, b_pre = self._fold()
+        if self.freeze_statistics or not self.training:
+            return self._post_forward(self._conv_forward(x, w, self._bias_on_lane(b)))
+        y = self.bn_out.renormalise(self._conv_forward(x, w, None), b_pre, axis=1)
+        return self._post_forward(y + self._bias_error(b).reshape(-1, *[1] * (y.dim() - 2)))
+
+    def extra_repr(self):
+        return f"{super().extra_repr()}, bias_bits={self.bias_bits}"
+
+
+class PQConv2dBatchNorm(_ConvBatchNormBase, PQConv2d):
+    """:class:`PQConv2d` with the BatchNorm on its output folded into its weight and bias."""
+
+
+class PQConv1dBatchNorm(_ConvBatchNormBase, PQConv1d):
+    """:class:`PQConv1d` with the BatchNorm on its output folded into its weight and bias."""
+
+
 class PQLayerNorm(nn.LayerNorm):
     def __init__(
         self,
@@ -1093,6 +1362,7 @@ class PQLayerNorm(nn.LayerNorm):
             place="datalane",
             block_size=self.block_size,
             dynamic_data_mode=self.dynamic_data_mode,
+            i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
         )
         self.output_quantizer = Quantizer(
             k=self.k_output,
@@ -1107,6 +1377,7 @@ class PQLayerNorm(nn.LayerNorm):
             place="datalane",
             block_size=self.block_size,
             dynamic_data_mode=self.dynamic_data_mode,
+            i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
         )
         self.weight_quantizer = Quantizer(
             k=self.k_weight,
@@ -1247,6 +1518,7 @@ class PQMultiheadAttention(nn.Module):
         attn_quant_bits: (k, i, f) bits for the softmax output quantizer (the attention
             weights). The scores and context need no dedicated quantizers: the softmax's
             input quantizer and the output projection's input quantizer cover them.
+        use_hccs: Use an HCCSLearned kernel as the softmax (defaults to the config's use_hccs).
     """
 
     def __init__(
@@ -1261,7 +1533,7 @@ class PQMultiheadAttention(nn.Module):
         batch_first: bool = False,
         quantize_input: bool = True,
         quantize_output: bool = False,
-        approximate_softmax: bool = False,
+        use_hccs: bool = None,
         in_quant_bits: tuple[T, T, T] = None,
         weight_quant_bits: tuple[T, T, T] = None,
         bias_quant_bits: tuple[T, T, T] = None,
@@ -1280,9 +1552,12 @@ class PQMultiheadAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.batch_first = batch_first
         self.dropout = dropout
-        self.approximate_softmax = approximate_softmax
+        self.use_hccs = use_hccs if use_hccs is not None else config.quantization_parameters.use_hccs
         self.scale = float(torch.tensor(self.head_dim**-0.5, dtype=torch.float32).item())
-        self.softmax = PQSoftmax(config, -1, quantize_input=True, quantize_output=True, out_quant_bits=attn_quant_bits)
+        if self.use_hccs:
+            self.softmax = HCCSLearned(num_heads, config, mode="uint8_clb", out_quant_bits=attn_quant_bits)
+        else:
+            self.softmax = PQSoftmax(config, -1, quantize_input=True, quantize_output=True, out_quant_bits=attn_quant_bits)
 
         kdim = kdim if kdim is not None else embed_dim
         vdim = vdim if vdim is not None else embed_dim
@@ -1671,6 +1946,8 @@ def _update_pruning_mask(layer):
 
 def post_epoch_functions(model, epoch, total_epochs, **kwargs):
     for layer in model.modules():
+        if isinstance(layer, _FoldedLayerBase):
+            layer.post_epoch_function(epoch, total_epochs)
         if _has_pruning_layer(layer):
             layer.pruning_layer.post_epoch_function(epoch, total_epochs, **kwargs)
             _update_pruning_mask(layer)
@@ -1816,6 +2093,7 @@ def _get_model_losses(model, losses):
                 PQLayerNorm,
                 PQActivation,
                 PQSoftmax,
+                HCCSLearned,
                 PQMultiheadAttention,
             ),
         ):
@@ -1930,6 +2208,7 @@ def get_ebops(model, **kwargs):
                 PQLayerNorm,
                 PQActivation,
                 PQSoftmax,
+                HCCSLearned,
                 PQMultiheadAttention,
             ),
         ):

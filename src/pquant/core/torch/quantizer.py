@@ -40,6 +40,7 @@ class Quantizer(nn.Module):
         shape=None,
         block_size=128,
         dynamic_data_mode=DynamicDataMode.NEVER,
+        i_decay=None,
     ):
         super().__init__()
 
@@ -51,6 +52,11 @@ class Quantizer(nn.Module):
         self.block_size = block_size
         self.granularity = QuantizationGranularity(granularity).value
         self.shape = shape
+        tracks = is_data and self.dynamic_data_mode == DynamicDataMode.TRAINING and not self.row_wise
+        self.i_decay = float(i_decay) if (tracks and i_decay is not None) else None
+        if self.i_decay is not None:
+            self.register_buffer("i_track", torch.zeros(()))
+            self.register_buffer("track_seen", torch.tensor(False))
 
         # Params even when using HGQ, as they are used during hls4ml conversion
         param_shape = () if (is_data or self.use_hgq) else self.compute_weight_param_shape(shape)
@@ -152,11 +158,24 @@ class Quantizer(nn.Module):
         frac_bits = torch.clamp(self.b - int_bits - self.k, min=0)
         return int_bits, frac_bits
 
+    def _tracked_data_bits(self, x):
+        """(i, f) for this batch from the tracker: it rises at once to cover a batch and decays by i_decay per step."""
+        i_need, _ = self.calculate_bits_from_abs(torch.amax(torch.abs(x.detach())))
+        need = i_need.to(self.i_track.dtype).reshape(())
+        cand = torch.where(self.track_seen, torch.maximum(self.i_track - self.i_decay, need), need)
+        with torch.no_grad():
+            self.i_track.copy_(cand)
+            self.track_seen.fill_(True)
+        i = torch.ceil(cand)
+        return i, torch.clamp(self.b - i - self.k, min=0)
+
     def compute_data_dynamic_bits(self, x):
         use_dynamic_bits = self.dynamic_data_mode == DynamicDataMode.ALWAYS or (
             self.dynamic_data_mode == DynamicDataMode.TRAINING and self.training
         )
         if use_dynamic_bits:
+            if self.i_decay is not None:
+                return self._tracked_data_bits(x)
             if self.row_wise:
                 abs_x = torch.amax(torch.abs(x.detach()), dim=-1, keepdim=True)
             else:
@@ -227,6 +246,17 @@ class Quantizer(nn.Module):
         if blocked:
             x = self._unblock(x, n)
         return x
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        # a checkpoint saved before the tracker existed seeds it from the stored bits
+        if self.i_decay is not None and prefix + "i_track" not in state_dict and prefix + "i" in state_dict:
+            state_dict[prefix + "i_track"] = state_dict[prefix + "i"].detach().clone().reshape(()).to(torch.float32)
+            state_dict[prefix + "track_seen"] = torch.tensor(True)
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
+    def extra_repr(self):
+        decay = f", i_decay={self.i_decay:g}" if self.i_decay is not None else ""
+        return f"is_data={self.is_data}, dynamic_data_mode={self.dynamic_data_mode}{decay}"
 
     def hgq_loss(self):
         if self.is_pretraining or not self.use_hgq:

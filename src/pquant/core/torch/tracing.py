@@ -268,6 +268,7 @@ def _insert_missing_quantizers(traced, edges_to_quantize, config):
             hgq_gamma=qp.hgq_gamma,
             block_size=qp.block_size,
             dynamic_data_mode=qp.dynamic_data_mode,
+            i_decay=qp.dynamic_data_i_decay,
         )
 
     def _enable_pquantml_output_quantization(layer):
@@ -286,6 +287,7 @@ def _insert_missing_quantizers(traced, edges_to_quantize, config):
                 place="datalane",
                 block_size=layer.block_size,
                 dynamic_data_mode=layer.dynamic_data_mode,
+                i_decay=layer.config.quantization_parameters.dynamic_data_i_decay,
             ).to(device)
 
     modules = dict(traced.named_modules())
