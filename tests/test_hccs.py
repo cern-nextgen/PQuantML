@@ -360,7 +360,9 @@ def test_onnx_export_carries_each_heads_integers(heads, mode, inv_shift, fx, tmp
     assert all(n.domain == "aie4ml" for n in nodes)
     assert all((g["param_sets"], g["inv_shift"], g["use_clb"]) == (1, inv_shift, int(mode.endswith("clb"))) for g in got)
     assert [f.name for f in proto.functions] == ["HCCSSoftmax"] and proto.ir_version >= 8
-    out = ort.InferenceSession(path).run(None, {proto.graph.input[0].name: x.cpu().numpy()})[0]
+    options = ort.SessionOptions()
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    out = ort.InferenceSession(path, options).run(None, {proto.graph.input[0].name: x.cpu().numpy()})[0]
     assert np.allclose(out, want.cpu().numpy(), atol=1e-6)
 
 
