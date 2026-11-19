@@ -110,6 +110,7 @@ class PQActivation(nn.Module):
             granularity=self.config.quantization_parameters.granularity,
             block_size=self.block_size,
             dynamic_data_mode=self.dynamic_data_mode,
+            i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
         )
         self.input_quantizer = Quantizer(
             k=self.k_input,
@@ -124,6 +125,7 @@ class PQActivation(nn.Module):
             granularity=self.config.quantization_parameters.granularity,
             block_size=self.block_size,
             dynamic_data_mode=self.dynamic_data_mode,
+            i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
         )
         if self.use_hgq:
             self.input_quantizer.quantizer.build(input_shape)
@@ -338,6 +340,7 @@ class PQSoftmax(nn.Module):
                 place="datalane",
                 block_size=self.block_size,
                 dynamic_data_mode=self.dynamic_data_mode,
+                i_decay=self.config.quantization_parameters.dynamic_data_i_decay,
             )
 
         self.input_quantizer = _data_quantizer(self.k_input, self.i_input, self.f_input)

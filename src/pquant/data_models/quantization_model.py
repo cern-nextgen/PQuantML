@@ -15,6 +15,7 @@ class BaseQuantizationModel(BaseModel):
     granularity: QuantizationGranularity = Field(default=QuantizationGranularity.PER_TENSOR)
     block_size: int = Field(default=128, gt=0)
     dynamic_data_mode: DynamicDataMode = Field(default=DynamicDataMode.NEVER)
+    dynamic_data_i_decay: float | None = Field(default=0.01, ge=0.0)
     enable_quantization: bool = Field(default=True)
     hgq_gamma: float = Field(default=1e-8, ge=0.0)
     hgq_beta: float = Field(default=1e-5)
@@ -26,6 +27,7 @@ class BaseQuantizationModel(BaseModel):
     overflow_mode_data: str = Field(default="SAT")
     round_mode: str = Field(default="RND")
     use_relu_multiplier: bool = Field(default=False)
+    use_hccs: bool = Field(default=False)
 
     @model_validator(mode="before")
     @classmethod

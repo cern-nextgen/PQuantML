@@ -37,6 +37,7 @@ If you require additional parameters for the training or optimization loops, ple
 | `granularity` | str | `"per_tensor"` | Bitwidth sharing: `per_tensor`, `per_channel`, `per_weight`, or (PyTorch, non-HGQ only) `per_block` along the last axis and `per_token` per row of a data tensor. |
 | `block_size` | int | `128` | Block length along the last axis for `per_block` granularity; the tensor is zero-padded to a multiple of it. |
 | `dynamic_data_mode` | str | `"never"` | When data-lane bitwidths are measured from the data instead of taken from the config: `never`, `training` (in train mode, until final compression) or `always` (also after final compression). |
+| `dynamic_data_i_decay` | float | `0.01` | (PyTorch only) With `dynamic_data_mode: training`: the integer bits rise at once to cover a batch and come down by this many bits per step, instead of following every batch; the lane deploys the tracked format. `null` follows every batch. Not used by the `per_block` / `per_token` granularities. |
 | `hgq_gamma`                      | float    | `1e-8`      | L1 penalty per learned bit (HGQ) on the trainable `i` and `f`; only `f` in WRAP mode. Must be >= 0. |
 | `hgq_beta`                       | float    | `1e-5`      | HGQ loss coefficient scaling EBOPs.                                    |
 | `layer_specific`                 | dict     | `{}`        | Dictionary for per-layer quantization overrides.                       |
@@ -46,6 +47,7 @@ If you require additional parameters for the training or optimization loops, ple
 | `overflow_mode_parameters`                       | str      | `"SAT"`     | Overflow handling mode for weight and biases quantizers (`SAT`, `SAT_SYM`, `WRAP`, `WRAP_SM`). |
 | `round_mode`                     | str      | `"RND"`     | Rounding mode (`TRN`, `RND`, `RND_CONV`, `RND_ZERO`, etc.).            |
 | `use_relu_multiplier`            | bool     | `false`     | Enable a learned bit-shift multiplier inside ReLU layers.              |
+| `use_hccs`                       | bool     | `false`     | (PyTorch only) Attention layers use an `HCCSLearned` kernel as their softmax. |
 
 
 ### Hyperparameters optimization parameters
@@ -208,6 +210,8 @@ Optionally, there is also FITCompress method implemented for PyTorch-only:
 - `PQAvgPool*D`: Average pooling layers.
 - `PQBatchNorm*D`: BatchNorm layers.
 - `PQDense`: Linear layer.
+- `PQDenseBatchNorm`, `PQConv*DBatchNorm`: Linear / convolutional layers with a BatchNorm folded into the weight and bias, trained on the folded weight (Torch only).
+- `HCCSLearned` (`pquant.core.torch.hccs`): A learned clipped-linear softmax for attention on an integer kernel; used by `PQMultiheadAttention` with `use_hccs` (Torch only). On its own it exports to ONNX as `aie4ml.HCCSSoftmax`; inside an attention layer the ONNX export is not supported yet.
 - `PQActivation`: Activation layers (ReLU, Tanh, Leaky Relu, Gelu, Hard Tanh, Softmax or a user-provided activation function (Torch only) ).
 - `MultiHeadAttention`: Multi-head attention layer.
 - `LayerNorm`: Layer normalization layer (Currently Torch only).

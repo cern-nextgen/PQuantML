@@ -1718,6 +1718,8 @@ class PQMultiheadAttention(keras.layers.Layer):
         self.kdim = kdim if kdim is not None else embed_dim
         self.vdim = vdim if vdim is not None else embed_dim
         self.approximate_softmax = approximate_softmax
+        if config.quantization_parameters.use_hccs:
+            raise NotImplementedError("use_hccs is not supported by the Keras backend")
         self.scale = self.head_dim**-0.5
         self.enable_quantization = config.quantization_parameters.enable_quantization
         self.use_hgq = config.quantization_parameters.use_high_granularity_quantization

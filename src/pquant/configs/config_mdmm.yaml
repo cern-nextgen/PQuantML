@@ -35,6 +35,7 @@ quantization_parameters:
   use_high_granularity_quantization: false
   use_real_tanh: false
   use_relu_multiplier: false
+  use_hccs: false
   use_symmetric_quantization: false
   overflow_mode_parameters: SAT
   overflow_mode_data: SAT
