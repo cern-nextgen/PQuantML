@@ -174,7 +174,7 @@ def convert_to_onnx(
         model:         Functional (or built Sequential) keras.Model with apply_final_compression() called on it.
         input_shape:   Optional shape of one sample without the batch dim (one per input), pinning dynamic dims.
         output_path:   Where to save the .onnx file.
-        target:        Name from ``TARGETS`` (see ``list_targets()``) or an ``ExportOptions``; sets the graph format.
+        target:        "reference" (default), "qonnx", "aie4ml", "qdq-int8", "onnxruntime" or "tensorrt".
         opset:         ONNX opset version, at least 13; overrides the target's.
         include_clip:  Whether a Clip precedes each QuantizeLinear; overrides the target's.
         batch_size:    Fixed batch dimension, or ``"dynamic"``; overrides the target's.

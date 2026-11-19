@@ -351,7 +351,7 @@ def convert_to_onnx(
         model:          Trained nn.Module with apply_final_compression() called on its PQ modules.
         input_shape:    Shape of one sample without the batch dim, or one shape per input for a multi-input model.
         output_path:    Where to save the .onnx file.
-        target:         Name from ``TARGETS`` (see ``list_targets()``) or an ``ExportOptions``; sets the graph format.
+        target:         "reference" (default), "qonnx", "aie4ml", "qdq-int8", "onnxruntime", "tensorrt" or "integer-ops".
         opset:          ONNX opset version, at least 13; overrides the target's.
         include_clip:   Whether a Clip precedes each QuantizeLinear; overrides the target's.
         batch_size:     Fixed batch dimension, or ``"dynamic"``; overrides the target's.
